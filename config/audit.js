@@ -26,7 +26,9 @@ const ACTIONS = {
   'journal.lecture': 'Consultation du journal d’audit',
   'acces.refuse': 'Accès refusé',
   'article.publication': 'Article de conseils publié',
+  'article.approbation': 'Article de conseils approuvé',
   'article.suppression': 'Article de conseils supprimé',
+  'echographie.creation': 'Échographie enregistrée',
   'article.commentaire.suppression': 'Commentaire d’article supprimé',
 };
 

@@ -12,7 +12,7 @@ const r2 = new S3Client({
   },
 });
 
-const EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+const EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'application/pdf': 'pdf' };
 
 /**
  * Envoie un fichier (reçu par multer en mémoire) dans le bucket, sous `dossier/`.

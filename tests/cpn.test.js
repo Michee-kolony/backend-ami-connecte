@@ -660,3 +660,62 @@ test('deuxième grossesse : même dossier et même compte, historique des grosse
   const Patiente = require('../models/Patiente');
   assert.equal(await Patiente.countDocuments({ email }), 1, 'un seul compte');
 });
+
+test('échographie : rubriques de la fiche, fœtus multiples, compte rendu PDF privé ; médecins seulement', async () => {
+  const r = await creer('medecinA', {
+    patiente: { nom: 'Echo', prenom: 'Grace', ageDeclare: 27, telephone: '+243 81 444 0001', adresse: { province: 'Kinshasa' } },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYa(150) } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  let d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  const gid = d.corps.grossesses[0].id;
+
+  const echo = (qui, donnees, fichiers = []) => {
+    const f = new FormData();
+    f.append('donnees', JSON.stringify(donnees));
+    for (const x of fichiers) f.append('fichiers', new Blob([x.contenu ?? 'pdf'], { type: x.type }), x.nom);
+    return fetch(`${api}/grossesses/${gid}/echographies`, { method: 'POST', headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f })
+      .then(async (x) => ({ status: x.status, corps: JSON.parse((await x.text()) || 'null') }));
+  };
+  const donnees = {
+    date: ilYa(2), motif: 'Échographie du 2e trimestre', agSemaines: 21, agJours: 3, nombreFoetus: 2,
+    foetus: [
+      { activiteCardiaque: true, sexe: 'Féminin', presentation: 'Céphalique', position: 'Dos à gauche', bipMm: 51, perimetreCranienMm: 190, perimetreAbdominalMm: 165, longueurFemoraleMm: 36, poidsEstimeG: 410 },
+      { activiteCardiaque: true, sexe: 'Masculin', presentation: 'Siège', sexeInconnu: 'ignoré', poidsEstimeG: 395 },
+      { activiteCardiaque: false, sexe: 'Féminin' },
+    ],
+    placenta: { localisation: 'Antérieur', aspect: 'Homogène', maturite: 'Grade I' },
+    liquideAmniotique: { quantite: 'Normale', indiceCm: 14 },
+    col: { longueurMm: 38, aspect: 'Fermé' },
+    anomalies: '', conclusion: 'Grossesse gémellaire évolutive', praticien: 'Dr Mbuyi (radiologue)',
+  };
+
+  assert.equal((await echo('infirmiere', donnees)).status, 403, 'infirmière refusée');
+  assert.equal((await echo('medecinA', { ...donnees, date: '2099-01-01' })).status, 400, 'date future refusée');
+  assert.equal((await echo('medecinA', donnees, [{ type: 'text/plain', nom: 'cr.txt' }])).status, 400, 'format refusé');
+
+  const envoisAvant = r2Appels.envoyes.length;
+  const e = await echo('medecinA', donnees, [{ type: 'application/pdf', nom: 'compte-rendu.pdf' }, { type: 'image/png', nom: 'image.png', contenu: PNG }]);
+  assert.equal(e.status, 201, JSON.stringify(e.corps));
+  assert.equal(e.corps.foetus.length, 2, 'limité au nombre de fœtus déclaré');
+  assert.equal(e.corps.foetus[1].sexe, 'Masculin');
+  assert.equal(e.corps.foetus[1].poidsEstimeG, 395);
+  assert.equal(e.corps.placenta.maturite, 'Grade I');
+  assert.equal(e.corps.auteur.id, comptes.medecinA.id);
+  assert.equal(r2Appels.envoyes.length - envoisAvant, 2);
+  assert.ok(r2Appels.envoyes.at(-2).cle.startsWith('echographie/'));
+  assert.ok(e.corps.fichiers.every((f) => f.url.includes('X-Amz-Expires') && !('cle' in f)), 'liens signés, clés jamais exposées');
+
+  const l = await appel('medecinB', 'GET', `/grossesses/${gid}/echographies`);
+  assert.equal(l.status, 200);
+  assert.equal(l.corps.length, 1);
+  d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  assert.equal(d.corps.echographies[0].conclusion, 'Grossesse gémellaire évolutive');
+  const JournalAudit = require('../models/JournalAudit');
+  assert.ok(await JournalAudit.exists({ action: 'echographie.creation', 'acteur.id': comptes.medecinA.id }));
+
+  // Suppression du dossier : comptes rendus et images retirés du bucket.
+  const cles = r2Appels.envoyes.slice(envoisAvant).map((x) => x.cle);
+  assert.equal((await appel('chef', 'DELETE', `/patientes/${r.corps.numero}`, { confirmation: r.corps.numero })).status, 204);
+  assert.ok(cles.every((c) => r2Appels.supprimes.includes(c)));
+});

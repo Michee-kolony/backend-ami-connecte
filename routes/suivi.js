@@ -7,6 +7,8 @@ const { ROLES_GESTION } = require('../models/Soignant');
 const patientes = require('../controllers/patientes');
 const consultations = require('../controllers/consultations');
 const rendezVous = require('../controllers/rendezVous');
+const echographies = require('../controllers/echographies');
+const { televerserFichiersEchographie } = require('../middleware/upload');
 
 const grossesses = express.Router();
 grossesses.use(authentifier, exigerMedecin);
@@ -15,6 +17,8 @@ grossesses.put('/:id/datation', patientes.dater);
 grossesses.post('/:id/issue', patientes.issue);
 grossesses.get('/:id/consultations', consultations.lister);
 grossesses.post('/:id/consultations', consultations.creer);
+grossesses.get('/:id/echographies', echographies.lister);
+grossesses.post('/:id/echographies', televerserFichiersEchographie, echographies.creer);
 
 const consult = express.Router();
 consult.use(authentifier, exigerMedecin);

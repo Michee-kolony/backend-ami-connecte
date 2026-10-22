@@ -26,6 +26,15 @@ const mediasArticle = multer({
     : cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname))),
 }).array('medias', 4);
 
+/** Échographie : compte rendu (PDF) ou images, 10 Mo chacun, 6 fichiers au plus. */
+const fichiersEchographie = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 6 },
+  fileFilter: (req, file, cb) => (/^(image\/(jpeg|png|webp)|application\/pdf)$/.test(file.mimetype)
+    ? cb(null, true)
+    : cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname))),
+}).array('fichiers', 6);
+
 /** Traduit les erreurs multer en réponses 400 lisibles. */
 function avecMessages(upload, tailleMax, { nombreMax = 6, formats = 'JPG, PNG ou WebP' } = {}) {
   return (req, res, next) => upload(req, res, (err) => {
@@ -41,4 +50,5 @@ module.exports = {
   televerserPhoto: avecMessages(photo, '2 Mo'),
   televerserPhotosEtablissement: avecMessages(photosEtablissement, '5 Mo'),
   televerserMediasArticle: avecMessages(mediasArticle, '50 Mo', { nombreMax: 4, formats: 'photos JPG, PNG ou WebP, vidéo MP4, WebM ou MOV' }),
+  televerserFichiersEchographie: avecMessages(fichiersEchographie, '10 Mo', { nombreMax: 6, formats: 'compte rendu PDF ou images JPG, PNG, WebP' }),
 };

@@ -4,6 +4,7 @@ const Patiente = require('../models/Patiente');
 const Grossesse = require('../models/Grossesse');
 const Consultation = require('../models/Consultation');
 const RendezVous = require('../models/RendezVous');
+const Echographie = require('../models/Echographie');
 const JournalAudit = require('../models/JournalAudit');
 const Etablissement = require('../models/Etablissement');
 const { auteurDe } = require('../models/commun');
@@ -334,10 +335,11 @@ function mesuresRealisees(consultations) {
 /** Dossier complet : chaque ouverture est journalisée (distincte d'une consultation réalisée). */
 exports.dossier = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
-  const [grossesses, consultations, rendezVous] = await Promise.all([
+  const [grossesses, consultations, rendezVous, echographies] = await Promise.all([
     Grossesse.find({ patienteId: patiente._id }).sort({ numero: -1 }),
     Consultation.find({ patienteId: patiente._id }).sort({ date: -1 }),
     RendezVous.find({ patienteId: patiente._id }).sort({ date: -1 }),
+    Echographie.find({ patienteId: patiente._id }).sort({ date: -1, createdAt: -1 }),
   ]);
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   await journaliser(req, { action: 'dossier.lecture', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
@@ -357,6 +359,7 @@ exports.dossier = async (req, res) => {
       reference: c.reference?.le ? { le: c.reference.le, motifs: c.reference.motifs } : null,
     })),
     rendezVous,
+    echographies: await Promise.all(echographies.map((e) => e.vue())),
     premiereConsultation: premiereConsultation(consultations),
   });
 };
@@ -487,15 +490,17 @@ exports.supprimer = async (req, res) => {
   if (texte(req.body?.confirmation, 30) !== patiente.numero) {
     throw erreur(400, `Saisissez le numéro du dossier (${patiente.numero}) pour confirmer la suppression.`);
   }
+  const echographies = await Echographie.find({ patienteId: patiente._id }).select('fichiers');
   const [consultations, grossesses, rendezVous] = await Promise.all([
     Consultation.deleteMany({ patienteId: patiente._id }),
     Grossesse.deleteMany({ patienteId: patiente._id }),
     RendezVous.deleteMany({ patienteId: patiente._id }),
+    Echographie.deleteMany({ patienteId: patiente._id }),
   ]);
   await patiente.deleteOne();
-  if (patiente.photoCle) {
-    await supprimerFichier(patiente.photoCle).catch((err) => console.error(`Photo ${patiente.photoCle} non supprimée de R2 :`, err.message));
-  }
+  // Photo, comptes rendus et images d'échographie : retirés du bucket avec le dossier.
+  const cles = [patiente.photoCle, ...echographies.flatMap((e) => e.fichiers.map((f) => f.cle))].filter(Boolean);
+  await Promise.all(cles.map((cle) => supprimerFichier(cle).catch((err) => console.error(`Fichier ${cle} non supprimé de R2 :`, err.message))));
   await journaliser(req, {
     action: 'patiente.suppression', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero },
     details: { consultations: consultations.deletedCount, grossesses: grossesses.deletedCount, rendezVous: rendezVous.deletedCount },
