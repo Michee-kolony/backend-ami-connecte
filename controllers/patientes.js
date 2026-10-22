@@ -223,8 +223,16 @@ exports.creer = async (req, res) => {
   if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide.');
   const motDePasse = d.compte?.motDePasse;
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la patiente trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
-  if (await Patiente.exists({ email: champs.email })) {
-    throw erreur(409, 'Cette adresse e-mail est déjà liée à un autre dossier.');
+  const memeEmail = await Patiente.findOne({ email: champs.email });
+  if (memeEmail) {
+    return res.status(409).json({
+      message: `Cette patiente est déjà inscrite (dossier ${memeEmail.numero}). Pour une nouvelle grossesse, ouvrez son dossier : elle garde le même compte et tout son historique.`,
+      emailExistant: true,
+      doublons: [{
+        id: memeEmail.id, numero: memeEmail.numero, nom: memeEmail.nom, postnom: memeEmail.postnom, prenom: memeEmail.prenom,
+        age: memeEmail.age(), telephoneMasque: memeEmail.telephoneMasque(), commune: memeEmail.adresse?.commune ?? '',
+      }],
+    });
   }
 
   // Établissement de prise en charge : choisi dans le formulaire (actif), sinon celui de la connexion.
@@ -235,7 +243,7 @@ exports.creer = async (req, res) => {
 
   const doublons = await chercherDoublons(champs);
   if (doublons.length && d.confirmerMalgreDoublons !== true) {
-    return res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : vérifiez avant de créer.', doublons });
+    return res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : si c’est la même patiente, ouvrez son dossier et déclarez une nouvelle grossesse.', doublons });
   }
 
   const auteur = auteurDe(req.soignant);
@@ -384,7 +392,7 @@ exports.modifier = async (req, res) => {
 exports.nouvelleGrossesse = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
   if (await Grossesse.exists({ patienteId: patiente._id, statut: 'En cours' })) {
-    throw erreur(409, 'Une grossesse est déjà en cours pour cette patiente.');
+    throw erreur(409, 'Une grossesse est déjà en cours pour cette patiente : enregistrez d’abord son issue (accouchement, fausse couche…).');
   }
   const derniere = await Grossesse.findOne({ patienteId: patiente._id }).sort({ numero: -1 });
   const grossesse = await Grossesse.create({

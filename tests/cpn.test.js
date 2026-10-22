@@ -584,3 +584,42 @@ test('fiche CPN : identité et antécédents cochés, examen, mesures préventiv
   assert.equal(mesures.methodePf.valeur, 'Implant');
   assert.ok(d.corps.consultations[0].reference.le);
 });
+
+test('deuxième grossesse : même dossier et même compte, historique des grossesses et des CPN conservé', async () => {
+  const email = 'deux.grossesses@essai.test';
+  const r = await creer('medecinA', {
+    patiente: { ...patiente, nom: 'Mbuyi', prenom: 'Ruth', telephone: '+243 89 111 2233', email },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYa(200), ddrFiabilite: 'Fiable' } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  let d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  const g1 = d.corps.grossesses[0].id;
+  const c1 = await appel('medecinA', 'POST', `/grossesses/${g1}/consultations`, { type: 'Première consultation prénatale', mesuresPreventives: { vat1: { reponse: true } }, finaliser: true });
+  assert.equal(c1.status, 200, JSON.stringify(c1.corps));
+
+  // Grossesse en cours : pas de seconde grossesse tant que l'issue n'est pas enregistrée.
+  assert.equal((await appel('medecinA', 'POST', `/patientes/${r.corps.numero}/grossesses`, {})).status, 409);
+  assert.equal((await appel('medecinA', 'POST', `/grossesses/${g1}/issue`, { issue: 'Naissance vivante', date: ilYa(10), mode: 'Voie basse' })).status, 200);
+
+  // Réinscription avec le même e-mail : refusée, le dossier existant est désigné.
+  const re = await creer('medecinB', { patiente: { ...patiente, nom: 'Mbuyi', prenom: 'Ruth', email }, confirmerMalgreDoublons: true });
+  assert.equal(re.status, 409);
+  assert.equal(re.corps.emailExistant, true);
+  assert.equal(re.corps.doublons[0].numero, r.corps.numero);
+
+  const n = await appel('medecinB', 'POST', `/patientes/${r.corps.numero}/grossesses`, { datation: { methode: 'DDR', ddr: ilYa(30), ddrFiabilite: 'Fiable' } });
+  assert.equal(n.status, 201, JSON.stringify(n.corps));
+  assert.equal(n.corps.numero, 2);
+  const c2 = await appel('medecinB', 'POST', `/grossesses/${n.corps.id}/consultations`, { type: 'Première consultation prénatale', finaliser: true });
+  assert.equal(c2.status, 200, 'nouvelle première CPN permise pour la nouvelle grossesse');
+
+  d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  assert.equal(d.corps.patiente.statut, 'Suivi prénatal');
+  assert.deepEqual(d.corps.grossesses.map((g) => [g.numero, g.statut]), [[2, 'En cours'], [1, 'Terminée']]);
+  assert.equal(d.corps.grossesses[1].issue.issue, 'Naissance vivante');
+  assert.ok(d.corps.grossesses[1].mesuresPreventives.vat1, 'mesures de la 1re grossesse conservées');
+  assert.ok(!d.corps.grossesses[0].mesuresPreventives.vat1, 'la 2e grossesse repart de zéro');
+  assert.deepEqual(d.corps.consultations.map((c) => c.grossesseId).sort(), [g1, n.corps.id].sort());
+  const Patiente = require('../models/Patiente');
+  assert.equal(await Patiente.countDocuments({ email }), 1, 'un seul compte');
+});
