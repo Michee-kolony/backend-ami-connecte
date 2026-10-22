@@ -9,7 +9,7 @@ côté serveur et tableau de bord. L'application mobile patiente viendra dans un
 |---|---|---|
 | Médecin, Médecin directeur | Toutes les patientes ; chaque ouverture est journalisée | Non |
 | Médecin chef de service | Idem | Oui (`/api/journal`) |
-| Infirmier·ère (tous rôles) | Lecture seule : recherche (sans indicateur de risque), `GET /api/patientes/:id/suivi` (grossesse en cours, rendez-vous) et agenda. **403** journalisé sur tout le reste (dossier complet, consultations, antécédents, risques, carte, modifications) | Non |
+| Infirmier·ère, Sage-femme (tous rôles) | Lecture seule : recherche (sans indicateur de risque), `GET /api/patientes/:id/suivi` (identité, contacts, résidence, grossesse en cours, rendez-vous, dates et types des visites) et agenda. **403** journalisé sur tout le reste (dossier complet, consultations, antécédents, risques, carte, modifications) | Non |
 | Compte suspendu | **401** à la requête suivante, même avec un ancien jeton | — |
 
 `middleware/clinique.js` (`exigerMedecin`) protège toutes les routes cliniques ;

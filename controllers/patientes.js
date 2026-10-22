@@ -515,18 +515,27 @@ exports.supprimer = async (req, res) => {
  */
 exports.suivi = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
-  const [grossesse, rendezVous, photoUrl] = await Promise.all([
+  const [grossesse, rendezVous, visites, photoUrl] = await Promise.all([
     Grossesse.findOne({ patienteId: patiente._id, statut: 'En cours' }).sort({ numero: -1 }),
     RendezVous.find({ patienteId: patiente._id }).sort({ date: -1 }),
+    // Historique des visites : date, type et soignant seulement (ni motif, ni constantes, ni examen).
+    Consultation.find({ patienteId: patiente._id, statut: { $ne: 'Annulée' } }).sort({ date: -1 }).select('type date statut auteur'),
     urlSignee(patiente.photoCle),
   ]);
+  const a = patiente.adresse ?? {};
+  const urgence = patiente.contactUrgence ?? {};
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   await journaliser(req, { action: 'suivi.lecture', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
   res.json({
+    // Informations administratives uniquement : aucun antécédent, profil biologique ni donnée clinique.
     patiente: {
       id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom,
-      age: patiente.age(), photoUrl, telephone: patiente.telephone, statut: patiente.statut,
-      province: patiente.adresse?.province ?? '', commune: patiente.adresse?.commune ?? '',
+      age: patiente.age(), dateNaissance: patiente.dateNaissance ?? null, photoUrl, statut: patiente.statut,
+      etatCivil: patiente.etatCivil, occupation: patiente.occupation, nomPartenaire: patiente.nomPartenaire,
+      telephone: patiente.telephone, telephone2: patiente.telephone2,
+      province: a.province ?? '', commune: a.commune ?? '', quartier: a.quartier ?? '', avenue: a.avenue ?? '',
+      repere: a.repere ?? '', aireSante: a.aireSante ?? '',
+      contactUrgence: { nom: urgence.nom ?? '', lien: urgence.lien ?? '', telephone: urgence.telephone ?? '' },
     },
     etablissement: etablissement ? { id: etablissement.id, nom: etablissement.nom, province: etablissement.province } : null,
     grossesse: grossesse ? {
@@ -537,5 +546,6 @@ exports.suivi = async (req, res) => {
       id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut,
       historique: r.historique.map((h) => ({ action: h.action, ancienneDate: h.ancienneDate, nouvelleDate: h.nouvelleDate, motif: h.motif, le: h.le })),
     })),
+    visites: visites.map((c) => ({ id: c.id, date: c.date, type: c.type, statut: c.statut, soignant: { nom: c.auteur.nom, role: c.auteur.role } })),
   });
 };

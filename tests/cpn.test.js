@@ -91,6 +91,7 @@ before(async () => {
     medecinA: { prenom: 'Aimée', nom: 'AMANI', role: 'Médecin', matricule: 'MED-9002' },
     medecinB: { prenom: 'Bruno', nom: 'BOKANGA', role: 'Médecin', matricule: 'MED-9003' },
     infirmiere: { prenom: 'Inès', nom: 'ILUNGA', role: 'Infirmier(ère)', matricule: 'INF-9001' },
+    sageFemme: { prenom: 'Sarah', nom: 'SAFI', role: 'Sage-femme', matricule: 'SFM-9001' },
     suspendu: { prenom: 'Serge', nom: 'SUSPENDU', role: 'Médecin', matricule: 'MED-9004', statut: 'Suspendu' },
   };
   for (const [cle, d] of Object.entries(definitions)) {
@@ -483,10 +484,11 @@ test('carte patiente : PDF recto-verso au format carte, QR vers le dossier, gén
   assert.equal(lienDossier('AC-PAT-000001', 'https://ami-sante.vercel.app'), 'https://ami-sante.vercel.app/admin/patientes/AC-PAT-000001');
 });
 
-test('infirmière : suivi en lecture seule (grossesse en cours et rendez-vous), sans données sensibles', async () => {
+test('infirmière et sage-femme : fiche de la patiente en lecture seule, sans données médicales sensibles', async () => {
   // Patiente avec facteur de risque, antécédents et consultation : rien de cela ne doit apparaître.
   const r = await creer('medecinA', {
-    patiente: { nom: 'Suivi', prenom: 'Infirmiere', ageDeclare: 28, telephone: '+243 81 777 0001', adresse: { province: 'Kinshasa' },
+    patiente: { nom: 'Suivi', prenom: 'Infirmiere', ageDeclare: 28, telephone: '+243 81 777 0001', adresse: { province: 'Kinshasa', quartier: 'Matonge' },
+      etatCivil: 'Mariée', groupeSanguin: 'O', contactUrgence: { nom: 'Paul Suivi', lien: 'Époux', telephone: '+243 81 777 0002' },
       antecedents: { gestite: 3, allergies: 'Pénicilline', medicaux: 'Drépanocytose' } },
     grossesse: { datation: { methode: 'DDR', ddr: ilYa(84) }, facteursRisque: ['Hypertension artérielle'] },
     rendezVous: { date: dansJours(5), motif: 'CPN 2' },
@@ -504,10 +506,23 @@ test('infirmière : suivi en lecture seule (grossesse en cours et rendez-vous), 
   assert.ok(s.corps.grossesse.dpa);
   assert.equal(s.corps.rendezVous[0].motif, 'CPN 2');
   assert.ok(s.corps.patiente.photoUrl, 'photo pour identifier la patiente');
+  assert.equal(s.corps.patiente.quartier, 'Matonge');
+  assert.equal(s.corps.patiente.etatCivil, 'Mariée');
+  assert.equal(s.corps.patiente.contactUrgence.telephone, '+243 81 777 0002');
+  assert.equal(s.corps.visites.length, 1);
+  assert.equal(s.corps.visites[0].type, 'Première consultation prénatale');
+  assert.equal(s.corps.visites[0].soignant.nom, 'Aimée AMANI');
   const texte = JSON.stringify(s.corps);
-  for (const sensible of ['Hypertension', 'Pénicilline', 'Drépanocytose', 'Céphalées', 'antecedents', 'facteursRisque', 'consultations', 'email', 'datation']) {
+  for (const sensible of ['Hypertension', 'Pénicilline', 'Drépanocytose', 'Céphalées', 'antecedents', 'facteursRisque', 'consultations',
+    'constantes', 'groupeSanguin', 'echographies', 'email', 'datation']) {
     assert.ok(!texte.includes(sensible), `« ${sensible} » réservé aux médecins`);
   }
+
+  // Sage-femme : même fiche, même restriction sur le dossier médical complet.
+  const sf = await appel('sageFemme', 'GET', `/patientes/${numero}/suivi`);
+  assert.equal(sf.status, 200, JSON.stringify(sf.corps));
+  assert.equal(sf.corps.visites.length, 1);
+  assert.equal((await appel('sageFemme', 'GET', `/patientes/${numero}`)).status, 403, 'dossier complet réservé aux médecins');
 
   const liste = await appel('infirmiere', 'GET', `/patientes?q=${numero}`);
   assert.equal(liste.status, 200);
@@ -680,7 +695,7 @@ test('échographie : rubriques de la fiche, fœtus multiples, compte rendu PDF p
   const donnees = {
     date: ilYa(2), motif: 'Échographie du 2e trimestre', agSemaines: 21, agJours: 3, nombreFoetus: 2,
     foetus: [
-      { activiteCardiaque: true, sexe: 'Féminin', presentation: 'Céphalique', position: 'Dos à gauche', bipMm: 51, perimetreCranienMm: 190, perimetreAbdominalMm: 165, longueurFemoraleMm: 36, poidsEstimeG: 410 },
+      { activiteCardiaque: true, bcf: 142, sexe: 'Féminin', presentation: 'Céphalique', position: 'Dos à gauche', bipMm: 51, perimetreCranienMm: 190, perimetreAbdominalMm: 165, longueurFemoraleMm: 36, poidsEstimeG: 410 },
       { activiteCardiaque: true, sexe: 'Masculin', presentation: 'Siège', sexeInconnu: 'ignoré', poidsEstimeG: 395 },
       { activiteCardiaque: false, sexe: 'Féminin' },
     ],
@@ -698,6 +713,8 @@ test('échographie : rubriques de la fiche, fœtus multiples, compte rendu PDF p
   const e = await echo('medecinA', donnees, [{ type: 'application/pdf', nom: 'compte-rendu.pdf' }, { type: 'image/png', nom: 'image.png', contenu: PNG }]);
   assert.equal(e.status, 201, JSON.stringify(e.corps));
   assert.equal(e.corps.foetus.length, 2, 'limité au nombre de fœtus déclaré');
+  assert.equal(e.corps.foetus[0].bcf, 142);
+  assert.equal(e.corps.foetus[1].bcf, null, 'BCF non renseigné');
   assert.equal(e.corps.foetus[1].sexe, 'Masculin');
   assert.equal(e.corps.foetus[1].poidsEstimeG, 395);
   assert.equal(e.corps.placenta.maturite, 'Grade I');

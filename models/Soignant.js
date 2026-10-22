@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 
 const ROLES_MEDECIN = ['Médecin', 'Médecin chef de service', 'Médecin directeur'];
 const ROLES_INFIRMIER = ['Infirmier(ère)', 'Infirmier(ère) titulaire', 'Infirmier(ère) superviseur(e)'];
-const ROLES = [...ROLES_MEDECIN, ...ROLES_INFIRMIER];
+const ROLES_SAGE_FEMME = ['Sage-femme', 'Sage-femme titulaire', 'Sage-femme superviseur(e)'];
+const ROLES = [...ROLES_MEDECIN, ...ROLES_INFIRMIER, ...ROLES_SAGE_FEMME];
 const PIECES = ['Carte d’électeur', 'Passeport', 'Carte militaire', 'Permis de conduire'];
 
 /** Rôles autorisés à gérer les comptes du personnel soignant. */
@@ -84,9 +85,9 @@ soignantSchema.statics.instantaneAuteur = (s) => ({ nom: `${s.prenom} ${s.nom}`,
 /** Champs de l'auteur peuplés dans les listes. */
 soignantSchema.statics.CHAMPS_AUTEUR = 'prenom nom role matricule';
 
-/** MED-xxxx pour les médecins, INF-xxxx pour les infirmier·ères. */
+/** MED-xxxx pour les médecins, SFM-xxxx pour les sages-femmes, INF-xxxx pour les infirmier·ères. */
 soignantSchema.statics.prochainMatricule = async function (role) {
-  const prefixe = ROLES_MEDECIN.includes(role) ? 'MED' : 'INF';
+  const prefixe = ROLES_MEDECIN.includes(role) ? 'MED' : ROLES_SAGE_FEMME.includes(role) ? 'SFM' : 'INF';
   const dernier = await this.findOne({ matricule: new RegExp(`^${prefixe}-`) }).sort({ matricule: -1 });
   const n = dernier ? parseInt(dernier.matricule.split('-')[1], 10) || 0 : 0;
   return `${prefixe}-${String(n + 1).padStart(4, '0')}`;
@@ -101,4 +102,5 @@ module.exports.CHAMPS_PROFIL = [
 module.exports.ROLES = ROLES;
 module.exports.ROLES_MEDECIN = ROLES_MEDECIN;
 module.exports.ROLES_INFIRMIER = ROLES_INFIRMIER;
+module.exports.ROLES_SAGE_FEMME = ROLES_SAGE_FEMME;
 module.exports.ROLES_GESTION = ROLES_GESTION;

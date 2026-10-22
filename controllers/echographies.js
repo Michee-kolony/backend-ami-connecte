@@ -21,6 +21,7 @@ function champs(d = {}) {
     const x = objet(f);
     return {
       activiteCardiaque: ouiNon(x.activiteCardiaque),
+      bcf: nombre(x.bcf),
       sexe: choix(x.sexe, Echographie.SEXES),
       presentation: choix(x.presentation, Echographie.PRESENTATIONS),
       position: texte(x.position, 120),

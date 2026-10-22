@@ -12,9 +12,10 @@ const FOETUS_MAX = 4;
 const choix = (valeurs) => ({ type: String, enum: [...valeurs, ''], default: '' });
 const mesure = (max) => ({ type: Number, min: 0, max, default: null });
 
-/** Un fœtus : activité cardiaque, sexe (F1, F2…), présentation, position et biométrie (mm, g). */
+/** Un fœtus : activité cardiaque, BCF (bpm), sexe (F1, F2…), présentation, position et biométrie (mm, g). */
 const foetusSchema = new mongoose.Schema({
   activiteCardiaque: { type: Boolean, default: null },
+  bcf: mesure(250),
   sexe: choix(SEXES),
   presentation: choix(PRESENTATIONS),
   position: { type: String, default: '', trim: true, maxlength: 120 },
