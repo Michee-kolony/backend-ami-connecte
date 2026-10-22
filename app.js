@@ -31,6 +31,7 @@ app.use('/api/patientes', require('./routes/patientes'));
 app.use('/api/referentiels', require('./routes/referentiels'));
 app.use('/api/statistiques', require('./routes/statistiques'));
 app.use('/api/discussions', require('./routes/discussions'));
+app.use('/api/articles', require('./routes/articles'));
 app.use('/api/grossesses', suivi.grossesses);
 app.use('/api/consultations', suivi.consultations);
 app.use('/api/rendez-vous', suivi.rendezVous);

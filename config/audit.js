@@ -25,6 +25,9 @@ const ACTIONS = {
   'rdv.modification': 'Rendez-vous modifié',
   'journal.lecture': 'Consultation du journal d’audit',
   'acces.refuse': 'Accès refusé',
+  'article.publication': 'Article de conseils publié',
+  'article.suppression': 'Article de conseils supprimé',
+  'article.commentaire.suppression': 'Commentaire d’article supprimé',
 };
 
 /**
