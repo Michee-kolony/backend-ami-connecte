@@ -19,6 +19,8 @@ const etablissementSchema = new mongoose.Schema({
   type: { type: String, enum: TYPES, required: true },
   secteur: { type: String, enum: SECTEURS, required: true },
   province: { type: String, required: true, trim: true },
+  /** District sanitaire (en-tête de la fiche CPN), renseigné par le médecin chef. */
+  districtSanitaire: { type: String, default: '', trim: true },
   zoneSante: { type: String, required: true, trim: true },
   aireSante: { type: String, default: '', trim: true },
   adresse: { type: String, required: true, trim: true },
@@ -84,7 +86,7 @@ etablissementSchema.statics.verifierAffectations = async function (affectations)
 etablissementSchema.methods.resume = function () {
   return {
     id: this.id, code: this.code, nom: this.nom, type: this.type, province: this.province,
-    zoneSante: this.zoneSante, aireSante: this.aireSante, adresse: this.adresse, photo: this.photos[0]?.url ?? null,
+    districtSanitaire: this.districtSanitaire, zoneSante: this.zoneSante, aireSante: this.aireSante, adresse: this.adresse, photo: this.photos[0]?.url ?? null,
   };
 };
 

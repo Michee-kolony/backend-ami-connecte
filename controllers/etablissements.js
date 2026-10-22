@@ -7,7 +7,7 @@ const DOSSIER_PHOTOS = 'etablissement';
 const MAX_PHOTOS = 6;
 
 const CHAMPS = [
-  'nom', 'type', 'secteur', 'province', 'zoneSante', 'aireSante', 'adresse', 'telephone',
+  'nom', 'type', 'secteur', 'province', 'districtSanitaire', 'zoneSante', 'aireSante', 'adresse', 'telephone',
   'email', 'responsable', 'fonctionResponsable',
 ];
 

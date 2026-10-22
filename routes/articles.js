@@ -17,6 +17,7 @@ router.post('/', televerserMediasArticle, articles.creer);
 router.get('/:id', articles.obtenir);
 router.patch('/:id', articles.modifier);
 router.delete('/:id', articles.supprimer);
+router.post('/:id/approuver', articles.approuver);
 router.post('/:id/jaime', articles.aimer);
 router.post('/:id/commentaires', articles.commenter);
 router.delete('/:id/commentaires/:cid', articles.supprimerCommentaire);

@@ -18,9 +18,27 @@ const GRIS = '#64748b';
 const ENCRE = '#0f172a';
 const LOGO = path.join(__dirname, '..', 'assets', 'logo-icon.png');
 
+/** « https://domaine » d'une adresse http(s), sinon null (valeur absente ou douteuse). */
+function origineValide(valeur) {
+  try {
+    const u = new URL(valeur);
+    return ['http:', 'https:'].includes(u.protocol) ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Domaine du site qui demande la carte (Vercel, domaine perso…) : envoyé par le tableau de bord
+ * (?site=), sinon en-têtes Origin / Referer du navigateur, sinon APP_URL.
+ */
+function origineSite(req) {
+  return origineValide(req.query.site) || origineValide(req.get('origin')) || origineValide(req.get('referer'));
+}
+
 /** Adresse du dossier dans le tableau de bord : le QR code ouvre le dossier (connexion médecin requise). */
-function lienDossier(numero) {
-  const base = (process.env.APP_URL || 'http://localhost:4200').replace(/\/$/, '');
+function lienDossier(numero, origine) {
+  const base = (origine || process.env.APP_URL || 'http://localhost:4200').replace(/\/$/, '');
   return `${base}/admin/patientes/${encodeURIComponent(numero)}`;
 }
 
@@ -145,7 +163,7 @@ exports.carte = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   const brute = await lireFichier(patiente.photoCle);
-  const qr = await QRCode.toBuffer(lienDossier(patiente.numero), {
+  const qr = await QRCode.toBuffer(lienDossier(patiente.numero, origineSite(req)), {
     errorCorrectionLevel: 'M', margin: 1, width: 360, color: { dark: BLEU_FONCE, light: '#ffffff' },
   });
   const s = req.soignant;
@@ -164,3 +182,4 @@ exports.carte = async (req, res) => {
 };
 
 exports.lienDossier = lienDossier;
+exports.origineSite = origineSite;

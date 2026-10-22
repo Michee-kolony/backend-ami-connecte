@@ -52,7 +52,7 @@ exports.trouverPatiente = trouverPatiente;
 /** Champs administratifs acceptés depuis le formulaire (liste blanche). */
 function champsAdministratifs(d = {}) {
   const c = {};
-  for (const k of ['nom', 'postnom', 'prenom', 'pieceIdentite', 'telephone', 'telephone2', 'occupation', 'nomPartenaire']) if (d[k] !== undefined) c[k] = texte(d[k], 120);
+  for (const k of ['nom', 'postnom', 'prenom', 'pieceIdentite', 'telephone', 'telephone2', 'occupation', 'nomPartenaire', 'occupationPartenaire']) if (d[k] !== undefined) c[k] = texte(d[k], 120);
   if (d.etatCivil !== undefined) c.etatCivil = choix(d.etatCivil, cpn.ETATS_CIVILS);
   if (d.groupeSanguin !== undefined) c.groupeSanguin = choix(d.groupeSanguin, cpn.GROUPES_SANGUINS);
   if (d.rhesus !== undefined) c.rhesus = choix(d.rhesus, cpn.RHESUS);
@@ -63,7 +63,10 @@ function champsAdministratifs(d = {}) {
   if (d.telephonePartage !== undefined) c.telephonePartage = !!booleen(d.telephonePartage);
   if (d.email !== undefined) c.email = texte(d.email, 200).toLowerCase() || undefined;
   if (d.contactUrgence && typeof d.contactUrgence === 'object') {
-    c.contactUrgence = { nom: texte(d.contactUrgence.nom, 120), lien: texte(d.contactUrgence.lien, 60), telephone: texte(d.contactUrgence.telephone, 40) };
+    c.contactUrgence = {
+      nom: texte(d.contactUrgence.nom, 120), lien: texte(d.contactUrgence.lien, 60),
+      telephone: texte(d.contactUrgence.telephone, 40), adresse: texte(d.contactUrgence.adresse, 300),
+    };
   }
   if (d.adresse && typeof d.adresse === 'object') {
     c.adresse = {};
@@ -79,6 +82,7 @@ function champsAdministratifs(d = {}) {
     c.antecedents.atcdObstetricaux = cases(a.atcdObstetricaux, cpn.ATCD_OBSTETRICAUX);
     c.antecedents.plusGrosPoidsNaissanceG = nombre(a.plusGrosPoidsNaissanceG);
     c.antecedents.dernierAccouchement = texte(a.dernierAccouchement, 10) || null;
+    c.antecedents.testVihConnuLe = texte(a.testVihConnuLe, 10) || null;
   }
   return c;
 }

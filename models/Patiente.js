@@ -28,6 +28,8 @@ const patienteSchema = new mongoose.Schema({
   etatCivil: choix(cpn.ETATS_CIVILS),
   occupation: { type: String, default: '', trim: true },
   nomPartenaire: { type: String, default: '', trim: true },
+  /** Occupation du partenaire (« Occupation/H » de la fiche papier). */
+  occupationPartenaire: { type: String, default: '', trim: true },
 
   // Profil biologique (fiche CPN)
   groupeSanguin: choix(cpn.GROUPES_SANGUINS),
@@ -56,6 +58,7 @@ const patienteSchema = new mongoose.Schema({
     nom: { type: String, default: '', trim: true },
     lien: { type: String, default: '', trim: true },
     telephone: { type: String, default: '', trim: true },
+    adresse: { type: String, default: '', trim: true },
   },
   /** Consentement par canal : true, false ou null (non recueilli). */
   consentements: {
@@ -99,6 +102,8 @@ const patienteSchema = new mongoose.Schema({
     atcdObstetricaux: cases(cpn.ATCD_OBSTETRICAUX),
     plusGrosPoidsNaissanceG: { type: Number, min: 300, max: 7000, default: null },
     dernierAccouchement: dateJour(),
+    /** « Test connu » (VIH) de la fiche : la date doit être de moins de 3 mois. */
+    testVihConnuLe: dateJour(),
   },
 
   etablissementId: { type: String, default: null },

@@ -105,6 +105,53 @@ test('médecin : publication avec 4 photos ; 5 photos ou photos + vidéo refusé
   const v = await publier('medecinB', { titre: 'Allaitement', contenu: 'Les premiers jours', cible: 'Après l’accouchement' }, [video]);
   assert.equal(v.status, 201, JSON.stringify(v.corps));
   assert.equal(v.corps.medias[0].type, 'video');
+  articleVideo = v.corps;
+});
+
+let articleVideo;
+let articleChef;
+
+test('approbation : article en attente visible de son auteur et du chef seulement ; seul le chef approuve ou rejette', async () => {
+  assert.equal(article.statut, 'En attente');
+  assert.equal(article.peutSupprimer, false, 'l’auteur ne supprime pas son article');
+  assert.equal(article.peutApprouver, false);
+
+  // Les autres médecins ne voient pas un article en attente.
+  const b = await appel('medecinB', 'GET', '/articles');
+  assert.deepEqual(b.corps.articles.map((a) => a.id), [articleVideo.id], 'le médecin B ne voit que son propre article en attente');
+  assert.equal(b.corps.enAttente, null, 'compteur réservé au chef');
+  assert.equal((await appel('medecinB', 'GET', `/articles/${article.id}`)).status, 404);
+
+  // Ni j'aime ni commentaire avant approbation ; ni approbation ni suppression par un médecin.
+  assert.equal((await appel('medecinA', 'POST', `/articles/${article.id}/jaime`)).status, 409);
+  assert.equal((await appel('medecinA', 'POST', `/articles/${article.id}/commentaires`, { texte: 'Essai' })).status, 409);
+  assert.equal((await appel('medecinA', 'POST', `/articles/${article.id}/approuver`)).status, 403);
+  assert.equal((await appel('medecinA', 'DELETE', `/articles/${article.id}`)).status, 403, 'l’auteur ne supprime pas');
+
+  // File d'approbation du médecin chef.
+  const f = await appel('chef', 'GET', '/articles?statut=En attente');
+  assert.equal(f.corps.total, 2);
+  assert.equal(f.corps.enAttente, 2);
+  assert.ok(f.corps.articles.every((a) => a.peutApprouver && a.peutSupprimer));
+
+  const ok = await appel('chef', 'POST', `/articles/${article.id}/approuver`);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.corps.statut, 'Approuvé');
+  assert.equal(ok.corps.approbation.par.id, comptes.chef.id);
+  assert.equal((await appel('chef', 'POST', `/articles/${article.id}/approuver`)).status, 409, 'déjà approuvé');
+
+  // Rejet : l'article et sa vidéo sont supprimés du bucket.
+  assert.equal((await appel('chef', 'DELETE', `/articles/${articleVideo.id}`)).status, 204);
+  assert.ok(r2.supprimes.includes(articleVideo.medias[0].cle), 'vidéo retirée de R2');
+  assert.equal((await appel('medecinB', 'GET', `/articles/${articleVideo.id}`)).status, 404);
+
+  // Le médecin chef publie directement.
+  const c = await publier('chef', { titre: 'Vaccins de la mère', contenu: 'VAT pendant la grossesse' });
+  assert.equal(c.corps.statut, 'Approuvé');
+  articleChef = c.corps;
+
+  const JournalAudit = require('../models/JournalAudit');
+  assert.equal(await JournalAudit.countDocuments({ action: 'article.approbation' }), 1);
 });
 
 test('tous les médecins voient les publications ; j’aime en bascule, un par médecin', async () => {
@@ -145,8 +192,9 @@ test('commentaires : seul l’auteur de l’article répond ; chacun ne supprime
   assert.equal(c.corps.commentaires.length, 0);
 });
 
-test('suppression d’article : refusée à un autre médecin, permise à l’auteur et au médecin chef ; médias retirés de R2', async () => {
+test('suppression d’article : médecin chef seulement (même pour l’auteur) ; médias retirés de R2', async () => {
   assert.equal((await appel('medecinB', 'DELETE', `/articles/${article.id}`)).status, 403);
+  assert.equal((await appel('medecinA', 'DELETE', `/articles/${article.id}`)).status, 403, 'l’auteur ne supprime pas');
   const c = await appel('medecinB', 'POST', `/articles/${article.id}/commentaires`, { texte: 'Merci' });
   const cid = c.corps.commentaires[0].id;
   assert.equal((await appel('chef', 'DELETE', `/articles/${article.id}/commentaires/${cid}`)).status, 200, 'le chef supprime tout');
@@ -156,10 +204,10 @@ test('suppression d’article : refusée à un autre médecin, permise à l’au
   assert.equal((await appel('medecinA', 'GET', `/articles/${article.id}`)).status, 404);
 
   const l = await appel('medecinB', 'GET', '/articles');
-  const sien = l.corps.articles[0];
-  assert.equal(sien.peutSupprimer, true);
-  assert.equal((await appel('medecinB', 'DELETE', `/articles/${sien.id}`)).status, 204, 'l’auteur supprime son article');
+  assert.deepEqual(l.corps.articles.map((a) => a.id), [articleChef.id]);
+  assert.equal(l.corps.articles[0].peutSupprimer, false);
+  assert.equal((await appel('chef', 'DELETE', `/articles/${articleChef.id}`)).status, 204, 'le chef supprime son propre article');
 
   const JournalAudit = require('../models/JournalAudit');
-  assert.equal(await JournalAudit.countDocuments({ action: 'article.suppression' }), 2);
+  assert.equal(await JournalAudit.countDocuments({ action: 'article.suppression' }), 3);
 });

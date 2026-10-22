@@ -472,8 +472,15 @@ test('carte patiente : PDF recto-verso au format carte, QR vers le dossier, gén
   if (process.env.CARTE_ESSAI) require('fs').writeFileSync(process.env.CARTE_ESSAI, pdf);
   assert.equal((await fetch(`${api}/patientes/${dossier.numero}/carte`, { headers: { Authorization: `Bearer ${jetons.infirmiere}` } })).status, 403);
   assert.ok(await JournalAudit.exists({ action: 'patiente.carte', 'acteur.id': comptes.medecinB.id }));
-  const { lienDossier } = require('../controllers/carte');
+  const { lienDossier, origineSite } = require('../controllers/carte');
   assert.equal(lienDossier('AC-PAT-000001'), 'http://localhost:4200/admin/patientes/AC-PAT-000001', 'le QR ne contient que le lien du dossier');
+  // Le QR suit le domaine du site qui demande la carte (?site=, sinon Origin / Referer).
+  const req = (query, entetes = {}) => ({ query, get: (n) => entetes[n] });
+  assert.equal(origineSite(req({ site: 'https://ami-sante.vercel.app/admin/x' })), 'https://ami-sante.vercel.app');
+  assert.equal(origineSite(req({}, { origin: 'https://ami.cd' })), 'https://ami.cd');
+  assert.equal(origineSite(req({}, { referer: 'https://ami.cd/admin/patientes/AC-PAT-000001' })), 'https://ami.cd');
+  assert.equal(origineSite(req({ site: 'javascript:alert(1)' })), null, 'adresse non http(s) ignorée');
+  assert.equal(lienDossier('AC-PAT-000001', 'https://ami-sante.vercel.app'), 'https://ami-sante.vercel.app/admin/patientes/AC-PAT-000001');
 });
 
 test('infirmière : suivi en lecture seule (grossesse en cours et rendez-vous), sans données sensibles', async () => {
@@ -557,12 +564,13 @@ test('fiche CPN : identité et antécédents cochés, examen, mesures préventiv
   const r = await creer('medecinA', {
     patiente: {
       ...patiente, nom: 'Kabila', prenom: 'Esther', telephone: '+243 82 555 0001',
-      etatCivil: 'Mariée', occupation: 'Commerçante', nomPartenaire: 'Jean Kabila',
+      etatCivil: 'Mariée', occupation: 'Commerçante', nomPartenaire: 'Jean Kabila', occupationPartenaire: 'Enseignant',
+      contactUrgence: { nom: 'Marie Kabila', lien: 'Mère', telephone: '+243 81 000 0000', adresse: 'Av. Kasa-Vubu 4, Kalamu' },
       groupeSanguin: 'O', rhesus: 'Négatif', tailleCm: 158, electrophoreseHb: 'AS',
       antecedents: {
         gestite: 3, parite: 2, atcdMedicaux: ['Hypertension artérielle (HTA)', 'Inventé'],
-        atcdGynecoChirurgicaux: ['Césarienne'], atcdObstetricaux: ['Mort-né'],
-        plusGrosPoidsNaissanceG: 4200, dernierAccouchement: '2024-05-02',
+        atcdGynecoChirurgicaux: ['Césarienne'], atcdObstetricaux: ['Mort-né', 'Eutocie'],
+        plusGrosPoidsNaissanceG: 4200, dernierAccouchement: '2024-05-02', testVihConnuLe: ilYa(30),
       },
     },
     grossesse: { datation: { methode: 'DDR', ddr: ilYa(140), ddrFiabilite: 'Fiable' } },
@@ -575,6 +583,11 @@ test('fiche CPN : identité et antécédents cochés, examen, mesures préventiv
   assert.equal(p.tailleCm, 158);
   assert.deepEqual(p.antecedents.atcdMedicaux, ['Hypertension artérielle (HTA)'], 'valeur hors référentiel ignorée');
   assert.equal(p.antecedents.plusGrosPoidsNaissanceG, 4200);
+  // Champs de la fiche papier : Occupation/H, Adresse/Tél du contact, Eutocie, Test connu.
+  assert.equal(p.occupationPartenaire, 'Enseignant');
+  assert.equal(p.contactUrgence.adresse, 'Av. Kasa-Vubu 4, Kalamu');
+  assert.deepEqual(p.antecedents.atcdObstetricaux, ['Mort-né', 'Eutocie']);
+  assert.equal(p.antecedents.testVihConnuLe, ilYa(30));
   const gid = d.corps.grossesses[0].id;
 
   const c = await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, {

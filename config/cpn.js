@@ -17,7 +17,7 @@ const ATCD_GYNECO_CHIRURGICAUX = [
   'Utérus cicatriciel', 'Traitement pour stérilité',
 ];
 const ATCD_OBSTETRICAUX = [
-  'Primipare de moins de 19 ans', 'Primipare de plus de 35 ans', 'Dystocie', 'Enfant de plus de 4 kg', 'Prématuré',
+  'Primipare de moins de 19 ans', 'Primipare de plus de 35 ans', 'Dystocie', 'Eutocie', 'Enfant de plus de 4 kg', 'Prématuré',
   'Post-mature', 'Mort-né', 'Décès avant 7 jours', 'Intervalle inférieur à 3 ans', 'Complication du post-partum',
 ];
 
