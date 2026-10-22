@@ -203,13 +203,14 @@ test('établissement sanitaire : choisi dans le formulaire parmi les actifs, sin
   }
 });
 
-test('datation : règle de Naegele (jour + 7, mois + 9 ; d’avril à décembre mois − 3 et année + 1)', () => {
+test('datation : règle de Naegele (mois 1 à 3 : + 9 ; mois 4 à 12 : − 3 et année + 1 ; jour + 7)', () => {
   const { dpaNaegele } = require('../models/Grossesse');
   assert.equal(dpaNaegele('2026-01-10'), '2026-10-17'); // janvier à mars : mois + 9, même année
   assert.equal(dpaNaegele('2026-05-04'), '2027-02-11'); // avril à décembre : mois − 3, année + 1
   assert.equal(dpaNaegele('2026-01-28'), '2026-11-04'); // jour + 7 qui déborde sur le mois suivant
-  assert.equal(dpaNaegele('2026-12-25'), '2027-10-01');
-  assert.equal(dpaNaegele('2026-05-24'), '2027-02-28'); // 31 février ramené au dernier jour du mois
+  assert.equal(dpaNaegele('2026-12-25'), '2027-10-02'); // décembre : septembre de l'année suivante, puis + 7 j
+  assert.equal(dpaNaegele('2026-03-28'), '2027-01-04'); // mars (+ 9) : 35 décembre → 4 janvier
+  assert.equal(dpaNaegele('2026-05-24'), '2027-03-03'); // 31 février 2027 → 3 mars
 });
 
 test('datation : DPA corrigée de plus de 7 jours refusée sans justification', async () => {

@@ -62,18 +62,13 @@ const grossesseSchema = new mongoose.Schema({
 grossesseSchema.index({ patienteId: 1, numero: 1 }, { unique: true });
 
 /**
- * Règle de Naegele : DDR + 7 jours, puis + 9 mois (pour une DDR d'avril à décembre, cela revient
- * à − 3 mois et + 1 an). Un jour inexistant (ex. 31 février) est ramené au dernier jour du mois.
+ * Règle de Naegele, selon le mois de la DDR : de janvier à mars, mois + 9 (même année) ; d'avril à
+ * décembre, mois − 3 et année + 1. Puis jour + 7 : au-delà de la fin du mois, on passe au suivant.
  */
 function dpaNaegele(ddr) {
-  const d = new Date(`${ddr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 7);
-  const jourDuMois = d.getUTCDate();
-  d.setUTCDate(1);
-  d.setUTCMonth(d.getUTCMonth() + 9);
-  const dernierJour = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(jourDuMois, dernierJour));
-  return d.toISOString().slice(0, 10);
+  const [annee, mois, jour] = ddr.split('-').map(Number);
+  const [anneeDpa, moisDpa] = mois <= 3 ? [annee, mois + 9] : [annee + 1, mois - 3];
+  return new Date(Date.UTC(anneeDpa, moisDpa - 1, jour + 7)).toISOString().slice(0, 10);
 }
 
 /** Calcule la datation à partir de la saisie (DDR, ou âge gestationnel à une date). */
