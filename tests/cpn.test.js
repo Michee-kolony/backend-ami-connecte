@@ -524,3 +524,63 @@ test('tableau de bord : indicateurs calculés sur les données réelles, risque 
   assert.ok(inf.corps.recentes.every((x) => !('aRisque' in x)));
   assert.ok(!JSON.stringify(inf.corps).includes('antecedents'));
 });
+
+test('fiche CPN : identité et antécédents cochés, examen, mesures préventives, laboratoire et référence horodatée', async () => {
+  const ref = await appel('medecinA', 'GET', '/referentiels/cpn');
+  assert.equal(ref.status, 200);
+  assert.ok(ref.corps.MESURES_PREVENTIVES.some((m) => m.code === 'sp1' && m.semaine === 16));
+
+  const r = await creer('medecinA', {
+    patiente: {
+      ...patiente, nom: 'Kabila', prenom: 'Esther', telephone: '+243 82 555 0001',
+      etatCivil: 'Mariée', occupation: 'Commerçante', nomPartenaire: 'Jean Kabila',
+      groupeSanguin: 'O', rhesus: 'Négatif', tailleCm: 158, electrophoreseHb: 'AS',
+      antecedents: {
+        gestite: 3, parite: 2, atcdMedicaux: ['Hypertension artérielle (HTA)', 'Inventé'],
+        atcdGynecoChirurgicaux: ['Césarienne'], atcdObstetricaux: ['Mort-né'],
+        plusGrosPoidsNaissanceG: 4200, dernierAccouchement: '2024-05-02',
+      },
+    },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYa(140), ddrFiabilite: 'Fiable' } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  let d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  const p = d.corps.patiente;
+  assert.equal(p.etatCivil, 'Mariée');
+  assert.equal(p.rhesus, 'Négatif');
+  assert.equal(p.tailleCm, 158);
+  assert.deepEqual(p.antecedents.atcdMedicaux, ['Hypertension artérielle (HTA)'], 'valeur hors référentiel ignorée');
+  assert.equal(p.antecedents.plusGrosPoidsNaissanceG, 4200);
+  const gid = d.corps.grossesses[0].id;
+
+  const c = await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, {
+    type: 'Première consultation prénatale',
+    constantes: { taSystolique: 150, taDiastolique: 95, saO2: 97, frequenceRespiratoire: 18 },
+    examenCpn: { signes: { proteinurie: true, oedemes: false, inconnu: true }, etatGeneral: 'Bon', perimetreBrachialCm: 24, presentation: 'Céphalique' },
+    mesuresPreventives: { vat1: { reponse: true }, sp1: { reponse: true }, methodePf: { reponse: true, valeur: 'Implant' } },
+    laboratoire: { hb: '10,5', tdrPalu: 'Négatif' },
+    echographie: 'Grossesse évolutive',
+    reference: { motifs: ['TA systolique > 140', 'Motif inventé'] },
+  });
+  assert.equal(c.status, 201, JSON.stringify(c.corps));
+  assert.equal(c.corps.examenCpn.signes.proteinurie, true);
+  assert.equal(c.corps.examenCpn.signes.oedemes, false);
+  assert.equal(c.corps.examenCpn.signes.goitre, null, 'non évalué');
+  assert.ok(!('inconnu' in c.corps.examenCpn.signes));
+  assert.equal(c.corps.constantes.saO2, 97);
+  assert.equal(c.corps.laboratoire.hb, '10,5');
+  assert.deepEqual(c.corps.reference.motifs, ['TA systolique > 140']);
+  assert.ok(c.corps.reference.le, 'référence horodatée par le serveur');
+  const horodatage = c.corps.reference.le;
+
+  // L'horodatage est conservé tant que des motifs restent cochés.
+  const m = await appel('medecinA', 'PATCH', `/consultations/${c.corps.id}`, { reference: { motifs: ['TA systolique > 140', 'Goitre'] }, finaliser: true });
+  assert.equal(m.status, 200, JSON.stringify(m.corps));
+  assert.equal(m.corps.reference.le, horodatage);
+
+  d = await appel('medecinA', 'GET', `/patientes/${r.corps.numero}`);
+  const mesures = d.corps.grossesses[0].mesuresPreventives;
+  assert.deepEqual(Object.keys(mesures).sort(), ['methodePf', 'sp1', 'vat1']);
+  assert.equal(mesures.methodePf.valeur, 'Implant');
+  assert.ok(d.corps.consultations[0].reference.le);
+});

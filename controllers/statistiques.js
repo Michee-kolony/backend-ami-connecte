@@ -117,7 +117,9 @@ exports.patientes = async (req, res) => {
   // --- Listes minimisées ----------------------------------------------------------------
   const grossesseDe = new Map(enCours.map((g) => [String(g.patienteId), g]));
   const photos = await Promise.all(recentes.map((p) => urlSignee(p.photoCle)));
-  const prochains = rdvs.filter((r) => ACTIFS.includes(r.statut) && r.date >= aujourdhui).slice(0, 5);
+  // Sans horizon : les prochains rendez-vous peuvent tomber au-delà de la fenêtre des compteurs.
+  const prochains = await RendezVous.find({ statut: { $in: ACTIFS }, date: { $gte: aujourdhui } })
+    .select('patienteId date motif statut').sort({ date: 1 }).limit(5).lean();
   const identites = await Patiente.find({ _id: { $in: prochains.map((r) => r.patienteId) } }).select('numero nom prenom postnom').lean();
   const identiteDe = new Map(identites.map((p) => [String(p._id), p]));
 

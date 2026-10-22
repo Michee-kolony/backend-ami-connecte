@@ -10,6 +10,7 @@ const { auteurDe } = require('../models/commun');
 const { ROLES_MEDECIN } = require('../models/Soignant');
 const { journaliser, ACTIONS } = require('../config/audit');
 const { PROVINCES_RDC } = require('../config/referentiels');
+const cpn = require('../config/cpn');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 
 const DOSSIER_PHOTOS = 'patiente';
@@ -34,6 +35,10 @@ const nombre = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null :
 const booleen = (v) => (v === true || v === 'true' ? true : v === false || v === 'false' ? false : null);
 const echapperRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const listeTextes = (v) => (Array.isArray(v) ? v.map((x) => texte(x, 200)).filter(Boolean).slice(0, 30) : []);
+/** Valeur d'un référentiel ('' si absente ou inconnue). */
+const choix = (v, valeurs) => (valeurs.includes(v) ? v : '');
+/** Cases cochées : seules les valeurs du référentiel sont retenues, sans doublon. */
+const cases = (v, valeurs) => (Array.isArray(v) ? [...new Set(v.filter((x) => valeurs.includes(x)))] : []);
 
 /** Patiente par identifiant AC-PAT-… ou identifiant MongoDB. */
 async function trouverPatiente(id) {
@@ -47,7 +52,12 @@ exports.trouverPatiente = trouverPatiente;
 /** Champs administratifs acceptés depuis le formulaire (liste blanche). */
 function champsAdministratifs(d = {}) {
   const c = {};
-  for (const k of ['nom', 'postnom', 'prenom', 'pieceIdentite', 'telephone', 'telephone2']) if (d[k] !== undefined) c[k] = texte(d[k], 120);
+  for (const k of ['nom', 'postnom', 'prenom', 'pieceIdentite', 'telephone', 'telephone2', 'occupation', 'nomPartenaire']) if (d[k] !== undefined) c[k] = texte(d[k], 120);
+  if (d.etatCivil !== undefined) c.etatCivil = choix(d.etatCivil, cpn.ETATS_CIVILS);
+  if (d.groupeSanguin !== undefined) c.groupeSanguin = choix(d.groupeSanguin, cpn.GROUPES_SANGUINS);
+  if (d.rhesus !== undefined) c.rhesus = choix(d.rhesus, cpn.RHESUS);
+  if (d.electrophoreseHb !== undefined) c.electrophoreseHb = choix(d.electrophoreseHb, cpn.ELECTROPHORESES);
+  if (d.tailleCm !== undefined) c.tailleCm = nombre(d.tailleCm);
   if (d.dateNaissance !== undefined) c.dateNaissance = texte(d.dateNaissance, 10) || null;
   if (d.ageDeclare !== undefined) c.ageDeclare = nombre(d.ageDeclare);
   if (d.telephonePartage !== undefined) c.telephonePartage = !!booleen(d.telephonePartage);
@@ -64,6 +74,11 @@ function champsAdministratifs(d = {}) {
     c.antecedents = {};
     for (const k of ['gestite', 'parite', 'enfantsVivants', 'avortements', 'cesariennes']) c.antecedents[k] = nombre(a[k]);
     for (const k of ['complicationsObstetricales', 'medicaux', 'chirurgicaux', 'allergies', 'medicaments']) c.antecedents[k] = texte(a[k]);
+    c.antecedents.atcdMedicaux = cases(a.atcdMedicaux, cpn.ATCD_MEDICAUX);
+    c.antecedents.atcdGynecoChirurgicaux = cases(a.atcdGynecoChirurgicaux, cpn.ATCD_GYNECO_CHIRURGICAUX);
+    c.antecedents.atcdObstetricaux = cases(a.atcdObstetricaux, cpn.ATCD_OBSTETRICAUX);
+    c.antecedents.plusGrosPoidsNaissanceG = nombre(a.plusGrosPoidsNaissanceG);
+    c.antecedents.dernierAccouchement = texte(a.dernierAccouchement, 10) || null;
   }
   return c;
 }
@@ -288,6 +303,22 @@ function premiereConsultation(consultations) {
   return c ? { consultationId: c.id, medecin: c.auteur, date: c.date, etablissementId: c.etablissementId } : null;
 }
 
+/**
+ * Mesures préventives réalisées pendant une grossesse (consultations finalisées) :
+ * { code: { date, valeur, consultationId } } — la plus récente réponse « oui » de chaque mesure.
+ */
+function mesuresRealisees(consultations) {
+  const faites = {};
+  const finalisees = consultations.filter((c) => c.statut === 'Finalisée').sort((a, b) => a.date - b.date);
+  for (const c of finalisees) {
+    for (const { code } of cpn.MESURES_PREVENTIVES) {
+      const m = c.mesuresPreventives?.[code];
+      if (m?.reponse === true) faites[code] = { date: c.date, valeur: m.valeur || faites[code]?.valeur || '', consultationId: c.id };
+    }
+  }
+  return faites;
+}
+
 /** Dossier complet : chaque ouverture est journalisée (distincte d'une consultation réalisée). */
 exports.dossier = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
@@ -301,12 +332,17 @@ exports.dossier = async (req, res) => {
   res.json({
     etablissement: etablissement ? { id: etablissement.id, code: etablissement.code, nom: etablissement.nom, province: etablissement.province } : null,
     patiente: { ...patiente.toJSON(), age: patiente.age(), photoUrl: await urlSignee(patiente.photoCle) },
-    grossesses: grossesses.map((g) => ({ ...g.toJSON(), agJours: g.statut === 'En cours' ? g.agJoursLe() : null })),
+    grossesses: grossesses.map((g) => ({
+      ...g.toJSON(),
+      agJours: g.statut === 'En cours' ? g.agJoursLe() : null,
+      mesuresPreventives: mesuresRealisees(consultations.filter((c) => c.grossesseId.equals(g._id))),
+    })),
     // Liste de l'historique : résumé seulement, le détail s'ouvre (et se journalise) séparément.
     consultations: consultations.map((c) => ({
       id: c.id, grossesseId: c.grossesseId, type: c.type, date: c.date, auteur: c.auteur, statut: c.statut,
       agJours: c.agJours, motif: c.motif, finaliseeLe: c.finaliseeLe, addenda: c.addenda.length,
       constantes: c.constantes, createdAt: c.createdAt,
+      reference: c.reference?.le ? { le: c.reference.le, motifs: c.reference.motifs } : null,
     })),
     rendezVous,
     premiereConsultation: premiereConsultation(consultations),

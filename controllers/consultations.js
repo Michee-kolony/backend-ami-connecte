@@ -4,12 +4,15 @@ const RendezVous = require('../models/RendezVous');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const { trouverGrossesse } = require('./patientes');
+const cpn = require('../config/cpn');
 
 const { TYPES_CONSULTATION, CHAMPS_CLINIQUES } = Consultation;
 const erreur = (status, message) => Object.assign(new Error(message), { status });
 const texte = (v, max = 5000) => (v == null ? '' : String(v).trim().slice(0, max));
 const nombre = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
 const listeTextes = (v) => (Array.isArray(v) ? v.map((x) => texte(x, 200)).filter(Boolean).slice(0, 30) : []);
+const ouiNon = (v) => (v === true ? true : v === false ? false : null);
+const objet = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
 /** Champs cliniques acceptés (liste blanche, valeurs converties : jamais d'objet brut). */
 function champsCliniques(d = {}) {
@@ -31,7 +34,7 @@ function champsCliniques(d = {}) {
       case 'constantes': {
         const s = d.constantes || {};
         c.constantes = {};
-        for (const m of ['poidsKg', 'taSystolique', 'taDiastolique', 'temperature', 'pouls', 'hauteurUterineCm', 'bcf']) c.constantes[m] = nombre(s[m]);
+        for (const m of ['poidsKg', 'taSystolique', 'taDiastolique', 'temperature', 'pouls', 'hauteurUterineCm', 'bcf', 'saO2', 'frequenceRespiratoire']) c.constantes[m] = nombre(s[m]);
         break;
       }
       case 'facteursRisque':
@@ -54,6 +57,37 @@ function champsCliniques(d = {}) {
         c.prochainRdv = { date, motif: texte(r.motif, 200), consignes: texte(r.consignes, 500) };
         break;
       }
+      case 'examenCpn': {
+        const e = objet(d.examenCpn);
+        const signes = objet(e.signes);
+        c.examenCpn = {
+          signes: Object.fromEntries(cpn.SIGNES_CPN.map(({ code }) => [code, ouiNon(signes[code])])),
+          etatGeneral: cpn.ETATS_GENERAUX.includes(e.etatGeneral) ? e.etatGeneral : '',
+          perimetreBrachialCm: nombre(e.perimetreBrachialCm),
+          mouvementsFoetaux: texte(e.mouvementsFoetaux, 100),
+          presentation: cpn.PRESENTATIONS.includes(e.presentation) ? e.presentation : '',
+        };
+        break;
+      }
+      case 'mesuresPreventives': {
+        const m = objet(d.mesuresPreventives);
+        c.mesuresPreventives = Object.fromEntries(cpn.MESURES_PREVENTIVES.map(({ code }) => {
+          const v = objet(m[code]);
+          return [code, { reponse: ouiNon(v.reponse), valeur: texte(v.valeur, 200) }];
+        }));
+        break;
+      }
+      case 'laboratoire': {
+        const l = objet(d.laboratoire);
+        c.laboratoire = Object.fromEntries(cpn.EXAMENS_LABO.map(({ code }) => [code, texte(l[code], 500)]));
+        break;
+      }
+      case 'reference': {
+        const r = objet(d.reference);
+        const motifs = Array.isArray(r.motifs) ? [...new Set(r.motifs.filter((x) => cpn.MOTIFS_REFERENCE.includes(x)))] : [];
+        c.reference = { motifs, precision: texte(r.precision, 1000) };
+        break;
+      }
       default:
         c[k] = texte(d[k]);
     }
@@ -70,6 +104,11 @@ async function trouver(id) {
 /** Seul l'auteur d'un brouillon peut le compléter, le finaliser ou l'annuler. */
 function verifierAuteur(c, req) {
   if (c.auteur.id !== req.soignant.id) throw erreur(403, 'Seul le médecin auteur de cette consultation peut la modifier.');
+}
+
+/** Référence horodatée par le serveur dès qu'un motif est coché ; effacée si plus aucun motif. */
+function horodaterReference(c, dejaLe = null) {
+  c.set('reference.le', c.reference?.motifs?.length ? dejaLe ?? c.reference.le ?? new Date() : null);
 }
 
 function valider(c) {
@@ -106,6 +145,7 @@ exports.creer = async (req, res) => {
     auteur: auteurDe(req.soignant),
     rendezVousId,
   });
+  horodaterReference(c);
   await valider(c);
   await c.save();
   await journaliser(req, { action: 'consultation.creation', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id }, details: { type: c.type } });
@@ -124,7 +164,9 @@ exports.modifier = async (req, res) => {
   const c = await trouver(req.params.id);
   if (c.statut !== 'Brouillon') throw erreur(409, 'Consultation finalisée ou annulée : ajoutez un addendum.');
   verifierAuteur(c, req);
+  const dejaReferee = c.reference?.le ?? null;
   c.set(champsCliniques(req.body));
+  horodaterReference(c, dejaReferee);
   await valider(c);
   await c.save();
   await journaliser(req, { action: 'consultation.modification', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id } });

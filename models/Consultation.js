@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 const { auteurSchema, versJson, dateJour } = require('./commun');
+const cpn = require('../config/cpn');
+
+const ouiNon = { type: Boolean, default: null };
+/** Objet { code: définition } construit depuis un référentiel de la fiche CPN. */
+const parCode = (liste, def) => Object.fromEntries(liste.map((x) => [x.code, def()]));
 
 const TYPES_CONSULTATION = [
   'Première consultation prénatale', 'Suivi prénatal', 'Consultation non programmée', 'Accouchement', 'Postnatal',
@@ -27,6 +32,7 @@ const addendumSchema = new mongoose.Schema({
 const CHAMPS_CLINIQUES = [
   'type', 'date', 'motif', 'symptomes', 'constantes', 'examenClinique', 'evaluation', 'facteursRisque',
   'decisions', 'examensDemandes', 'resultatsRevus', 'traitements', 'conseils', 'orientation', 'prochainRdv',
+  'examenCpn', 'mesuresPreventives', 'laboratoire', 'echographie', 'reference',
 ];
 
 /**
@@ -54,6 +60,27 @@ const consultationSchema = new mongoose.Schema({
     pouls: { type: Number, min: 30, max: 220, default: null },
     hauteurUterineCm: { type: Number, min: 0, max: 50, default: null },
     bcf: { type: Number, min: 50, max: 220, default: null },
+    saO2: { type: Number, min: 50, max: 100, default: null },
+    frequenceRespiratoire: { type: Number, min: 5, max: 80, default: null },
+  },
+  /** Fiche CPN : signes oui/non (null = non évalué) et éléments du fœtus. */
+  examenCpn: {
+    signes: parCode(cpn.SIGNES_CPN, () => ouiNon),
+    etatGeneral: { type: String, enum: [...cpn.ETATS_GENERAUX, ''], default: '' },
+    perimetreBrachialCm: { type: Number, min: 10, max: 60, default: null },
+    mouvementsFoetaux: { type: String, default: '', trim: true },
+    presentation: { type: String, enum: [...cpn.PRESENTATIONS, ''], default: '' },
+  },
+  /** Mesures préventives réalisées à cette visite (oui/non + valeur éventuelle). */
+  mesuresPreventives: parCode(cpn.MESURES_PREVENTIVES, () => ({ reponse: ouiNon, valeur: { type: String, default: '', trim: true } })),
+  /** Résultats d'examens de laboratoire et échographie obstétricale. */
+  laboratoire: parCode(cpn.EXAMENS_LABO, () => ({ type: String, default: '', trim: true })),
+  echographie: { type: String, default: '', trim: true },
+  /** Référence de la femme : motifs cochés par le médecin, horodatée par le serveur. */
+  reference: {
+    motifs: { type: [{ type: String, enum: cpn.MOTIFS_REFERENCE }], default: [] },
+    precision: { type: String, default: '', trim: true },
+    le: { type: Date, default: null },
   },
   examenClinique: { type: String, default: '', trim: true },
   evaluation: { type: String, default: '', trim: true },

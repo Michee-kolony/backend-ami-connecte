@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 const { auteurSchema, versJson, dateJour } = require('./commun');
 const { PROVINCES_RDC } = require('../config/referentiels');
+const cpn = require('../config/cpn');
+
+/** Liste de valeurs d'un référentiel (cases à cocher de la fiche CPN). */
+const cases = (valeurs) => ({ type: [{ type: String, enum: valeurs }], default: [] });
+/** Choix facultatif dans un référentiel ('' = non renseigné). */
+const choix = (valeurs) => ({ type: String, enum: [...valeurs, ''], default: '' });
 
 const STATUTS_PATIENTE = ['Suivi prénatal', 'Grossesse terminée', 'Suivi postnatal', 'Archivé'];
 const CANAUX = ['sms', 'appel', 'whatsapp'];
@@ -19,6 +25,15 @@ const patienteSchema = new mongoose.Schema({
   ageDeclare: { type: Number, min: 8, max: 70, default: null },
   ageDeclareLe: dateJour(),
   pieceIdentite: { type: String, default: '', trim: true },
+  etatCivil: choix(cpn.ETATS_CIVILS),
+  occupation: { type: String, default: '', trim: true },
+  nomPartenaire: { type: String, default: '', trim: true },
+
+  // Profil biologique (fiche CPN)
+  groupeSanguin: choix(cpn.GROUPES_SANGUINS),
+  rhesus: choix(cpn.RHESUS),
+  tailleCm: { type: Number, min: 100, max: 220, default: null },
+  electrophoreseHb: choix(cpn.ELECTROPHORESES),
 
   // Contact
   telephone: { type: String, default: '', trim: true },
@@ -78,6 +93,12 @@ const patienteSchema = new mongoose.Schema({
     chirurgicaux: { type: String, default: '', trim: true },
     allergies: { type: String, default: '', trim: true },
     medicaments: { type: String, default: '', trim: true },
+    /** Cases de la fiche CPN : antécédents médicaux, gynéco-chirurgicaux et obstétricaux. */
+    atcdMedicaux: cases(cpn.ATCD_MEDICAUX),
+    atcdGynecoChirurgicaux: cases(cpn.ATCD_GYNECO_CHIRURGICAUX),
+    atcdObstetricaux: cases(cpn.ATCD_OBSTETRICAUX),
+    plusGrosPoidsNaissanceG: { type: Number, min: 300, max: 7000, default: null },
+    dernierAccouchement: dateJour(),
   },
 
   etablissementId: { type: String, default: null },
