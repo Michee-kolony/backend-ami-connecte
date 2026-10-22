@@ -19,7 +19,7 @@ const datationSchema = new mongoose.Schema({
   dateReference: dateJour(true),
   /** Âge gestationnel (en jours) à la date de référence : 0 pour une datation par DDR. */
   agReferenceJours: { type: Number, min: 0, max: 44 * 7, required: true },
-  /** DPA calculée (référence + 280 j − AG) et DPA retenue (différente si corrigée et justifiée). */
+  /** DPA calculée (DDR : Naegele ; sinon référence + 280 j − AG) et DPA retenue (différente si corrigée et justifiée). */
   dpaCalculee: dateJour(true),
   dpa: dateJour(true),
   justification: { type: String, default: '', trim: true },
@@ -110,6 +110,20 @@ function calculerDatation({ methode, ddr, ddrFiabilite, dateReference, agSemaine
     justification: String(justification || '').trim(),
   };
 }
+
+/**
+ * Datations par DDR enregistrées avec l'ancien calcul (DDR + 280 j) : la DPA calculée est remise à
+ * la règle de Naegele à chaque lecture, et la DPA estimée la suit tant qu'elle n'a pas été corrigée
+ * par un médecin (DPA retenue égale à l'ancienne DPA calculée). Enregistré au prochain save.
+ */
+grossesseSchema.post('init', function () {
+  const d = this.datation;
+  if (d?.methode !== 'DDR' || !d.ddr) return;
+  const naegele = dpaNaegele(d.ddr);
+  if (d.dpaCalculee === naegele) return;
+  if (d.dpa === d.dpaCalculee) d.dpa = naegele;
+  d.dpaCalculee = naegele;
+});
 
 /** Âge gestationnel (jours) à une date donnée, ou null si la grossesse n'est pas datée. */
 grossesseSchema.methods.agJoursLe = function (date = new Date()) {

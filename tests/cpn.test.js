@@ -213,6 +213,20 @@ test('datation : règle de Naegele (mois 1 à 3 : + 9 ; mois 4 à 12 : − 3 et 
   assert.equal(dpaNaegele('2026-05-24'), '2027-03-03'); // 31 février 2027 → 3 mars
 });
 
+test('datation : une DPA enregistrée avec l’ancien calcul (DDR + 280 j) est affichée selon Naegele', async () => {
+  const { dpaNaegele } = require('../models/Grossesse');
+  const collection = mongoose.connection.collection('grossesses');
+  const _id = new mongoose.Types.ObjectId(grossesseId);
+  const { datation } = await collection.findOne({ _id });
+  const ancienne = new Date(Date.parse(`${datation.ddr}T00:00:00Z`) + 280 * 86400000).toISOString().slice(0, 10);
+  await collection.updateOne({ _id }, { $set: { 'datation.dpaCalculee': ancienne, 'datation.dpa': ancienne } });
+
+  const d = await appel('medecinA', 'GET', `/patientes/${dossier.numero}`);
+  const g = d.corps.grossesses.find((x) => x.id === grossesseId);
+  assert.equal(g.datation.dpaCalculee, dpaNaegele(datation.ddr));
+  assert.equal(g.datation.dpa, dpaNaegele(datation.ddr), 'DPA estimée = date calculée');
+});
+
 test('datation : DPA corrigée de plus de 7 jours refusée sans justification', async () => {
   const r = await creer('medecinA', {
     patiente: { nom: 'Datation', prenom: 'Essai', ageDeclare: 25, adresse: { province: 'Kinshasa' } },
