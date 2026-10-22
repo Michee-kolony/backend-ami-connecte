@@ -76,7 +76,8 @@ Base MongoDB **en mémoire** (`mongodb-memory-server`) et données fictives : au
   réservé aux médecins. Une évolution pourrait autoriser un enregistrement administratif minimal.
 - Liste des facteurs de risque proposés, examens proposés, repères d'attention (TA ≥ 140/90, T ≥ 38 °C,
   BCF hors 110–160) : indicatifs, à aligner sur le protocole national RDC.
-- Calcul DPA = référence + 280 j − AG ; correction > 7 jours exigeant une justification.
+- Calcul DPA : par DDR, règle de Naegele (jour + 7, mois + 9 ; d’avril à décembre mois − 3 et année + 1) ;
+  par échographie ou examen clinique, référence + 280 j − AG ; correction > 7 jours exigeant une justification.
 - Le médecin chef (rôle de gestion des comptes) a aussi accès au dossier, puisqu'il est médecin.
 
 ## Non couvert par cette phase

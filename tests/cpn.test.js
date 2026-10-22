@@ -135,8 +135,8 @@ test('enregistrement : identifiant AC-PAT, datation par DDR et premier rendez-vo
   assert.equal(d.status, 200);
   const g = d.corps.grossesses[0];
   grossesseId = g.id;
-  const dpaAttendue = new Date(Date.parse(`${ddr}T00:00:00Z`) + 280 * 86400000).toISOString().slice(0, 10);
-  assert.equal(g.datation.dpa, dpaAttendue, 'DPA = DDR + 280 jours');
+  const { dpaNaegele } = require('../models/Grossesse');
+  assert.equal(g.datation.dpa, dpaNaegele(ddr), 'DPA = DDR + 7 jours + 9 mois (Naegele)');
   assert.equal(g.agJours, 70);
   assert.equal(g.datation.valideePar.id, comptes.medecinA.id);
   assert.equal(d.corps.patiente.creePar.id, comptes.medecinA.id);
@@ -201,6 +201,15 @@ test('établissement sanitaire : choisi dans le formulaire parmi les actifs, sin
     const r = await creer('medecinA', { patiente: { nom: 'Etab', prenom: 'Refus', ageDeclare: 24, adresse: { province: 'Kinshasa' } }, etablissementId });
     assert.equal(r.status, 400, etablissementId);
   }
+});
+
+test('datation : règle de Naegele (jour + 7, mois + 9 ; d’avril à décembre mois − 3 et année + 1)', () => {
+  const { dpaNaegele } = require('../models/Grossesse');
+  assert.equal(dpaNaegele('2026-01-10'), '2026-10-17'); // janvier à mars : mois + 9, même année
+  assert.equal(dpaNaegele('2026-05-04'), '2027-02-11'); // avril à décembre : mois − 3, année + 1
+  assert.equal(dpaNaegele('2026-01-28'), '2026-11-04'); // jour + 7 qui déborde sur le mois suivant
+  assert.equal(dpaNaegele('2026-12-25'), '2027-10-01');
+  assert.equal(dpaNaegele('2026-05-24'), '2027-02-28'); // 31 février ramené au dernier jour du mois
 });
 
 test('datation : DPA corrigée de plus de 7 jours refusée sans justification', async () => {

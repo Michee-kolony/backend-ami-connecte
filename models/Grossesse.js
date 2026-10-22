@@ -61,6 +61,21 @@ const grossesseSchema = new mongoose.Schema({
 
 grossesseSchema.index({ patienteId: 1, numero: 1 }, { unique: true });
 
+/**
+ * Règle de Naegele : DDR + 7 jours, puis + 9 mois (pour une DDR d'avril à décembre, cela revient
+ * à − 3 mois et + 1 an). Un jour inexistant (ex. 31 février) est ramené au dernier jour du mois.
+ */
+function dpaNaegele(ddr) {
+  const d = new Date(`${ddr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 7);
+  const jourDuMois = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + 9);
+  const dernierJour = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(jourDuMois, dernierJour));
+  return d.toISOString().slice(0, 10);
+}
+
 /** Calcule la datation à partir de la saisie (DDR, ou âge gestationnel à une date). */
 function calculerDatation({ methode, ddr, ddrFiabilite, dateReference, agSemaines, agJours, dpa, justification }) {
   const jour = (iso) => Date.parse(`${iso}T00:00:00Z`);
@@ -82,7 +97,8 @@ function calculerDatation({ methode, ddr, ddrFiabilite, dateReference, agSemaine
     throw Object.assign(new Error('Âge gestationnel hors plage (0 à 44 SA).'), { status: 400 });
   }
   if (Number.isNaN(jour(reference))) throw Object.assign(new Error('Date de référence invalide.'), { status: 400 });
-  const dpaCalculee = iso(jour(reference) + (280 - agReferenceJours) * JOUR);
+  // DDR : règle de Naegele ; échographie ou examen clinique : référence + 280 j − AG.
+  const dpaCalculee = methode === 'DDR' ? dpaNaegele(ddr) : iso(jour(reference) + (280 - agReferenceJours) * JOUR);
   const retenue = dpa || dpaCalculee;
   const ecart = Math.abs((jour(retenue) - jour(dpaCalculee)) / JOUR);
   if (ecart > 7 && !String(justification || '').trim()) {
@@ -110,6 +126,7 @@ grossesseSchema.methods.agJoursLe = function (date = new Date()) {
 
 module.exports = mongoose.model('Grossesse', grossesseSchema);
 module.exports.calculerDatation = calculerDatation;
+module.exports.dpaNaegele = dpaNaegele;
 module.exports.METHODES_DATATION = METHODES_DATATION;
 module.exports.ISSUES = ISSUES;
 module.exports.MODES_ACCOUCHEMENT = MODES_ACCOUCHEMENT;
