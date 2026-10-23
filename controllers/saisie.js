@@ -1,6 +1,8 @@
 // Lecture des formulaires cliniques (accouchement, nouveau-né) : chaque champ accepté est décrit
 // dans une « spécification » et converti (jamais d'objet brut du client : protège des injections NoSQL).
 
+const { messageValidation } = require('../config/erreursFr');
+
 /** Erreur HTTP transmise au gestionnaire d'erreurs d'app.js (details : renvoyés avec le message). */
 const erreur = (status, message, details) => Object.assign(new Error(message), { status, details });
 
@@ -56,7 +58,7 @@ function fusionner(cible, source) {
 /** Validation Mongoose → 400 avec le premier message lisible. */
 function valider(doc) {
   return doc.validate().catch((err) => {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   });
 }
 

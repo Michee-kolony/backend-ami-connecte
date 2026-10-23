@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Etablissement = require('../models/Etablissement');
 const Soignant = require('../models/Soignant');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
+const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_PHOTOS = 'etablissement';
 const MAX_PHOTOS = 6;
@@ -24,7 +25,7 @@ function appliquer(etablissement, d) {
 }
 
 function erreurValidation(err) {
-  return Object.values(err.errors || {})[0]?.message || 'Données invalides.';
+  return messageValidation(err);
 }
 
 async function nomDejaPris(nom, province, saufId) {

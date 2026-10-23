@@ -1,3 +1,5 @@
+// Messages d'erreur en français : avant tout modèle Mongoose (voir config/erreursFr.js).
+const erreursFr = require('./config/erreursFr');
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -49,12 +51,23 @@ app.use('/api', (req, res) => {
   res.status(404).json({ message: 'Ressource introuvable.' });
 });
 
-// Express 5 transmet aussi les erreurs des fonctions async.
+/** Erreurs HTTP génériques des bibliothèques (http-errors) : message anglais remplacé. */
+const MESSAGES_HTTP = {
+  400: 'Requête invalide.', 401: 'Authentification requise.', 403: 'Accès refusé.', 404: 'Ressource introuvable.',
+  405: 'Action non autorisée.', 408: 'Délai dépassé, réessayez.', 413: 'Données envoyées trop volumineuses.',
+  415: 'Format des données non pris en charge.', 429: 'Trop de requêtes, patientez un instant.',
+};
+
+// Express 5 transmet aussi les erreurs des fonctions async. Toute réponse d'erreur est en français.
 app.use((err, req, res, next) => {
+  const traduite = erreursFr.traduire(err);
+  if (traduite) return res.status(traduite.status).json({ message: traduite.message });
+  // Erreur d'une bibliothèque (http-errors, « expose ») : message générique en français.
+  if (err.status && err.expose) return res.status(err.status).json({ message: MESSAGES_HTTP[err.status] ?? 'Requête invalide.' });
   // details : informations destinées au formulaire (ex. éléments manquants), jamais de trace technique.
-  if (err.status) return res.status(err.status).json({ message: err.message, ...err.details });
+  if (err.status && err.status < 500) return res.status(err.status).json({ message: err.message, ...err.details });
   console.error(err);
-  res.status(500).json({ message: 'Erreur interne du serveur.' });
+  res.status(err.status >= 500 ? err.status : 500).json({ message: 'Erreur interne du serveur.' });
 });
 
 module.exports = app;

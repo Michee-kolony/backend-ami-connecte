@@ -5,6 +5,7 @@ const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const { trouverGrossesse } = require('./patientes');
 const cpn = require('../config/cpn');
+const { messageValidation } = require('../config/erreursFr');
 
 const { TYPES_CONSULTATION, CHAMPS_CLINIQUES } = Consultation;
 const erreur = (status, message) => Object.assign(new Error(message), { status });
@@ -113,7 +114,7 @@ function horodaterReference(c, dejaLe = null) {
 
 function valider(c) {
   return c.validate().catch((err) => {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   });
 }
 

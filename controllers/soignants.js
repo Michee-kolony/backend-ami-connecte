@@ -5,6 +5,7 @@ const Soignant = require('../models/Soignant');
 const Etablissement = require('../models/Etablissement');
 const { envoyerFichier, supprimerFichier, cleDepuisUrl } = require('../config/r2');
 const presence = require('../config/presence');
+const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_PHOTOS = 'soignant';
 
@@ -89,7 +90,7 @@ exports.creer = async (req, res) => {
   try {
     await soignant.validate();
   } catch (err) {
-    return res.status(400).json({ message: Object.values(err.errors || {})[0]?.message || 'Données invalides.' });
+    return res.status(400).json({ message: messageValidation(err) });
   }
 
   const { cle, url } = await envoyerFichier(req.file, DOSSIER_PHOTOS);
@@ -148,7 +149,7 @@ exports.modifier = async (req, res) => {
   try {
     await soignant.validate();
   } catch (err) {
-    return res.status(400).json({ message: Object.values(err.errors || {})[0]?.message || 'Données invalides.' });
+    return res.status(400).json({ message: messageValidation(err) });
   }
 
   const ancienneCle = soignant.photoCle || cleDepuisUrl(soignant.photo);

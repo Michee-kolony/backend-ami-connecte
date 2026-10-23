@@ -5,6 +5,7 @@ const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const stockage = require('../config/r2');
 const { trouverGrossesse } = require('./patientes');
+const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_FICHIERS = 'echographie';
 const erreur = (status, message) => Object.assign(new Error(message), { status });
@@ -79,7 +80,7 @@ exports.creer = async (req, res) => {
     auteur: auteurDe(req.soignant),
   });
   await echo.validate().catch((err) => {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   });
 
   const envoyes = [];

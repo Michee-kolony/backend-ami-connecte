@@ -15,6 +15,7 @@ const { journaliser, ACTIONS } = require('../config/audit');
 const { PROVINCES_RDC } = require('../config/referentiels');
 const cpn = require('../config/cpn');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
+const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_PHOTOS = 'patiente';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -287,7 +288,7 @@ exports.creer = async (req, res) => {
   try {
     await Promise.all([patiente.validate(), grossesse.validate(), rdv?.validate()]);
   } catch (err) {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   }
 
   // Photo envoyée après toutes les validations, pour ne pas laisser de fichier orphelin.
@@ -398,7 +399,7 @@ exports.modifier = async (req, res) => {
   try {
     await patiente.save();
   } catch (err) {
-    if (err.errors) throw erreur(400, Object.values(err.errors)[0].message);
+    if (err.errors) throw erreur(400, messageValidation(err));
     throw err;
   }
   await journaliser(req, { action: 'patiente.modification', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero }, details: { champs: modifies } });
@@ -475,7 +476,7 @@ exports.issue = async (req, res) => {
   try {
     await g.save();
   } catch (err) {
-    if (err.errors) throw erreur(400, Object.values(err.errors)[0].message);
+    if (err.errors) throw erreur(400, messageValidation(err));
     throw err;
   }
   await Patiente.updateOne({ _id: g.patienteId }, { statut: 'Suivi postnatal' });

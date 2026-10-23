@@ -4,6 +4,7 @@ const { auteurDe } = require('../models/commun');
 const { ROLES_GESTION } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
+const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_MEDIAS = 'articles';
 const PAR_PAGE_MAX = 30;
@@ -103,7 +104,7 @@ exports.creer = async (req, res) => {
     approbation: chef ? { par: auteurDe(req.soignant), le: new Date() } : undefined,
   });
   await article.validate().catch((err) => {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   });
 
   // Médias envoyés après la validation ; retirés de R2 si l'enregistrement échoue.
@@ -148,7 +149,7 @@ exports.modifier = async (req, res) => {
     article.approbation = undefined;
   }
   await article.save().catch((err) => {
-    throw erreur(400, Object.values(err.errors || {})[0]?.message || 'Données invalides.');
+    throw erreur(400, messageValidation(err));
   });
   res.json(vue(article, req));
 };

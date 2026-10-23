@@ -6,6 +6,7 @@ const { ROLES_GESTION } = Soignant;
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide } = require('./soignants');
 const presence = require('../config/presence');
+const { messageValidation } = require('../config/erreursFr');
 
 const { CHAMPS_PROFIL } = Soignant;
 
@@ -75,7 +76,7 @@ exports.modifierProfil = async (req, res) => {
   try {
     await soignant.validate();
   } catch (err) {
-    return res.status(400).json({ message: Object.values(err.errors || {})[0]?.message || 'Données invalides.' });
+    return res.status(400).json({ message: messageValidation(err) });
   }
 
   const ancienneCle = soignant.photoCle;
