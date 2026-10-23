@@ -1,7 +1,7 @@
 // Espace patiente (application mobile) : la patiente se connecte avec l'e-mail et le mot de passe
 // choisis à son enregistrement, et ne lit que ses propres données et celles de ses enfants :
 // grossesse en cours, rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
-// accouchements. Aucune donnée n'y est modifiable, sauf son mot de passe.
+// accouchements, conseils de l'équipe soignante. Aucune donnée n'y est modifiable, sauf son mot de passe.
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -11,6 +11,8 @@ const Enfant = require('../models/Enfant');
 const RendezVous = require('../models/RendezVous');
 const Accouchement = require('../models/Accouchement');
 const Etablissement = require('../models/Etablissement');
+const Consultation = require('../models/Consultation');
+const Article = require('../models/Article');
 const { journaliser } = require('../config/audit');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
@@ -180,4 +182,40 @@ exports.accouchements = async (req, res) => {
       },
     };
   }));
+};
+
+const ARTICLES_MAX = 50;
+
+/**
+ * Conseils des médecins : ceux donnés à la patiente (consultations finalisées, sortie de la
+ * maternité), puis les articles de conseils approuvés par le médecin chef (lecture seule :
+ * ni j'aime ni commentaires, réservés aux soignants).
+ */
+exports.conseils = async (req, res) => {
+  const p = req.patiente;
+  const nonVide = { $exists: true, $nin: ['', null] };
+  const [consultations, dossiers, articles] = await Promise.all([
+    Consultation.find({ patienteId: p._id, statut: 'Finalisée', conseils: nonVide }).select('type date conseils auteur'),
+    Accouchement.find({ patienteId: p._id, 'postPartum.conseils': nonVide }).select('accouchement.heure postPartum.conseils postPartum.sortie'),
+    Article.find({ statut: { $ne: 'En attente' } }).sort({ createdAt: -1 }).limit(ARTICLES_MAX),
+  ]);
+  const personnels = [
+    ...consultations.map((c) => ({
+      id: c.id, origine: 'Consultation', titre: c.type, date: c.date, texte: c.conseils, soignant: soignant(c.auteur),
+    })),
+    ...dossiers.map((a) => ({
+      id: a.id, origine: 'Accouchement', titre: 'Sortie de la maternité',
+      date: a.postPartum.sortie?.le ?? a.accouchement?.heure ?? null, texte: a.postPartum.conseils,
+      soignant: soignant(a.postPartum.sortie?.examinePar),
+    })),
+  ].sort((x, y) => new Date(y.date ?? 0) - new Date(x.date ?? 0));
+  await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'conseils' } });
+  res.json({
+    personnels,
+    articles: articles.map((a) => ({
+      id: a.id, titre: a.titre, contenu: a.contenu, cible: a.cible,
+      medias: a.medias.map((m) => ({ type: m.type, url: m.url })),
+      auteur: soignant(a.auteur), publieLe: a.createdAt,
+    })),
+  });
 };

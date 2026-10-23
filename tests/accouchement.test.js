@@ -452,6 +452,18 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.ok(accouchements.corps[0].mesuresPreventives.nouveauNe.includes('BCG / VPO'));
   assert.ok(!('surveillances' in accouchements.corps[0]), 'pas de partogramme');
 
+  // Conseils : ceux de la sortie de maternité, et les articles approuvés seulement.
+  const Article = require('../models/Article');
+  const auteurArticle = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
+  await Article.create({ titre: 'Allaiter sans douleur', contenu: 'Conseils…', cible: 'Après l’accouchement', auteur: auteurArticle, statut: 'Approuvé' });
+  await Article.create({ titre: 'Brouillon', contenu: 'Pas encore relu', auteur: auteurArticle, statut: 'En attente' });
+  const conseils = await appel(jeton, 'GET', '/espace-patiente/conseils');
+  assert.equal(conseils.status, 200, JSON.stringify(conseils.corps));
+  assert.ok(conseils.corps.personnels.some((c) => c.origine === 'Accouchement' && /Allaitement exclusif/.test(c.texte)));
+  assert.deepEqual(conseils.corps.articles.map((a) => a.titre), ['Allaiter sans douleur'], 'article en attente invisible');
+  assert.ok(!('jaimes' in conseils.corps.articles[0]) && !('commentaires' in conseils.corps.articles[0]));
+  assert.ok(!('id' in conseils.corps.articles[0].auteur), 'pas d’identifiant de soignant');
+
   // Autre patiente : l'enfant d'Esther lui est invisible.
   const autre = await creerPatiente({ patiente: { nom: 'Autre', prenom: 'Mère', ageDeclare: 30, email: 'autre@essai.test', adresse: { province: 'Kinshasa' } }, compte: { motDePasse: 'Autre2026ok' } });
   assert.equal(autre.status, 201);

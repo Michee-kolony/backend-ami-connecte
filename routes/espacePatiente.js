@@ -15,5 +15,6 @@ router.get('/rendez-vous', ctrl.rendezVous);
 router.get('/enfants', ctrl.enfants);
 router.get('/enfants/:id', ctrl.enfant);
 router.get('/accouchements', ctrl.accouchements);
+router.get('/conseils', ctrl.conseils);
 
 module.exports = router;
