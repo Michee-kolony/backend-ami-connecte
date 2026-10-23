@@ -461,14 +461,44 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.equal(conseils.status, 200, JSON.stringify(conseils.corps));
   assert.ok(conseils.corps.personnels.some((c) => c.origine === 'Accouchement' && /Allaitement exclusif/.test(c.texte)));
   assert.deepEqual(conseils.corps.articles.map((a) => a.titre), ['Allaiter sans douleur'], 'article en attente invisible');
-  assert.ok(!('jaimes' in conseils.corps.articles[0]) && !('commentaires' in conseils.corps.articles[0]));
-  assert.ok(!('id' in conseils.corps.articles[0].auteur), 'pas d’identifiant de soignant');
+  const article = conseils.corps.articles[0];
+  assert.ok(!('jaimes' in article), 'liste des j’aime non exposée');
+  assert.ok(!('id' in article.auteur), 'pas d’identifiant de soignant');
+  assert.equal(article.nbJaimes, 0);
+
+  // J'aime (bascule) et commentaires de la patiente ; réponse du médecin auteur.
+  const aime = await appel(jeton, 'POST', `/espace-patiente/conseils/articles/${article.id}/jaime`);
+  assert.equal(aime.status, 200, JSON.stringify(aime.corps));
+  assert.deepEqual([aime.corps.jAime, aime.corps.nbJaimes], [true, 1]);
+  assert.equal((await appel(jeton, 'POST', `/espace-patiente/conseils/articles/${article.id}/jaime`)).corps.nbJaimes, 0);
+  assert.equal((await appel(jeton, 'POST', `/espace-patiente/conseils/articles/${article.id}/commentaires`, { texte: ' ' })).status, 400);
+  const com = await appel(jeton, 'POST', `/espace-patiente/conseils/articles/${article.id}/commentaires`, { texte: 'Merci docteur !' });
+  assert.equal(com.status, 201, JSON.stringify(com.corps));
+  const monCom = com.corps.commentaires[0];
+  assert.equal(monCom.auteur.moi, true);
+  const enAttente = await Article.findOne({ statut: 'En attente' });
+  assert.equal((await appel(jeton, 'POST', `/espace-patiente/conseils/articles/${enAttente.id}/jaime`)).status, 404, 'article en attente');
+
+  // Côté soignants (ami-sante) : le commentaire apparaît, le médecin auteur y répond.
+  const cote = await appel('medecin', 'GET', `/articles/${article.id}`);
+  assert.equal(cote.corps.commentaires[0].auteur.role, 'Patiente');
+  assert.equal((await appel('medecin', 'POST', `/articles/${article.id}/commentaires/${monCom.id}/reponses`, { texte: 'Avec plaisir.' })).status, 201);
 
   // Autre patiente : l'enfant d'Esther lui est invisible.
   const autre = await creerPatiente({ patiente: { nom: 'Autre', prenom: 'Mère', ageDeclare: 30, email: 'autre@essai.test', adresse: { province: 'Kinshasa' } }, compte: { motDePasse: 'Autre2026ok' } });
   assert.equal(autre.status, 201);
   const jetonAutre = (await appel(null, 'POST', '/espace-patiente/connexion', { email: 'autre@essai.test', motDePasse: 'Autre2026ok' })).corps.jeton;
   assert.equal((await appel(jetonAutre, 'GET', `/espace-patiente/enfants/${enfantId}`)).status, 404);
+
+  // L'autre patiente voit le commentaire d'Esther abrégé, sans photo, et ne peut pas le supprimer.
+  const vuParAutre = (await appel(jetonAutre, 'GET', '/espace-patiente/conseils')).corps.articles[0];
+  const comEsther = vuParAutre.commentaires[0];
+  assert.match(comEsther.auteur.nom, /^\S+ [A-Z]\.$/, 'nom abrégé');
+  assert.equal(comEsther.auteur.photoUrl, null);
+  assert.equal(comEsther.auteur.moi, false);
+  assert.equal(comEsther.reponses[0].auteur.role, 'Médecin');
+  assert.equal((await appel(jetonAutre, 'DELETE', `/espace-patiente/conseils/articles/${vuParAutre.id}/commentaires/${comEsther.id}`)).status, 403);
+  assert.equal((await appel(jeton, 'DELETE', `/espace-patiente/conseils/articles/${vuParAutre.id}/commentaires/${comEsther.id}`)).status, 200);
   assert.equal((await appel(jeton, 'GET', `/espace-patiente/enfants/${enfantId}`)).status, 200);
 
   assert.equal((await appel(jeton, 'GET', `/patientes/${patiente.id}`)).status, 403, 'jeton patiente refusé côté personnel');

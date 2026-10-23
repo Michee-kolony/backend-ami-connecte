@@ -16,5 +16,8 @@ router.get('/enfants', ctrl.enfants);
 router.get('/enfants/:id', ctrl.enfant);
 router.get('/accouchements', ctrl.accouchements);
 router.get('/conseils', ctrl.conseils);
+router.post('/conseils/articles/:id/jaime', ctrl.aimerArticle);
+router.post('/conseils/articles/:id/commentaires', ctrl.commenterArticle);
+router.delete('/conseils/articles/:id/commentaires/:cid', ctrl.supprimerCommentaireArticle);
 
 module.exports = router;

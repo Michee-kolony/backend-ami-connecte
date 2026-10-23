@@ -13,6 +13,7 @@ const Accouchement = require('../models/Accouchement');
 const Etablissement = require('../models/Etablissement');
 const Consultation = require('../models/Consultation');
 const Article = require('../models/Article');
+const Soignant = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
@@ -185,11 +186,74 @@ exports.accouchements = async (req, res) => {
 };
 
 const ARTICLES_MAX = 50;
+const ROLE_PATIENTE = 'Patiente';
+
+/** Auteur d'un commentaire de patiente (même forme que celui d'un soignant). */
+const auteurPatiente = (p) => ({ id: p.id, nom: `${p.prenom} ${p.nom}`.trim(), role: ROLE_PATIENTE, matricule: p.numero });
+
+/** « Esther MBUYI » → « Esther M. » : une patiente n'est pas nommée en entier devant les autres. */
+function nomAbrege(nom) {
+  const [prenom, ...reste] = String(nom).trim().split(/\s+/);
+  return reste.length ? `${prenom} ${reste.at(-1).charAt(0).toUpperCase()}.` : prenom;
+}
+
+/** Photos (URL signées) des soignants et de la patiente connectée cités dans les articles. */
+async function photosAuteurs(articles, p) {
+  const ids = new Set();
+  for (const a of articles) {
+    ids.add(a.auteur.id);
+    for (const c of a.commentaires) {
+      if (c.auteur.role !== ROLE_PATIENTE) ids.add(c.auteur.id);
+      for (const r of c.reponses) ids.add(r.auteur.id);
+    }
+  }
+  const valides = [...ids].filter((id) => mongoose.isValidObjectId(id));
+  const soignants = await Soignant.find({ _id: { $in: valides } }).select('+photoCle photo');
+  const photos = new Map(await Promise.all(soignants.map(async (s) => [s.id, (await urlSignee(s.photoCle)) ?? s.photo ?? null])));
+  photos.set(p.id, await urlSignee(p.photoCle));
+  return photos;
+}
+
+/** Auteur affiché à la patiente : soignant complet ; autre patiente abrégée, sans photo. */
+function auteurVisible(a, p, photos) {
+  if (a.role === ROLE_PATIENTE) {
+    const moi = a.id === p.id;
+    return { nom: moi ? a.nom : nomAbrege(a.nom), role: ROLE_PATIENTE, photoUrl: moi ? photos.get(p.id) ?? null : null, moi };
+  }
+  return { nom: a.nom, role: a.role, photoUrl: photos.get(a.id) ?? null, moi: false };
+}
+
+/** Article vu par la patiente : médias, photo du médecin, j'aime et commentaires (réponses du médecin). */
+function articlePourPatiente(a, p, photos) {
+  return {
+    id: a.id, titre: a.titre, contenu: a.contenu, cible: a.cible,
+    medias: a.medias.map((m) => ({ type: m.type, url: m.url })),
+    auteur: { ...soignant(a.auteur), photoUrl: photos.get(a.auteur.id) ?? null },
+    publieLe: a.createdAt,
+    nbJaimes: a.jaimes.length,
+    jAime: a.jaimes.includes(p.id),
+    commentaires: a.commentaires.map((c) => ({
+      id: c.id, texte: c.texte, le: c.le, auteur: auteurVisible(c.auteur, p, photos),
+      reponses: c.reponses.map((r) => ({ id: r.id, texte: r.texte, le: r.le, auteur: auteurVisible(r.auteur, p, photos) })),
+    })),
+  };
+}
+
+async function vueArticle(a, p) {
+  return articlePourPatiente(a, p, await photosAuteurs([a], p));
+}
+
+/** Article approuvé (un article en attente d'approbation reste invisible : 404). */
+async function articleApprouve(id) {
+  const a = mongoose.isValidObjectId(id) && await Article.findById(id);
+  if (!a || a.statut === 'En attente') throw erreur(404, 'Article introuvable.');
+  return a;
+}
 
 /**
  * Conseils des médecins : ceux donnés à la patiente (consultations finalisées, sortie de la
- * maternité), puis les articles de conseils approuvés par le médecin chef (lecture seule :
- * ni j'aime ni commentaires, réservés aux soignants).
+ * maternité), puis les articles de conseils approuvés par le médecin chef, que la patiente
+ * peut aimer et commenter.
  */
 exports.conseils = async (req, res) => {
   const p = req.patiente;
@@ -209,13 +273,37 @@ exports.conseils = async (req, res) => {
       soignant: soignant(a.postPartum.sortie?.examinePar),
     })),
   ].sort((x, y) => new Date(y.date ?? 0) - new Date(x.date ?? 0));
+  const photos = await photosAuteurs(articles, p);
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'conseils' } });
-  res.json({
-    personnels,
-    articles: articles.map((a) => ({
-      id: a.id, titre: a.titre, contenu: a.contenu, cible: a.cible,
-      medias: a.medias.map((m) => ({ type: m.type, url: m.url })),
-      auteur: soignant(a.auteur), publieLe: a.createdAt,
-    })),
-  });
+  res.json({ personnels, articles: articles.map((a) => articlePourPatiente(a, p, photos)) });
+};
+
+/** J'aime / je n'aime plus (bascule). */
+exports.aimerArticle = async (req, res) => {
+  const p = req.patiente;
+  const a = await articleApprouve(req.params.id);
+  await Article.updateOne({ _id: a._id }, a.jaimes.includes(p.id) ? { $pull: { jaimes: p.id } } : { $addToSet: { jaimes: p.id } });
+  res.json(await vueArticle(await articleApprouve(req.params.id), p));
+};
+
+exports.commenterArticle = async (req, res) => {
+  const t = texte(req.body?.texte, 2000);
+  if (!t) throw erreur(400, 'Le commentaire est vide.');
+  const a = await articleApprouve(req.params.id);
+  a.commentaires.push({ auteur: auteurPatiente(req.patiente), texte: t, le: new Date() });
+  await a.save();
+  await journaliser(req, { action: 'espace.commentaire', patienteId: req.patiente._id, ressource: { type: 'article', id: a.id } });
+  res.status(201).json(await vueArticle(a, req.patiente));
+};
+
+/** La patiente ne supprime que ses propres commentaires (le médecin chef les modère dans ami-sante). */
+exports.supprimerCommentaireArticle = async (req, res) => {
+  const a = await articleApprouve(req.params.id);
+  const c = mongoose.isValidObjectId(req.params.cid) && a.commentaires.id(req.params.cid);
+  if (!c) throw erreur(404, 'Commentaire introuvable.');
+  if (c.auteur.role !== ROLE_PATIENTE || c.auteur.id !== req.patiente.id) throw erreur(403, 'Vous ne pouvez supprimer que vos propres commentaires.');
+  c.deleteOne();
+  await a.save();
+  await journaliser(req, { action: 'espace.commentaire.suppression', patienteId: req.patiente._id, ressource: { type: 'article', id: a.id } });
+  res.json(await vueArticle(a, req.patiente));
 };
