@@ -6,6 +6,9 @@ const ROLES_SAGE_FEMME = ['Sage-femme', 'Sage-femme titulaire', 'Sage-femme supe
 const ROLES = [...ROLES_MEDECIN, ...ROLES_INFIRMIER, ...ROLES_SAGE_FEMME];
 const PIECES = ['Carte d’électeur', 'Passeport', 'Carte militaire', 'Permis de conduire'];
 
+/** Salle de travail et dossier d'accouchement : médecins et sages-femmes. */
+const ROLES_MATERNITE = [...ROLES_MEDECIN, ...ROLES_SAGE_FEMME];
+
 /** Rôles autorisés à gérer les comptes du personnel soignant. */
 const ROLES_GESTION = ['Médecin chef de service'];
 
@@ -103,4 +106,5 @@ module.exports.ROLES = ROLES;
 module.exports.ROLES_MEDECIN = ROLES_MEDECIN;
 module.exports.ROLES_INFIRMIER = ROLES_INFIRMIER;
 module.exports.ROLES_SAGE_FEMME = ROLES_SAGE_FEMME;
+module.exports.ROLES_MATERNITE = ROLES_MATERNITE;
 module.exports.ROLES_GESTION = ROLES_GESTION;

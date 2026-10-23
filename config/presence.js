@@ -31,7 +31,8 @@ function initialiser(serveur) {
   // Même jeton JWT que l'API : seul le personnel actif peut se connecter.
   io.use(async (socket, next) => {
     try {
-      const { sub, etablissement } = jwt.verify(String(socket.handshake.auth?.jeton || ''), process.env.JWT_SECRET);
+      const { sub, etablissement, typ } = jwt.verify(String(socket.handshake.auth?.jeton || ''), process.env.JWT_SECRET);
+      if (typ === 'patiente') return next(new Error('Accès réservé au personnel soignant.'));
       const soignant = await Soignant.findById(sub);
       if (!soignant || soignant.statut !== 'Actif') return next(new Error('Compte inactif ou introuvable.'));
       socket.data.soignant = soignant;

@@ -30,6 +30,25 @@ const ACTIONS = {
   'article.suppression': 'Article de conseils supprimé',
   'echographie.creation': 'Échographie enregistrée',
   'article.commentaire.suppression': 'Commentaire d’article supprimé',
+  'accouchement.admission': 'Admission en salle de travail',
+  'accouchement.lecture': 'Ouverture du dossier d’accouchement',
+  'accouchement.modification': 'Admission (identité, anamnèse) modifiée',
+  'accouchement.examen': 'Examen clinique d’entrée enregistré',
+  'accouchement.surveillance': 'Surveillance du travail saisie',
+  'accouchement.alerte': 'Alerte du partogramme déclenchée',
+  'accouchement.alerte.acquittement': 'Alerte du partogramme prise en charge',
+  'accouchement.accouchement': 'Accouchement et délivrance enregistrés',
+  'accouchement.postpartum': 'Surveillance post-partum saisie',
+  'accouchement.traitement': 'Traitement post-partum enregistré',
+  'accouchement.sortie': 'Examen de sortie et mesures préventives',
+  'accouchement.cloture': 'Dossier d’accouchement clôturé',
+  'enfant.creation': 'Naissance enregistrée (dossier de l’enfant)',
+  'enfant.lecture': 'Ouverture du dossier de l’enfant',
+  'enfant.modification': 'Dossier de l’enfant modifié',
+  'enfant.vaccination': 'Vaccination / supplémentation enregistrée',
+  'enfant.suivi': 'Visite de suivi de l’enfant',
+  'espace.connexion': 'Connexion à l’espace patiente',
+  'espace.lecture': 'Consultation de l’espace patiente',
 };
 
 /**
@@ -39,7 +58,9 @@ const ACTIONS = {
 async function journaliser(req, { action, patienteId = null, ressource = null, resultat = 'autorisé', details } = {}) {
   try {
     await JournalAudit.create({
-      acteur: req.soignant ? auteurDe(req.soignant) : undefined,
+      acteur: req.soignant ? auteurDe(req.soignant)
+        : req.patiente ? { id: req.patiente.id, nom: `${req.patiente.prenom} ${req.patiente.nom}`.trim(), role: 'Patiente', matricule: req.patiente.numero }
+        : undefined,
       action,
       resultat,
       patienteId,

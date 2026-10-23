@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const RendezVous = require('../models/RendezVous');
 const Patiente = require('../models/Patiente');
 const Grossesse = require('../models/Grossesse');
+const Enfant = require('../models/Enfant');
 const JournalAudit = require('../models/JournalAudit');
 const { auteurDe } = require('../models/commun');
 const { journaliser, ACTIONS } = require('../config/audit');
@@ -17,16 +18,20 @@ function dateValide(v) {
   return d;
 }
 
-/** Un seul rendez-vous attendu par patiente et par jour (évite les doublons). */
-async function verifierDoublon(patienteId, date, exclureId) {
+/**
+ * Un seul rendez-vous attendu par jour pour la patiente, et un seul pour chacun de ses enfants
+ * (les rendez-vous de la mère et de son bébé le même jour sont possibles).
+ */
+async function verifierDoublon(patienteId, date, exclureId, enfantId = null) {
   const jour = new Date(date);
   jour.setUTCHours(0, 0, 0, 0);
   const existant = await RendezVous.findOne({
-    patienteId, statut: { $in: STATUTS_ACTIFS }, date: { $gte: jour, $lt: new Date(jour.getTime() + 86400000) },
+    patienteId, enfantId: enfantId ?? null, statut: { $in: STATUTS_ACTIFS }, date: { $gte: jour, $lt: new Date(jour.getTime() + 86400000) },
     ...(exclureId ? { _id: { $ne: exclureId } } : {}),
   });
-  if (existant) throw erreur(409, 'Cette patiente a déjà un rendez-vous ce jour-là.');
+  if (existant) throw erreur(409, enfantId ? 'Cet enfant a déjà un rendez-vous ce jour-là.' : 'Cette patiente a déjà un rendez-vous ce jour-là.');
 }
+exports.verifierDoublon = verifierDoublon;
 
 /** Agenda : rendez-vous sur une période, avec l'identité minimale de chaque patiente. */
 exports.agenda = async (req, res) => {
@@ -35,14 +40,19 @@ exports.agenda = async (req, res) => {
   const filtre = { date: { $gte: du, $lte: au } };
   if (req.query.statut && RendezVous.STATUTS_RDV.includes(req.query.statut)) filtre.statut = req.query.statut;
   const rdvs = await RendezVous.find(filtre).sort({ date: 1 }).limit(500);
-  const patientes = await Patiente.find({ _id: { $in: [...new Set(rdvs.map((r) => String(r.patienteId)))] } })
-    .select('numero nom postnom prenom');
+  const [patientes, enfants] = await Promise.all([
+    Patiente.find({ _id: { $in: [...new Set(rdvs.map((r) => String(r.patienteId)))] } }).select('numero nom postnom prenom'),
+    Enfant.find({ _id: { $in: rdvs.map((r) => r.enfantId).filter(Boolean) } }).select('numero nom prenom'),
+  ]);
   const parId = new Map(patientes.map((p) => [p.id, p]));
+  const enfantsParId = new Map(enfants.map((e) => [e.id, e]));
   res.json(rdvs.map((r) => {
     const p = parId.get(String(r.patienteId));
+    const e = r.enfantId && enfantsParId.get(String(r.enfantId));
     return {
       ...r.toJSON(),
       patiente: p ? { id: p.id, numero: p.numero, nom: p.nom, postnom: p.postnom, prenom: p.prenom } : null,
+      enfant: e ? { id: e.id, numero: e.numero, nom: e.nom, prenom: e.prenom } : null,
     };
   }));
 };
@@ -92,7 +102,7 @@ exports.modifier = async (req, res) => {
   const evenement = { action: regle.statut, ancienStatut: rdv.statut, nouveauStatut: regle.statut, motif, par: auteur, le: new Date() };
   if (req.body.action === 'reporter') {
     const nouvelle = dateValide(req.body.date);
-    await verifierDoublon(rdv.patienteId, nouvelle, rdv._id);
+    await verifierDoublon(rdv.patienteId, nouvelle, rdv._id, rdv.enfantId);
     evenement.ancienneDate = rdv.date;
     evenement.nouvelleDate = nouvelle;
     rdv.date = nouvelle;

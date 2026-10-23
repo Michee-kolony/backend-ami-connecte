@@ -6,7 +6,9 @@ async function authentifier(req, res, next) {
   const [type, jeton] = (req.headers.authorization || '').split(' ');
   if (type !== 'Bearer' || !jeton) return res.status(401).json({ message: 'Authentification requise.' });
   try {
-    const { sub, etablissement } = jwt.verify(jeton, process.env.JWT_SECRET);
+    const { sub, etablissement, typ } = jwt.verify(jeton, process.env.JWT_SECRET);
+    // Jeton de l'espace patiente : jamais accepté sur les routes du personnel.
+    if (typ === 'patiente') return res.status(403).json({ message: 'Accès réservé au personnel soignant.' });
     const soignant = await Soignant.findById(sub);
     if (!soignant || soignant.statut !== 'Actif') return res.status(401).json({ message: 'Compte inactif ou introuvable.' });
     req.soignant = soignant;

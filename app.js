@@ -37,6 +37,13 @@ app.use('/api/consultations', suivi.consultations);
 app.use('/api/rendez-vous', suivi.rendezVous);
 app.use('/api/journal', suivi.journal);
 
+// Accouchement, nouveau-né et suivi de l'enfant (vaccination)
+app.use('/api/accouchements', require('./routes/accouchements'));
+app.use('/api/enfants', require('./routes/enfants'));
+
+// Espace patiente (application mobile)
+app.use('/api/espace-patiente', require('./routes/espacePatiente'));
+
 // Route inconnue : réponse JSON (sans détail technique).
 app.use('/api', (req, res) => {
   res.status(404).json({ message: 'Ressource introuvable.' });
@@ -44,7 +51,8 @@ app.use('/api', (req, res) => {
 
 // Express 5 transmet aussi les erreurs des fonctions async.
 app.use((err, req, res, next) => {
-  if (err.status) return res.status(err.status).json({ message: err.message });
+  // details : informations destinées au formulaire (ex. éléments manquants), jamais de trace technique.
+  if (err.status) return res.status(err.status).json({ message: err.message, ...err.details });
   console.error(err);
   res.status(500).json({ message: 'Erreur interne du serveur.' });
 });

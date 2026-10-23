@@ -5,6 +5,8 @@ const Grossesse = require('../models/Grossesse');
 const Consultation = require('../models/Consultation');
 const RendezVous = require('../models/RendezVous');
 const Echographie = require('../models/Echographie');
+const Accouchement = require('../models/Accouchement');
+const Enfant = require('../models/Enfant');
 const JournalAudit = require('../models/JournalAudit');
 const Etablissement = require('../models/Etablissement');
 const { auteurDe } = require('../models/commun');
@@ -335,11 +337,13 @@ function mesuresRealisees(consultations) {
 /** Dossier complet : chaque ouverture est journalisée (distincte d'une consultation réalisée). */
 exports.dossier = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
-  const [grossesses, consultations, rendezVous, echographies] = await Promise.all([
+  const [grossesses, consultations, rendezVous, echographies, accouchements, enfants] = await Promise.all([
     Grossesse.find({ patienteId: patiente._id }).sort({ numero: -1 }),
     Consultation.find({ patienteId: patiente._id }).sort({ date: -1 }),
     RendezVous.find({ patienteId: patiente._id }).sort({ date: -1 }),
     Echographie.find({ patienteId: patiente._id }).sort({ date: -1, createdAt: -1 }),
+    Accouchement.find({ patienteId: patiente._id }).sort({ 'admission.admiseLe': -1 }).select('numero grossesseId statut admission.admiseLe accouchement.heure accouchement.mode'),
+    Enfant.find({ mereId: patiente._id }).sort({ neLe: -1 }),
   ]);
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   await journaliser(req, { action: 'dossier.lecture', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
@@ -361,6 +365,12 @@ exports.dossier = async (req, res) => {
     rendezVous,
     echographies: await Promise.all(echographies.map((e) => e.vue())),
     premiereConsultation: premiereConsultation(consultations),
+    accouchements: accouchements.map((a) => ({
+      id: a.id, numero: a.numero, grossesseId: a.grossesseId, statut: a.statut, admiseLe: a.admission.admiseLe,
+      accoucheeLe: a.accouchement?.heure ?? null, mode: a.accouchement?.mode ?? null,
+    })),
+    // Chargé à l'appel (controllers/enfants dépend de ce module).
+    enfants: enfants.map(require('./enfants').resume),
   });
 };
 
@@ -482,7 +492,7 @@ exports.journal = async (req, res) => {
 
 /**
  * Suppression définitive d'un dossier (médecin chef) : patiente, grossesses, consultations,
- * rendez-vous et photo. Le numéro du dossier doit être retapé. Le journal d'audit, lui, est
+ * rendez-vous, accouchements, dossiers de ses enfants et photo. Le numéro du dossier doit être retapé. Le journal d'audit, lui, est
  * conservé (ajout seul) avec une entrée de suppression, sans donnée clinique.
  */
 exports.supprimer = async (req, res) => {
@@ -491,11 +501,13 @@ exports.supprimer = async (req, res) => {
     throw erreur(400, `Saisissez le numéro du dossier (${patiente.numero}) pour confirmer la suppression.`);
   }
   const echographies = await Echographie.find({ patienteId: patiente._id }).select('fichiers');
-  const [consultations, grossesses, rendezVous] = await Promise.all([
+  const [consultations, grossesses, rendezVous, , accouchements, enfants] = await Promise.all([
     Consultation.deleteMany({ patienteId: patiente._id }),
     Grossesse.deleteMany({ patienteId: patiente._id }),
     RendezVous.deleteMany({ patienteId: patiente._id }),
     Echographie.deleteMany({ patienteId: patiente._id }),
+    Accouchement.deleteMany({ patienteId: patiente._id }),
+    Enfant.deleteMany({ mereId: patiente._id }),
   ]);
   await patiente.deleteOne();
   // Photo, comptes rendus et images d'échographie : retirés du bucket avec le dossier.
@@ -503,7 +515,10 @@ exports.supprimer = async (req, res) => {
   await Promise.all(cles.map((cle) => supprimerFichier(cle).catch((err) => console.error(`Fichier ${cle} non supprimé de R2 :`, err.message))));
   await journaliser(req, {
     action: 'patiente.suppression', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero },
-    details: { consultations: consultations.deletedCount, grossesses: grossesses.deletedCount, rendezVous: rendezVous.deletedCount },
+    details: {
+      consultations: consultations.deletedCount, grossesses: grossesses.deletedCount, rendezVous: rendezVous.deletedCount,
+      accouchements: accouchements.deletedCount, enfants: enfants.deletedCount,
+    },
   });
   res.status(204).end();
 };
@@ -515,12 +530,13 @@ exports.supprimer = async (req, res) => {
  */
 exports.suivi = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
-  const [grossesse, rendezVous, visites, photoUrl] = await Promise.all([
+  const [grossesse, rendezVous, visites, photoUrl, enfants] = await Promise.all([
     Grossesse.findOne({ patienteId: patiente._id, statut: 'En cours' }).sort({ numero: -1 }),
     RendezVous.find({ patienteId: patiente._id }).sort({ date: -1 }),
     // Historique des visites : date, type et soignant seulement (ni motif, ni constantes, ni examen).
     Consultation.find({ patienteId: patiente._id, statut: { $ne: 'Annulée' } }).sort({ date: -1 }).select('type date statut auteur'),
     urlSignee(patiente.photoCle),
+    Enfant.find({ mereId: patiente._id }).sort({ neLe: -1 }),
   ]);
   const a = patiente.adresse ?? {};
   const urgence = patiente.contactUrgence ?? {};
@@ -542,8 +558,10 @@ exports.suivi = async (req, res) => {
       id: grossesse.id, numero: grossesse.numero, statut: grossesse.statut,
       agJours: grossesse.agJoursLe(), dpa: grossesse.datation?.dpa ?? null, datee: !!grossesse.datation,
     } : null,
+    // Enfants : identité et vaccination (le carnet complet s'ouvre via /api/enfants/:id).
+    enfants: enfants.map(require('./enfants').resume),
     rendezVous: rendezVous.map((r) => ({
-      id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut,
+      id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut, enfantId: r.enfantId,
       historique: r.historique.map((h) => ({ action: h.action, ancienneDate: h.ancienneDate, nouvelleDate: h.nouvelleDate, motif: h.motif, le: h.le })),
     })),
     visites: visites.map((c) => ({ id: c.id, date: c.date, type: c.type, statut: c.statut, soignant: { nom: c.auteur.nom, role: c.auteur.role } })),

@@ -21,6 +21,8 @@ const evenementSchema = new mongoose.Schema({
 const rendezVousSchema = new mongoose.Schema({
   patienteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Patiente', required: true, index: true },
   grossesseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Grossesse', default: null },
+  /** Rendez-vous de l'enfant (vaccination, suivi) : affiché dans l'espace de sa mère. */
+  enfantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Enfant', default: null, index: true },
   /** Consultation qui a recommandé ce rendez-vous (facultatif). */
   consultationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Consultation', default: null },
   date: { type: Date, required: true, index: true },

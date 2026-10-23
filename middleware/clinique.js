@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { ROLES_MEDECIN } = require('../models/Soignant');
+const { ROLES_MEDECIN, ROLES_MATERNITE } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 
 /** Identifiant de corrélation de chaque requête (renvoyé dans l'en-tête X-Request-Id). */
@@ -10,20 +10,27 @@ function identifierRequete(req, res, next) {
 }
 
 /**
- * Dossier médical : réservé aux médecins (comptes actifs, rôle vérifié côté serveur).
- * Tout autre rôle, infirmier·ère compris, reçoit un 403 et le refus est journalisé.
- * À placer après authentifier.
+ * Réserve la route aux rôles donnés (comptes actifs, rôle vérifié côté serveur).
+ * Tout autre rôle reçoit un 403 et le refus est journalisé. À placer après authentifier.
  */
-async function exigerMedecin(req, res, next) {
-  if (ROLES_MEDECIN.includes(req.soignant?.role)) return next();
-  await journaliser(req, {
-    action: 'acces.refuse',
-    resultat: 'refusé',
-    ressource: { type: req.baseUrl.replace('/api/', ''), id: null },
-    // Chemin demandé (identifiants seulement, jamais de corps de requête).
-    details: { role: req.soignant?.role ?? null, chemin: req.path },
-  });
-  res.status(403).json({ message: 'Le dossier médical est réservé aux médecins.' });
+function exigerRolesCliniques(roles, message) {
+  return async (req, res, next) => {
+    if (roles.includes(req.soignant?.role)) return next();
+    await journaliser(req, {
+      action: 'acces.refuse',
+      resultat: 'refusé',
+      ressource: { type: req.baseUrl.replace('/api/', ''), id: null },
+      // Chemin demandé (identifiants seulement, jamais de corps de requête).
+      details: { role: req.soignant?.role ?? null, chemin: req.path },
+    });
+    res.status(403).json({ message });
+  };
 }
 
-module.exports = { identifierRequete, exigerMedecin };
+/** Dossier médical : réservé aux médecins (infirmier·ères et sages-femmes refusé·es). */
+const exigerMedecin = exigerRolesCliniques(ROLES_MEDECIN, 'Le dossier médical est réservé aux médecins.');
+
+/** Salle de travail, accouchement et naissance : médecins et sages-femmes. */
+const exigerMaternite = exigerRolesCliniques(ROLES_MATERNITE, 'Le dossier d’accouchement est réservé aux médecins et aux sages-femmes.');
+
+module.exports = { identifierRequete, exigerMedecin, exigerMaternite };
