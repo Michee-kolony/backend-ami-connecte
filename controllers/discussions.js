@@ -83,8 +83,9 @@ exports.lister = async (req, res) => {
     : profil(d.participants.find((p) => !p._id.equals(moi)))))));
 };
 
-/** Ouvre (ou crée) la discussion avec un autre soignant actif. */
+/** Ouvre (ou crée) la discussion avec un autre soignant actif, ou avec une patiente ({ patienteId }). */
 exports.ouvrir = async (req, res) => {
+  if (req.body?.patienteId !== undefined) return ouvrirAvecPatiente(req, res);
   const autreId = String(req.body?.soignantId || '');
   if (!mongoose.isValidObjectId(autreId)) throw erreur(400, 'Soignant invalide.');
   if (autreId === req.soignant.id) throw erreur(400, 'Vous ne pouvez pas discuter avec vous-même.');
@@ -164,6 +165,45 @@ exports.marquerLu = async (req, res) => {
     for (const p of d.participants) presence.emettre(String(p), 'discussion:lu', { discussionId: d.id, soignantId: String(moi), le });
   }
   res.json({ lus: r.modifiedCount });
+};
+
+/** Patiente désignée par son numéro (AC-PAT-…) ou son identifiant. */
+async function trouverPatiente(idOuNumero) {
+  const v = String(idOuNumero || '').trim();
+  if (!v) return null;
+  return Patiente.findOne(mongoose.isValidObjectId(v) ? { _id: v } : { numero: v.toUpperCase() })
+    .select('prenom nom numero photoCle espaceEnLigne');
+}
+
+/** Le soignant écrit le premier à une patiente dont l'application est activée. */
+async function ouvrirAvecPatiente(req, res) {
+  const p = await trouverPatiente(req.body.patienteId);
+  if (!p) throw erreur(404, 'Patiente introuvable.');
+  if (p.espaceEnLigne !== 'Activé') throw erreur(409, 'Cette patiente n’a pas encore activé son application : elle ne peut pas recevoir de message.');
+  const moi = req.soignant._id;
+  const cle = Discussion.cleDe(moi, p._id);
+  let d = await Discussion.findOne({ cle });
+  if (!d) {
+    try {
+      d = await Discussion.create({ participants: [moi, p._id], patienteId: p._id, cle });
+    } catch (err) {
+      if (err.code !== 11000) throw err;
+      d = await Discussion.findOne({ cle });
+    }
+  }
+  res.status(201).json(await resume(d, moi, await profilPatiente(p)));
+}
+
+/** Patientes joignables par l'application (espace activé), par nom, prénom ou numéro. */
+exports.patientes = async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 60);
+  const filtre = { espaceEnLigne: 'Activé' };
+  if (q) {
+    const motif = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    filtre.$or = [{ nom: motif }, { prenom: motif }, { numero: motif }];
+  }
+  const liste = await Patiente.find(filtre).select('prenom nom numero photoCle espaceEnLigne').sort({ nom: 1, prenom: 1 }).limit(20);
+  res.json(await Promise.all(liste.map(profilPatiente)));
 };
 
 /** Annuaire : soignants actifs avec qui démarrer une discussion. */

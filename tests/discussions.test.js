@@ -241,6 +241,20 @@ test('patiente ↔ soignant : choix du soignant, messages en temps réel, prése
   assert.equal((await appel('patiente', 'GET', `/espace-patiente/discussions/${discussionId}/messages`)).status, 404);
   assert.equal((await appel('patiente', 'GET', '/discussions')).status, 403, 'routes du personnel refusées');
 
+  // Côté soignant : recherche des patientes joignables, ouverture par numéro (même discussion).
+  const trouvees = await appel('infirmiere', 'GET', '/discussions/patientes?q=kabila');
+  assert.deepEqual(trouvees.corps.map((x) => x.matricule), ['AC-PAT-990001'], 'espace non activé exclu');
+  const parNumero = await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-990001' });
+  assert.equal(parNumero.status, 201, JSON.stringify(parNumero.corps));
+  assert.equal(parNumero.corps.id, id, 'une seule discussion par paire');
+  assert.equal((await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-990002' })).status, 409, 'application non activée');
+  assert.equal((await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-000000' })).status, 404);
+  const premier = await appel('infirmiere', 'POST', '/discussions', { patienteId: patiente.id });
+  assert.equal(premier.status, 201);
+  await appel('infirmiere', 'POST', `/discussions/${premier.corps.id}/messages`, { texte: 'Bonjour Esther, ici l’infirmière Inès.' });
+  assert.ok((await appel('patiente', 'GET', '/espace-patiente/discussions')).corps.some((d) => d.interlocuteur.id === comptes.infirmiere.id),
+    'la patiente voit la discussion ouverte par le soignant');
+
   // Déconnexion : la patiente disparaît de la liste des patientes en ligne.
   med.recus.length = 0;
   s.close();

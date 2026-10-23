@@ -9,6 +9,7 @@ router.use(authentifier);
 
 router.get('/', ctrl.lister);
 router.get('/annuaire', ctrl.annuaire);
+router.get('/patientes', ctrl.patientes);
 router.post('/', ctrl.ouvrir);
 router.get('/:id/messages', ctrl.messages);
 router.post('/:id/messages', ctrl.envoyer);
