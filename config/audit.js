@@ -46,6 +46,7 @@ const ACTIONS = {
   'enfant.creation': 'Naissance enregistrée (dossier de l’enfant)',
   'enfant.lecture': 'Ouverture du dossier de l’enfant',
   'enfant.modification': 'Dossier de l’enfant modifié',
+  'enfant.photo': 'Photo de l’enfant ajoutée ou remplacée',
   'enfant.vaccination': 'Vaccination / supplémentation enregistrée',
   'enfant.suivi': 'Visite de suivi de l’enfant',
   'espace.connexion': 'Connexion à l’espace patiente',

@@ -11,7 +11,7 @@ const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
-const { urlSignee } = require('../config/r2');
+const { urlSignee, supprimerFichier } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
 const { trouverPatiente } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
@@ -153,7 +153,7 @@ async function vue(a) {
   json.partogramme = partogramme.partogramme(a.surveillances, a.phaseActiveLe);
   json.planningPostPartum = planningPostPartum(a);
   json.patiente = patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl: await urlSignee(patiente.photoCle) } : null;
-  json.nouveauNes = nouveauNes.map(enfants.resume);
+  json.nouveauNes = await Promise.all(nouveauNes.map(enfants.resumeAvecPhoto));
   // Suivi prénatal : synthèse en tête du dossier et, tant qu'il est ouvert, valeurs proposées
   // pour les champs encore vides de l'admission et de l'examen d'entrée (à vérifier, puis enregistrer).
   if (patiente) {
@@ -415,19 +415,28 @@ exports.accoucher = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.accouchement', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { mode: donnees.mode } });
-  for (const n of Array.isArray(req.body?.nouveauNes) ? req.body.nouveauNes.slice(0, 6) : []) {
-    await enfants.creerNaissance(a, objet(n), req);
-  }
   await synchroniserGrossesse(a, req);
   res.json(await vue(a));
 };
 
-/** Module 5 — Nouveau-né : dossier de l'enfant, rattaché à sa mère, avec carnet vaccinal. */
+/**
+ * Module 5 — Nouveau-né : dossier de l'enfant, rattaché à sa mère, avec carnet vaccinal.
+ * Formulaire multipart (données JSON dans « donnees », photo du bébé dans « photo ») ; un corps
+ * JSON reste accepté pour un mort-né, dont la photo est facultative.
+ */
 exports.ajouterNouveauNe = async (req, res) => {
   const a = await trouver(req.params.id);
   verifierOuvert(a);
   verifierAccouchee(a);
-  const e = await enfants.creerNaissance(a, objet(req.body), req);
+  let d = req.body;
+  if (typeof d?.donnees === 'string') {
+    try {
+      d = JSON.parse(d.donnees);
+    } catch {
+      throw erreur(400, 'Données du formulaire invalides.');
+    }
+  }
+  const e = await enfants.creerNaissance(a, objet(d), req);
   await synchroniserGrossesse(a, req);
   res.status(201).json(await enfants.vue(e));
 };
@@ -606,13 +615,16 @@ exports.supprimer = async (req, res) => {
   if (texte(req.body?.confirmation, 30) !== a.numero) {
     throw erreur(400, `Saisissez le numéro du dossier (${a.numero}) pour confirmer la suppression.`);
   }
-  const nouveauNes = await Enfant.find({ accouchementId: a._id }).select('_id');
+  const nouveauNes = await Enfant.find({ accouchementId: a._id }).select('_id photoCle');
   const ids = nouveauNes.map((e) => e._id);
   const rdvCpon = a.postPartum?.sortie?.rdvCponId;
   const [rendezVous, enfantsSupprimes] = await Promise.all([
     RendezVous.deleteMany({ $or: [{ enfantId: { $in: ids } }, ...(rdvCpon ? [{ _id: rdvCpon }] : [])] }),
     Enfant.deleteMany({ _id: { $in: ids } }),
   ]);
+
+  await Promise.all(nouveauNes.filter((e) => e.photoCle).map((e) => supprimerFichier(e.photoCle)
+    .catch((err) => console.error(`Fichier ${e.photoCle} non supprimé de R2 :`, err.message))));
 
   // Grossesse close par ce dossier : rouverte (sauf si une autre grossesse est déjà en cours).
   const g = await Grossesse.findById(a.grossesseId);

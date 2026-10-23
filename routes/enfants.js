@@ -3,6 +3,7 @@
 // ne sont modifiables que par les médecins et les sages-femmes (contrôlé dans le contrôleur).
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
+const { televerserPhoto } = require('../middleware/upload');
 const ctrl = require('../controllers/enfants');
 const rendezVous = require('../controllers/rendezVous');
 
@@ -12,6 +13,7 @@ router.use(authentifier);
 router.get('/', ctrl.rechercher);
 router.get('/:id', ctrl.obtenir);
 router.patch('/:id', ctrl.modifier);
+router.put('/:id/photo', televerserPhoto, ctrl.changerPhoto);
 router.post('/:id/vaccinations', ctrl.vacciner);
 router.post('/:id/vaccinations/:vaccinationId/annuler', ctrl.annulerVaccination);
 router.post('/:id/suivis', ctrl.ajouterSuivi);

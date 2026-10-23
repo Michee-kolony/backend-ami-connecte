@@ -71,9 +71,10 @@ function rdvPourPatiente(r, prenoms) {
 }
 
 /** Enfant vu par sa mère : identité, naissance (mensurations, APGAR), carnet, croissance, rendez-vous. */
-function enfantPourPatiente(e, rendezVous, prenoms) {
+async function enfantPourPatiente(e, rendezVous, prenoms) {
   const n = e.naissance ?? {};
   return {
+    photoUrl: await urlSignee(e.photoCle),
     id: e.id, numero: e.numero, nom: e.nom, postnom: e.postnom, prenom: e.prenom, sexe: e.sexe,
     neLe: e.neLe, dateNaissance: e.dateNaissance, rang: e.rang, etatNaissance: e.etatNaissance, statut: e.statut, age: e.age(),
     naissance: {
@@ -116,14 +117,15 @@ exports.accueil = async (req, res) => {
     patiente: await profil(p),
     grossesse: grossesse ? { numero: grossesse.numero, agJours: grossesse.agJoursLe(), dpa: grossesse.datation?.dpa ?? null } : null,
     prochainsRendezVous: prochains.map((r) => rdvPourPatiente(r, prenoms)),
-    enfants: enfants.map((e) => {
+    enfants: await Promise.all(enfants.map(async (e) => {
       const carnet = e.carnet();
       return {
+        photoUrl: await urlSignee(e.photoCle),
         id: e.id, prenom: e.prenom, nom: e.nom, sexe: e.sexe, dateNaissance: e.dateNaissance, age: e.age(), statut: e.statut,
         etatNaissance: e.etatNaissance,
         vaccination: carnet ? { prochaineSeance: carnet.prochaineSeance, ...carnet.resume } : null,
       };
-    }),
+    })),
   });
 };
 
@@ -141,7 +143,7 @@ exports.rendezVous = async (req, res) => {
 exports.enfants = async (req, res) => {
   const { enfants, rendezVous, prenoms } = await donneesEnfants(req.patiente);
   await journaliser(req, { action: 'espace.lecture', patienteId: req.patiente._id, ressource: { type: 'patiente', id: req.patiente.numero }, details: { page: 'enfants' } });
-  res.json(enfants.map((e) => enfantPourPatiente(e, rendezVous, prenoms)));
+  res.json(await Promise.all(enfants.map((e) => enfantPourPatiente(e, rendezVous, prenoms))));
 };
 
 /** Un enfant de la patiente connectée (404 pour tout autre enfant : rien n'est révélé). */
@@ -150,7 +152,7 @@ exports.enfant = async (req, res) => {
   if (!e) throw erreur(404, 'Enfant introuvable.');
   const rendezVous = await RendezVous.find({ enfantId: e._id }).sort({ date: 1 });
   await journaliser(req, { action: 'espace.lecture', patienteId: req.patiente._id, ressource: { type: 'enfant', id: e.numero } });
-  res.json(enfantPourPatiente(e, rendezVous, new Map([[e.id, e.prenom]])));
+  res.json(await enfantPourPatiente(e, rendezVous, new Map([[e.id, e.prenom]])));
 };
 
 /** Accouchements : résumé (pas de partogramme), sortie, rendez-vous CPoN, conseils et mesures préventives. */

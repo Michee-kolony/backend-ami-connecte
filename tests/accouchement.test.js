@@ -32,6 +32,15 @@ async function creerPatiente(corps) {
   return { status: r.status, corps: await r.json() };
 }
 
+/** Nouveau-né : formulaire multipart (données + photo, sauf `sansPhoto`). */
+async function ajouterNouveauNe(qui, dossier, donnees, { sansPhoto = false } = {}) {
+  const f = new FormData();
+  f.append('donnees', JSON.stringify(donnees));
+  if (!sansPhoto) f.append('photo', new Blob([PNG], { type: 'image/png' }), 'bebe.png');
+  const r = await fetch(`${api}/accouchements/${dossier}/nouveau-nes`, { method: 'POST', headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f });
+  return { status: r.status, corps: await r.json() };
+}
+
 const ilYaH = (h) => new Date(Date.now() - h * 3600000).toISOString();
 const ilYaJ = (j) => new Date(Date.now() - j * 86400000).toISOString().slice(0, 10);
 
@@ -284,23 +293,42 @@ test('accouchement + nouveau-né : grossesse terminée, dossier de l’enfant ra
     mode: 'Normal', heure: ilYaH(2), multiple: false, nombreEnfants: 1, episiotomie: false, dechirure: { presente: true, degre: 1 },
     assiste: 'Sarah SAGEFEMME',
     delivrance: { ocytocine10UI: { administree: true, heure: ilYaH(1.95) }, tractionControlee: true, massageUterin: true, mode: 'Spontanée', heure: ilYaH(1.9), placenta: { complet: true }, membranesCompletes: true, pertesSangMl: 650 },
-    nouveauNes: [{
-      prenom: 'Joie', sexe: 'Féminin',
-      naissance: {
-        senn: { maintienTemperature: true, temperatureAxillaire: 36.8, crede: true }, soinsCordon: { lameSterile: true, filSterile: true },
-        miseAuSeinMoins1h: true, poidsG: 3200, tailleCm: 50, perimetreCranienCm: 34,
-        apgar: { m1: { respiration: 2, fc: 2, coloration: 1, reflexes: 2, tonus: 1 }, m5: { respiration: 2, fc: 2, coloration: 2, reflexes: 2, tonus: 2 } },
-        reanimation: { faite: false }, traitement: { vitamineK1: true },
-      },
-    }],
   });
   assert.equal(r.status, 200, JSON.stringify(r.corps));
   assert.equal(r.corps.statut, 'Post-partum');
   assert.equal(r.corps.accouchement.delivrance.hemorragie, 'Pathologique', '650 ml > 500 ml');
   assert.equal(r.corps.accouchement.accoucheur, 'Marie MEDECIN');
-  assert.equal(r.corps.nouveauNes.length, 1);
   assert.equal(r.corps.planningPostPartum.length, 16, '4 + 4 + 2 créneaux, 4e-6e heure, J1-J3');
-  enfantId = r.corps.nouveauNes[0].id;
+
+  // Nouveau-né : photo obligatoire pour une naissance vivante.
+  const bebe = {
+    prenom: 'Joie', sexe: 'Féminin',
+    naissance: {
+      senn: { maintienTemperature: true, temperatureAxillaire: 36.8, crede: true }, soinsCordon: { lameSterile: true, filSterile: true },
+      miseAuSeinMoins1h: true, poidsG: 3200, tailleCm: 50, perimetreCranienCm: 34,
+      apgar: { m1: { respiration: 2, fc: 2, coloration: 1, reflexes: 2, tonus: 1 }, m5: { respiration: 2, fc: 2, coloration: 2, reflexes: 2, tonus: 2 } },
+      reanimation: { faite: false }, traitement: { vitamineK1: true },
+    },
+  };
+  const sansPhoto = await ajouterNouveauNe('medecin', dossierId, bebe, { sansPhoto: true });
+  assert.equal(sansPhoto.status, 400);
+  assert.match(sansPhoto.corps.message, /photo du nouveau-né est obligatoire/);
+  const n = await ajouterNouveauNe('medecin', dossierId, bebe);
+  assert.equal(n.status, 201, JSON.stringify(n.corps));
+  assert.match(n.corps.photoUrl, /^https:\/\/signe\.invalid\/enfant\//, 'photo servie par lien signé');
+  assert.equal(n.corps.photoCle, undefined, 'clé R2 jamais exposée');
+  enfantId = n.corps.id;
+  const dossier = await appel('sageFemme', 'GET', `/accouchements/${dossierId}`);
+  assert.equal(dossier.corps.nouveauNes.length, 1);
+  assert.ok(dossier.corps.nouveauNes[0].photoUrl, 'photo dans la liste des nouveau-nés');
+
+  // Remplacement de la photo : médecins et sages-femmes seulement.
+  const photo = new FormData();
+  photo.append('photo', new Blob([PNG], { type: 'image/png' }), 'bebe2.png');
+  const refusPhoto = await fetch(`${api}/enfants/${enfantId}/photo`, { method: 'PUT', headers: { Authorization: `Bearer ${jetons.infirmiere}` }, body: photo });
+  assert.equal(refusPhoto.status, 403);
+  const changee = await fetch(`${api}/enfants/${enfantId}/photo`, { method: 'PUT', headers: { Authorization: `Bearer ${jetons.sageFemme}` }, body: photo });
+  assert.equal(changee.status, 200);
 
   assert.equal((await appel('sageFemme', 'POST', `/accouchements/${dossierId}/surveillances`, { bcf: 140 })).status, 409, 'plus de partogramme après l’accouchement');
 
@@ -441,9 +469,9 @@ test('suppression d’un dossier d’accouchement : médecins seulement, numéro
   assert.equal(r.status, 201, JSON.stringify(r.corps));
   const a = await appel('sageFemme', 'POST', '/accouchements', { patienteId: r.corps.id, admission: { admiseLe: ilYaH(5) } });
   assert.equal(a.status, 201);
-  const acc = await appel('medecin', 'PUT', `/accouchements/${a.corps.id}/accouchement`, { mode: 'Normal', heure: ilYaH(1), nouveauNes: [{ prenom: 'Temp', sexe: 'Masculin' }] });
+  const acc = await appel('medecin', 'PUT', `/accouchements/${a.corps.id}/accouchement`, { mode: 'Normal', heure: ilYaH(1) });
   assert.equal(acc.status, 200, JSON.stringify(acc.corps));
-  const bebe = acc.corps.nouveauNes[0];
+  const bebe = (await ajouterNouveauNe('medecin', a.corps.id, { prenom: 'Temp', sexe: 'Masculin' })).corps;
   assert.equal((await appel('medecin', 'GET', `/patientes/${r.corps.id}`)).corps.grossesses[0].statut, 'Terminée');
 
   assert.equal((await appel('sageFemme', 'DELETE', `/accouchements/${a.corps.id}`, { confirmation: a.corps.numero })).status, 403, 'sage-femme refusée');

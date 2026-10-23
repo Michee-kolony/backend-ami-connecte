@@ -40,7 +40,9 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
    La phase active démarre à la première dilatation ≥ 4 cm. Chaque ligne renvoie `tempsDepuis` (arrivée, rupture, début du travail).
 4. **Accouchement** `PUT /:id/accouchement` — type, gestes, délivrance (hémorragie pathologique calculée au-delà de 500 ml).
    La grossesse passe « Terminée » (issue et mode reportés), la patiente en « Suivi postnatal ».
-   Les nouveau-nés peuvent être transmis dans `nouveauNes` ou ajoutés par `POST /:id/nouveau-nes`.
+   Les nouveau-nés sont ajoutés un par un par `POST /:id/nouveau-nes` (multipart : `donnees` en JSON + `photo`).
+   La **photo est obligatoire pour un bébé né vivant** (identification, évite les confusions entre bébés) ;
+   elle peut être remplacée par `PUT /api/enfants/:id/photo` (médecins et sages-femmes).
 5. **Post-partum** `POST /:id/post-partum/surveillances` (`creneau` : `H1-15`… `H3-60`, `H4`–`H6`, `J1`–`J3` ou `Supplémentaire`) ;
    le dossier renvoie `planningPostPartum` (heure prévue et statut de chaque créneau). Traitements : `POST /:id/post-partum/traitements`,
    puis `.../:traitementId/administrer`.

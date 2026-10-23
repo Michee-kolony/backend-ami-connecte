@@ -7,6 +7,7 @@ const { ROLES_MATERNITE } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 const acc = require('../config/accouchement');
 const vaccination = require('../config/vaccination');
+const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const { verifierDoublon } = require('./rendezVous');
 const { erreur, texte, nombre, instant, jour, T, N, B, lire, fusionner, valider, pasDansLeFutur } = require('./saisie');
 
@@ -14,6 +15,7 @@ const { STATUTS_ACTIFS, CANAUX_RAPPEL } = RendezVous;
 const echapperRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Heure par défaut des séances de vaccination : 9 h à Kinshasa (8 h UTC). */
 const HEURE_SEANCE_UTC = 'T08:00:00Z';
+const DOSSIER_PHOTOS = 'enfant';
 
 const APGAR = Object.fromEntries(acc.APGAR_CRITERES.map(({ code }) => [code, N]));
 /** Module 5 — champs de la naissance acceptés depuis le formulaire. */
@@ -44,17 +46,19 @@ exports.trouverEnfant = trouverEnfant;
 /** Minuit (heure de Kinshasa) du jour en cours, en instant UTC. */
 const debutDuJour = () => new Date(`${vaccination.jourKinshasa()}T00:00:00+01:00`);
 
-/** Résumé d'un enfant pour les listes et le dossier de la mère. */
-function resume(e) {
+/** Résumé d'un enfant pour les listes et le dossier de la mère (photo : lien signé, 15 min). */
+function resume(e, photoUrl = null) {
   const carnet = e.carnet();
   return {
     id: e.id, numero: e.numero, nom: e.nom, postnom: e.postnom, prenom: e.prenom, sexe: e.sexe,
     neLe: e.neLe, dateNaissance: e.dateNaissance, rang: e.rang, etatNaissance: e.etatNaissance, statut: e.statut,
-    age: e.age(), mereId: e.mereId, accouchementId: e.accouchementId,
+    age: e.age(), mereId: e.mereId, accouchementId: e.accouchementId, photoUrl,
     vaccination: carnet ? { prochaineSeance: carnet.prochaineSeance, ...carnet.resume } : null,
   };
 }
 exports.resume = resume;
+const resumeAvecPhoto = async (e) => resume(e, await urlSignee(e.photoCle));
+exports.resumeAvecPhoto = resumeAvecPhoto;
 
 /**
  * Prochaine séance du calendrier : un rendez-vous est créé dans l'agenda (au nom de la mère,
@@ -87,9 +91,15 @@ exports.planifierProchaineVaccination = planifierProchaineVaccination;
  * Module 5 — Naissance enregistrée depuis le dossier d'accouchement : l'enfant reçoit son propre
  * dossier, rattaché au compte de sa mère, et sa première séance de vaccination est programmée.
  */
+/**
+ * Dossier d'un nouveau-né. Photo (req.file) obligatoire pour une naissance vivante : elle
+ * identifie le bébé (jumeaux, naissances simultanées) ; facultative pour un mort-né.
+ */
 async function creerNaissance(dossier, d, req) {
   const mere = await Patiente.findById(dossier.patienteId).select('nom');
   if (!acc.SEXES.includes(d?.sexe)) throw erreur(400, 'Sexe du nouveau-né requis.');
+  const etatNaissance = acc.ETATS_NAISSANCE.includes(d.etatNaissance) ? d.etatNaissance : 'Vivant';
+  if (etatNaissance === 'Vivant' && !req.file) throw erreur(400, 'La photo du nouveau-né est obligatoire.');
   const neLe = pasDansLeFutur(instant(d.neLe, 'Date et heure de naissance') ?? dossier.accouchement.heure, 'La naissance');
   const auteur = auteurDe(req.soignant);
   const e = new Enfant({
@@ -99,14 +109,17 @@ async function creerNaissance(dossier, d, req) {
     nom: texte(d.nom, 120) || mere?.nom || '', postnom: texte(d.postnom, 120), prenom: texte(d.prenom, 120),
     sexe: d.sexe, neLe,
     rang: nombre(d.rang) ?? (await Enfant.countDocuments({ accouchementId: dossier._id })) + 1,
-    etatNaissance: acc.ETATS_NAISSANCE.includes(d.etatNaissance) ? d.etatNaissance : 'Vivant',
+    etatNaissance,
     naissance: lire(SPEC_NAISSANCE, d.naissance),
     creePar: auteur,
   });
   await valider(e);
+  // Photo envoyée après la validation, pour ne pas laisser de fichier orphelin.
+  if (req.file) e.photoCle = (await envoyerFichier(req.file, DOSSIER_PHOTOS)).cle;
   try {
     await e.save();
   } catch (err) {
+    if (e.photoCle) await supprimerFichier(e.photoCle).catch(() => {});
     if (err.code === 11000) throw erreur(409, 'Identifiant déjà attribué, réessayez.');
     throw err;
   }
@@ -124,6 +137,7 @@ async function vue(e) {
   ]);
   return {
     ...e.toJSON(),
+    photoUrl: await urlSignee(e.photoCle),
     age: e.age(),
     carnet: e.carnet(),
     mere: mere ? { id: mere.id, numero: mere.numero, nom: mere.nom, postnom: mere.postnom, prenom: mere.prenom, telephone: mere.telephone } : null,
@@ -144,14 +158,32 @@ exports.rechercher = async (req, res) => {
     if (!mongoose.isValidObjectId(req.query.mereId)) throw erreur(400, 'Identifiant de la mère invalide.');
     filtre.mereId = req.query.mereId;
   }
-  let enfants = (await Enfant.find(filtre).sort({ neLe: -1 }).limit(500)).map(resume);
+  let enfants = (await Enfant.find(filtre).sort({ neLe: -1 }).limit(500)).map((e) => ({ ...resume(e), photoCle: e.photoCle }));
   if (req.query.retard === 'true') enfants = enfants.filter((e) => e.vaccination?.enRetard > 0);
+  enfants = await Promise.all(enfants.slice(0, 100).map(async ({ photoCle, ...e }) => ({ ...e, photoUrl: await urlSignee(photoCle) })));
   const meres = await Patiente.find({ _id: { $in: [...new Set(enfants.map((e) => String(e.mereId)))] } }).select('numero nom prenom');
   const parId = new Map(meres.map((m) => [m.id, m]));
-  res.json(enfants.slice(0, 100).map((e) => {
+  res.json(enfants.map((e) => {
     const m = parId.get(String(e.mereId));
     return { ...e, mere: m ? { id: m.id, numero: m.numero, nom: m.nom, prenom: m.prenom } : null };
   }));
+};
+
+/**
+ * Photo de l'enfant : ajout ou remplacement (médecins et sages-femmes, qui l'ont identifié à la
+ * naissance). L'ancienne photo est retirée du bucket une fois la nouvelle enregistrée.
+ */
+exports.changerPhoto = async (req, res) => {
+  if (!ROLES_MATERNITE.includes(req.soignant.role)) throw erreur(403, 'Réservé aux médecins et aux sages-femmes.');
+  const e = await trouverEnfant(req.params.id);
+  if (!req.file) throw erreur(400, 'Choisissez une photo.');
+  const ancienne = e.photoCle;
+  e.photoCle = (await envoyerFichier(req.file, DOSSIER_PHOTOS)).cle;
+  e.modifiePar = auteurDe(req.soignant);
+  await e.save();
+  if (ancienne) await supprimerFichier(ancienne).catch((err) => console.error(`Fichier ${ancienne} non supprimé de R2 :`, err.message));
+  await journaliser(req, { action: 'enfant.photo', patienteId: e.mereId, ressource: { type: 'enfant', id: e.numero } });
+  res.json(await vue(e));
 };
 
 exports.obtenir = async (req, res) => {

@@ -2,6 +2,7 @@
 // Infirmier·ères refusé·es (403 journalisé) ; elles et ils accèdent au carnet de l'enfant (/api/enfants).
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
+const { televerserPhoto } = require('../middleware/upload');
 const { exigerMaternite, exigerMedecin } = require('../middleware/clinique');
 const ctrl = require('../controllers/accouchements');
 
@@ -23,7 +24,8 @@ router.post('/:id/alertes/:alerteId/acquitter', ctrl.acquitterAlerte);
 // Module 4 — Accouchement et délivrance
 router.put('/:id/accouchement', ctrl.accoucher);
 // Module 5 — Nouveau-né (dossier de l'enfant rattaché à la mère)
-router.post('/:id/nouveau-nes', ctrl.ajouterNouveauNe);
+// Formulaire multipart : données JSON dans « donnees », photo du bébé dans « photo ».
+router.post('/:id/nouveau-nes', televerserPhoto, ctrl.ajouterNouveauNe);
 // Module 6 — Post-partum, sortie, clôture
 router.post('/:id/post-partum/surveillances', ctrl.surveillerPostPartum);
 router.post('/:id/post-partum/traitements', ctrl.ajouterTraitement);

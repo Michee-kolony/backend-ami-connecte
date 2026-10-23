@@ -95,6 +95,8 @@ const enfantSchema = new mongoose.Schema({
   rang: { type: Number, min: 1, max: 6, default: 1 },
   etatNaissance: { type: String, enum: acc.ETATS_NAISSANCE, default: 'Vivant' },
   naissance: { type: naissanceSchema, default: () => ({}) },
+  /** Photo d'identification prise à la naissance (évite les confusions entre bébés) : clé R2, servie par lien signé. */
+  photoCle: { type: String, default: null },
 
   vaccinations: { type: [administrationSchema], default: [] },
   suivis: { type: [suiviSchema], default: [] },
@@ -102,7 +104,16 @@ const enfantSchema = new mongoose.Schema({
   statut: { type: String, enum: STATUTS_ENFANT, default: 'Suivi' },
   creePar: { type: auteurSchema, required: true },
   modifiePar: { type: auteurSchema, default: undefined },
-}, { timestamps: true, toJSON: { transform: versJson } });
+}, {
+  timestamps: true,
+  toJSON: {
+    transform: (doc, ret) => {
+      versJson(doc, ret);
+      delete ret.photoCle;
+      return ret;
+    },
+  },
+});
 
 enfantSchema.index({ nom: 1, prenom: 1 });
 

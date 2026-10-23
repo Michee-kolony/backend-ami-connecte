@@ -370,7 +370,7 @@ exports.dossier = async (req, res) => {
       accoucheeLe: a.accouchement?.heure ?? null, mode: a.accouchement?.mode ?? null,
     })),
     // Chargé à l'appel (controllers/enfants dépend de ce module).
-    enfants: enfants.map(require('./enfants').resume),
+    enfants: await Promise.all(enfants.map(require('./enfants').resumeAvecPhoto)),
   });
 };
 
@@ -501,6 +501,7 @@ exports.supprimer = async (req, res) => {
     throw erreur(400, `Saisissez le numéro du dossier (${patiente.numero}) pour confirmer la suppression.`);
   }
   const echographies = await Echographie.find({ patienteId: patiente._id }).select('fichiers');
+  const photosEnfants = (await Enfant.find({ mereId: patiente._id }).select('photoCle')).map((e) => e.photoCle);
   const [consultations, grossesses, rendezVous, , accouchements, enfants] = await Promise.all([
     Consultation.deleteMany({ patienteId: patiente._id }),
     Grossesse.deleteMany({ patienteId: patiente._id }),
@@ -511,7 +512,7 @@ exports.supprimer = async (req, res) => {
   ]);
   await patiente.deleteOne();
   // Photo, comptes rendus et images d'échographie : retirés du bucket avec le dossier.
-  const cles = [patiente.photoCle, ...echographies.flatMap((e) => e.fichiers.map((f) => f.cle))].filter(Boolean);
+  const cles = [patiente.photoCle, ...photosEnfants, ...echographies.flatMap((e) => e.fichiers.map((f) => f.cle))].filter(Boolean);
   await Promise.all(cles.map((cle) => supprimerFichier(cle).catch((err) => console.error(`Fichier ${cle} non supprimé de R2 :`, err.message))));
   await journaliser(req, {
     action: 'patiente.suppression', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero },
@@ -559,7 +560,7 @@ exports.suivi = async (req, res) => {
       agJours: grossesse.agJoursLe(), dpa: grossesse.datation?.dpa ?? null, datee: !!grossesse.datation,
     } : null,
     // Enfants : identité et vaccination (le carnet complet s'ouvre via /api/enfants/:id).
-    enfants: enfants.map(require('./enfants').resume),
+    enfants: await Promise.all(enfants.map(require('./enfants').resumeAvecPhoto)),
     rendezVous: rendezVous.map((r) => ({
       id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut, enfantId: r.enfantId,
       historique: r.historique.map((h) => ({ action: h.action, ancienneDate: h.ancienneDate, nouvelleDate: h.nouvelleDate, motif: h.motif, le: h.le })),
