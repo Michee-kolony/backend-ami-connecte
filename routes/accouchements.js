@@ -2,7 +2,7 @@
 // Infirmier·ères refusé·es (403 journalisé) ; elles et ils accèdent au carnet de l'enfant (/api/enfants).
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
-const { exigerMaternite } = require('../middleware/clinique');
+const { exigerMaternite, exigerMedecin } = require('../middleware/clinique');
 const ctrl = require('../controllers/accouchements');
 
 const router = express.Router();
@@ -30,6 +30,8 @@ router.post('/:id/post-partum/traitements', ctrl.ajouterTraitement);
 router.post('/:id/post-partum/traitements/:traitementId/administrer', ctrl.administrerTraitement);
 router.put('/:id/sortie', ctrl.sortir);
 router.post('/:id/cloturer', ctrl.cloturer);
-// Pas de route de suppression : une saisie clinique n'est jamais effacée.
+// Suppression définitive du dossier entier : médecins seulement, numéro du dossier retapé.
+// Les saisies, elles, ne sont jamais effacées une à une.
+router.delete('/:id', exigerMedecin, ctrl.supprimer);
 
 module.exports = router;

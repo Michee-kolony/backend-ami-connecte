@@ -42,6 +42,7 @@ const ACTIONS = {
   'accouchement.traitement': 'Traitement post-partum enregistré',
   'accouchement.sortie': 'Examen de sortie et mesures préventives',
   'accouchement.cloture': 'Dossier d’accouchement clôturé',
+  'accouchement.suppression': 'Dossier d’accouchement supprimé définitivement',
   'enfant.creation': 'Naissance enregistrée (dossier de l’enfant)',
   'enfant.lecture': 'Ouverture du dossier de l’enfant',
   'enfant.modification': 'Dossier de l’enfant modifié',

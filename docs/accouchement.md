@@ -48,6 +48,11 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
 7. **Clôture** `POST /:id/cloturer` — refusée (400 + `manquants`) tant que l'accouchement, les nouveau-nés, la sortie et **toutes**
    les mesures préventives ne sont pas renseignés. « BCG / VPO » coché : BCG et VPO 0 sont reportés au carnet de chaque enfant.
 
+8. **Suppression** `DELETE /:id` `{ confirmation: "AC-ACC-…" }` — **médecins seulement** (sages-femmes : 403 journalisé).
+   Supprime définitivement le dossier, les dossiers des nouveau-nés qu'il a créés (carnet, vaccinations, croissance)
+   et leurs rendez-vous, ainsi que le RDV CPoN. La grossesse qu'il avait close est rouverte (sauf si une autre est
+   déjà en cours) et la patiente repasse en « Suivi prénatal ». Le journal d'audit est conservé (`accouchement.suppression`).
+
 ## Partogramme et alertes
 
 - Graphe BCF : échelle 100–180, lignes 120 et 160. Graphe dilatation : ligne d'alerte (4 cm → 10 cm à 1 cm/h),

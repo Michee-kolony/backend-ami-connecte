@@ -372,3 +372,30 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.equal((await appel(jeton, 'GET', `/enfants/${enfantId}`)).status, 403);
   assert.equal((await appel('medecin', 'GET', '/espace-patiente/accueil')).status, 403, 'jeton soignant refusé côté patiente');
 });
+
+test('suppression d’un dossier d’accouchement : médecins seulement, numéro retapé, bébés supprimés, grossesse rouverte', async () => {
+  const r = await creerPatiente({ patiente: { nom: 'Suppr', prenom: 'Essai', ageDeclare: 26, email: 'suppr@essai.test', adresse: { province: 'Kinshasa' } }, compte: { motDePasse: 'Suppr2026ok' } });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const a = await appel('sageFemme', 'POST', '/accouchements', { patienteId: r.corps.id, admission: { admiseLe: ilYaH(5) } });
+  assert.equal(a.status, 201);
+  const acc = await appel('medecin', 'PUT', `/accouchements/${a.corps.id}/accouchement`, { mode: 'Normal', heure: ilYaH(1), nouveauNes: [{ prenom: 'Temp', sexe: 'Masculin' }] });
+  assert.equal(acc.status, 200, JSON.stringify(acc.corps));
+  const bebe = acc.corps.nouveauNes[0];
+  assert.equal((await appel('medecin', 'GET', `/patientes/${r.corps.id}`)).corps.grossesses[0].statut, 'Terminée');
+
+  assert.equal((await appel('sageFemme', 'DELETE', `/accouchements/${a.corps.id}`, { confirmation: a.corps.numero })).status, 403, 'sage-femme refusée');
+  assert.equal((await appel('medecin', 'DELETE', `/accouchements/${a.corps.id}`, { confirmation: 'AC-ACC-999999' })).status, 400, 'numéro à retaper');
+  const suppr = await appel('medecin', 'DELETE', `/accouchements/${a.corps.id}`, { confirmation: a.corps.numero });
+  assert.equal(suppr.status, 204);
+
+  assert.equal((await appel('medecin', 'GET', `/accouchements/${a.corps.id}`)).status, 404);
+  assert.equal((await appel('medecin', 'GET', `/enfants/${bebe.id}`)).status, 404, 'dossier du bébé supprimé');
+  const mere = await appel('medecin', 'GET', `/patientes/${r.corps.id}`);
+  assert.equal(mere.corps.grossesses[0].statut, 'En cours', 'grossesse rouverte');
+  assert.equal(mere.corps.grossesses[0].issue, undefined);
+  assert.equal(mere.corps.patiente.statut, 'Suivi prénatal');
+  assert.equal(mere.corps.accouchements.length, 0);
+  assert.equal(mere.corps.rendezVous.filter((x) => x.enfantId).length, 0, 'RDV du bébé supprimés');
+  // Nouvelle admission possible pour cette grossesse.
+  assert.equal((await appel('sageFemme', 'POST', '/accouchements', { patienteId: r.corps.id })).status, 201);
+});

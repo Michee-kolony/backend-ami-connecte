@@ -596,3 +596,41 @@ exports.cloturer = async (req, res) => {
   await journaliser(req, { action: 'accouchement.cloture', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
   res.json(await vue(a));
 };
+
+/**
+ * Suppression définitive d'un dossier d'accouchement (médecins) : le numéro du dossier doit être
+ * retapé. Sont supprimés avec lui les dossiers des nouveau-nés qu'il a créés (carnet, vaccinations,
+ * croissance) et leurs rendez-vous, ainsi que le rendez-vous CPoN. La grossesse qu'il avait close
+ * est rouverte. Le journal d'audit, lui, est conservé (ajout seul), sans donnée clinique.
+ */
+exports.supprimer = async (req, res) => {
+  const a = await trouver(req.params.id);
+  if (texte(req.body?.confirmation, 30) !== a.numero) {
+    throw erreur(400, `Saisissez le numéro du dossier (${a.numero}) pour confirmer la suppression.`);
+  }
+  const nouveauNes = await Enfant.find({ accouchementId: a._id }).select('_id');
+  const ids = nouveauNes.map((e) => e._id);
+  const rdvCpon = a.postPartum?.sortie?.rdvCponId;
+  const [rendezVous, enfantsSupprimes] = await Promise.all([
+    RendezVous.deleteMany({ $or: [{ enfantId: { $in: ids } }, ...(rdvCpon ? [{ _id: rdvCpon }] : [])] }),
+    Enfant.deleteMany({ _id: { $in: ids } }),
+  ]);
+
+  // Grossesse close par ce dossier : rouverte (sauf si une autre grossesse est déjà en cours).
+  const g = await Grossesse.findById(a.grossesseId);
+  let grossesseRouverte = false;
+  if (g?.statut === 'Terminée' && g.issue?.resume === `Dossier d’accouchement ${a.numero}`
+      && !(await Grossesse.exists({ patienteId: a.patienteId, statut: 'En cours' }))) {
+    g.set('issue', undefined);
+    g.statut = 'En cours';
+    await g.save();
+    await Patiente.updateOne({ _id: a.patienteId, statut: 'Suivi postnatal' }, { statut: 'Suivi prénatal' });
+    grossesseRouverte = true;
+  }
+  await a.deleteOne();
+  await journaliser(req, {
+    action: 'accouchement.suppression', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero },
+    details: { enfants: enfantsSupprimes.deletedCount, rendezVous: rendezVous.deletedCount, grossesseRouverte },
+  });
+  res.status(204).end();
+};
