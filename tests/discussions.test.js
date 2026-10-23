@@ -176,3 +176,74 @@ test('historique paginé, du plus ancien au plus récent', async () => {
   assert.ok(p2.corps.messages.length > 0);
   assert.ok(p2.corps.messages.at(-1).envoyeLe < p1.corps.messages[0].envoyeLe);
 });
+
+test('patiente ↔ soignant : choix du soignant, messages en temps réel, présence vue des deux côtés', async () => {
+  const Patiente = require('../models/Patiente');
+  const jwt = require('jsonwebtoken');
+  const auteur = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
+  const patiente = await Patiente.create({ numero: 'AC-PAT-990001', nom: 'Kabila', prenom: 'Esther', espaceEnLigne: 'Activé', creePar: auteur });
+  const inactive = await Patiente.create({ numero: 'AC-PAT-990002', nom: 'Sans', prenom: 'Espace', creePar: auteur });
+  jetons.patiente = jwt.sign({ sub: patiente.id, typ: 'patiente' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  jetons.inactive = jwt.sign({ sub: inactive.id, typ: 'patiente' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+
+  // Présence : le médecin voit la patiente arriver ; la patiente voit les soignants en ligne.
+  const med = await connecter('medecin');
+  const s = client(base, { auth: { jeton: jetons.patiente }, transports: ['websocket'], reconnection: false });
+  sockets.push(s);
+  const recusP = [];
+  s.onAny((evenement, donnees) => recusP.push({ evenement, donnees }));
+  const soignantsEnLigne = await attendre(recusP, 'presence:soignants');
+  assert.ok(soignantsEnLigne.includes(comptes.medecin.id));
+  assert.ok(!recusP.some((e) => e.evenement === 'presence'), 'pas la liste détaillée du personnel');
+  await new Promise((r) => setTimeout(r, 200));
+  const vues = med.recus.filter((e) => e.evenement === 'presence:patientes').at(-1).donnees;
+  assert.ok(vues.includes(patiente.id), 'patiente en ligne pour le personnel');
+  await assert.rejects(new Promise((ok, ko) => {
+    const x = client(base, { auth: { jeton: jetons.inactive }, transports: ['websocket'], reconnection: false });
+    sockets.push(x);
+    x.once('connect', ok);
+    x.once('connect_error', ko);
+  }), 'espace non activé refusé');
+
+  // Annuaire et ouverture : n'importe quel soignant actif (pas les suspendus, sans matricule).
+  const annuaire = await appel('patiente', 'GET', '/espace-patiente/soignants');
+  assert.equal(annuaire.status, 200);
+  assert.ok(annuaire.corps.some((x) => x.id === comptes.infirmiere.id));
+  assert.ok(!annuaire.corps.some((x) => x.id === comptes.suspendu.id));
+  assert.ok(!('matricule' in annuaire.corps[0]));
+  assert.equal((await appel('patiente', 'POST', '/espace-patiente/discussions', { soignantId: comptes.suspendu.id })).status, 404);
+  const o = await appel('patiente', 'POST', '/espace-patiente/discussions', { soignantId: comptes.medecin.id });
+  assert.equal(o.status, 201, JSON.stringify(o.corps));
+  const id = o.corps.id;
+
+  // La patiente écrit : le médecin reçoit en temps réel et voit une patiente dans sa liste.
+  const envoi = await appel('patiente', 'POST', `/espace-patiente/discussions/${id}/messages`, { texte: 'Bonjour docteur, j’ai des maux de tête.' });
+  assert.equal(envoi.status, 201, JSON.stringify(envoi.corps));
+  assert.equal((await attendre(med.recus, 'discussion:message')).auteurId, patiente.id);
+  const listeMed = (await appel('medecin', 'GET', '/discussions')).corps.find((d) => d.id === id);
+  assert.equal(listeMed.interlocuteur.role, 'Patiente');
+  assert.equal(listeMed.interlocuteur.matricule, 'AC-PAT-990001');
+  assert.equal(listeMed.nonLus, 1);
+
+  // Le médecin répond depuis l'espace administrateur ; la patiente reçoit, lit, accusé côté médecin.
+  med.recus.length = 0;
+  recusP.length = 0;
+  await appel('medecin', 'POST', `/discussions/${id}/messages`, { texte: 'Prenez votre tension et venez demain.' });
+  assert.equal((await attendre(recusP, 'discussion:message')).auteurId, comptes.medecin.id);
+  assert.equal((await appel('patiente', 'GET', '/espace-patiente/discussions')).corps[0].nonLus, 1);
+  assert.equal((await appel('patiente', 'POST', `/espace-patiente/discussions/${id}/lu`)).corps.lus, 1);
+  assert.equal((await attendre(med.recus, 'discussion:lu')).soignantId, patiente.id);
+  s.emit('discussion:ecrit', { discussionId: id });
+  assert.equal((await attendre(med.recus, 'discussion:ecrit')).soignantId, patiente.id);
+
+  // Cloisonnement : un autre soignant ne lit pas, la patiente ne lit pas les discussions du personnel.
+  assert.equal((await appel('intrus', 'GET', `/discussions/${id}/messages`)).status, 404);
+  assert.equal((await appel('patiente', 'GET', `/espace-patiente/discussions/${discussionId}/messages`)).status, 404);
+  assert.equal((await appel('patiente', 'GET', '/discussions')).status, 403, 'routes du personnel refusées');
+
+  // Déconnexion : la patiente disparaît de la liste des patientes en ligne.
+  med.recus.length = 0;
+  s.close();
+  const apres = await attendre(med.recus, 'presence:patientes');
+  assert.ok(!apres.includes(patiente.id));
+});

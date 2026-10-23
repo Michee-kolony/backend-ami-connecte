@@ -2,6 +2,7 @@
 const express = require('express');
 const { authentifierPatiente } = require('../middleware/patiente');
 const ctrl = require('../controllers/espacePatiente');
+const discussions = require('../controllers/discussions');
 
 const router = express.Router();
 
@@ -20,5 +21,13 @@ router.get('/conseils', ctrl.conseils);
 router.post('/conseils/articles/:id/jaime', ctrl.aimerArticle);
 router.post('/conseils/articles/:id/commentaires', ctrl.commenterArticle);
 router.delete('/conseils/articles/:id/commentaires/:cid', ctrl.supprimerCommentaireArticle);
+
+// Messagerie avec les soignants (mêmes discussions chiffrées que l'espace administrateur).
+router.get('/soignants', discussions.annuairePatiente);
+router.get('/discussions', discussions.listerPatiente);
+router.post('/discussions', discussions.ouvrirPatiente);
+router.get('/discussions/:id/messages', discussions.messages);
+router.post('/discussions/:id/messages', discussions.envoyer);
+router.post('/discussions/:id/lu', discussions.marquerLu);
 
 module.exports = router;
