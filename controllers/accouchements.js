@@ -11,6 +11,7 @@ const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
+const { urlSignee } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
 const { trouverPatiente } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
@@ -133,7 +134,7 @@ function manquantsCloture(a, nouveauNes) {
 /** Dossier complet : partogramme, temps écoulés, planning post-partum et nouveau-nés. */
 async function vue(a) {
   const [patiente, nouveauNes] = await Promise.all([
-    Patiente.findById(a.patienteId).select('numero nom postnom prenom'),
+    Patiente.findById(a.patienteId).select('numero nom postnom prenom photoCle'),
     Enfant.find({ accouchementId: a._id }).sort({ rang: 1 }),
   ]);
   const rupture = ruptureLe(a);
@@ -149,19 +150,19 @@ async function vue(a) {
   }));
   json.partogramme = partogramme.partogramme(a.surveillances, a.phaseActiveLe);
   json.planningPostPartum = planningPostPartum(a);
-  json.patiente = patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom } : null;
+  json.patiente = patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl: await urlSignee(patiente.photoCle) } : null;
   json.nouveauNes = nouveauNes.map(enfants.resume);
   json.manquantsCloture = a.statut === 'Clôturé' ? [] : manquantsCloture(a, nouveauNes);
   return json;
 }
 
 /** Résumé pour le tableau de la salle de travail. */
-function resume(a, patiente) {
+function resume(a, patiente, photoUrl = null) {
   const derniere = [...a.surveillances].sort((x, y) => x.le - y.le).at(-1);
   const actives = a.alertes.filter((x) => !x.acquitteeLe);
   return {
     id: a.id, numero: a.numero, statut: a.statut, etablissementId: a.etablissementId,
-    patiente: patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom } : null,
+    patiente: patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl } : null,
     admiseLe: a.admission.admiseLe,
     phase: a.phaseActiveLe ? 'Active' : 'Latence',
     derniereSurveillance: derniere ? { le: derniere.le, dilatationCm: derniere.dilatationCm, bcf: derniere.bcf } : null,
@@ -180,9 +181,11 @@ exports.lister = async (req, res) => {
   else if (req.query.statut !== 'Tous') filtre.statut = { $ne: 'Clôturé' };
   if (req.query.patienteId) filtre.patienteId = (await trouverPatiente(String(req.query.patienteId)))._id;
   const dossiers = await Accouchement.find(filtre).sort({ 'admission.admiseLe': -1 }).limit(200);
-  const patientes = await Patiente.find({ _id: { $in: dossiers.map((a) => a.patienteId) } }).select('numero nom postnom prenom');
+  const patientes = await Patiente.find({ _id: { $in: dossiers.map((a) => a.patienteId) } }).select('numero nom postnom prenom photoCle');
   const parId = new Map(patientes.map((p) => [p.id, p]));
-  res.json(dossiers.map((a) => resume(a, parId.get(String(a.patienteId)))));
+  // Photo d'identification : lien signé temporaire (15 min), calculé localement.
+  const photos = new Map(await Promise.all(patientes.map(async (p) => [p.id, await urlSignee(p.photoCle)])));
+  res.json(dossiers.map((a) => resume(a, parId.get(String(a.patienteId)), photos.get(String(a.patienteId)) ?? null)));
 };
 
 /** Alertes non prises en charge des dossiers ouverts (écran de la salle de travail, médecins). */

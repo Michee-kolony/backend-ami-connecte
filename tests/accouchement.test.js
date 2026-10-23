@@ -210,6 +210,8 @@ test('surveillance du travail : latence puis phase active, alertes BCF, zone jau
 
   const salle = await appel('sageFemme', 'GET', '/accouchements');
   assert.equal(salle.corps[0].zoneActuelle, 'Rouge');
+  assert.match(salle.corps[0].patiente.photoUrl, /^https:\/\/signe\.invalid\//, 'photo par lien signé');
+  assert.ok(!('photoCle' in salle.corps[0].patiente), 'clé de stockage jamais exposée');
   assert.equal(salle.corps[0].alertesCritiques, 3);
 });
 
