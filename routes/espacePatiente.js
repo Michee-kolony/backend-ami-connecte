@@ -12,6 +12,7 @@ router.get('/moi', ctrl.moi);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 router.get('/accueil', ctrl.accueil);
 router.get('/rendez-vous', ctrl.rendezVous);
+router.get('/grossesse', ctrl.grossesse);
 router.get('/enfants', ctrl.enfants);
 router.get('/enfants/:id', ctrl.enfant);
 router.get('/accouchements', ctrl.accouchements);

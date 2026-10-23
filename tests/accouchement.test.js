@@ -440,6 +440,35 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.ok(motifs.includes('Consultation postnatale (CPoN)'), 'RDV de la mère');
   assert.ok(accueil.corps.prochainsRendezVous.some((r) => r.enfant?.prenom === 'Joie'), 'RDV du bébé');
 
+  // Ma grossesse : datation (DDR, DPA), fiches CPN finalisées (pas le brouillon), RDV de suivi.
+  const Grossesse = require('../models/Grossesse');
+  const Consultation = require('../models/Consultation');
+  const gE = await Grossesse.findOne({ patienteId: patiente.id }).sort({ numero: -1 });
+  const baseC = { patienteId: gE.patienteId, grossesseId: gE._id, type: 'Suivi prénatal', statut: 'Finalisée', auteur: { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' } };
+  await Consultation.create({
+    ...baseC, date: new Date(Date.now() - 40 * 86400000), laboratoire: { hb: '9,1' },
+    mesuresPreventives: { resultatTest: { reponse: true, valeur: 'négatif' }, dcip: { reponse: true }, mild: { reponse: true } },
+  });
+  await Consultation.create({
+    ...baseC, date: new Date(Date.now() - 10 * 86400000), evaluation: 'Note interne du médecin',
+    constantes: { poidsKg: 72, taSystolique: 130, taDiastolique: 85 }, examenCpn: { presentation: 'Siège' },
+  });
+  await Consultation.create({ ...baseC, date: new Date(), statut: 'Brouillon' });
+  const g = await appel(jeton, 'GET', '/espace-patiente/grossesse');
+  assert.equal(g.status, 200, JSON.stringify(g.corps));
+  assert.equal(g.corps.grossesse.datation.methode, 'DDR');
+  assert.match(g.corps.grossesse.datation.ddr, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(g.corps.grossesse.datation.dpa);
+  assert.equal(g.corps.consultations.length, 2, 'brouillon exclu');
+  const [recente, ancienne] = g.corps.consultations;
+  assert.equal(recente.constantes.poidsKg, 72);
+  assert.equal(recente.constantes.taSystolique, 130);
+  assert.equal(recente.examen.presentation, 'Siège');
+  assert.deepEqual(ancienne.laboratoire, [{ libelle: 'Hb (g/dl)', resultat: '9,1' }]);
+  assert.deepEqual(ancienne.mesuresPreventives.map((m) => m.libelle), ['Dort sous MILD'], 'PTME non affiché');
+  assert.ok(!('evaluation' in recente) && !('facteursRisque' in recente), 'notes du médecin non exposées');
+  assert.ok(g.corps.rendezVous.every((r) => r.enfant === null), 'RDV de la mère seulement');
+
   const enfants = await appel(jeton, 'GET', '/espace-patiente/enfants');
   const bebe = enfants.corps[0];
   assert.equal(bebe.naissance.poidsG, 3200);

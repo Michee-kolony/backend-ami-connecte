@@ -1,6 +1,6 @@
 // Espace patiente (application mobile) : la patiente se connecte avec l'e-mail et le mot de passe
 // choisis à son enregistrement, et ne lit que ses propres données et celles de ses enfants :
-// grossesse en cours, rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
+// grossesse en cours (datation, fiches CPN), rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
 // accouchements, conseils de l'équipe soignante. Aucune donnée n'y est modifiable, sauf son mot de passe.
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -17,6 +17,7 @@ const Soignant = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
+const cpn = require('../config/cpn');
 const { motDePasseValide } = require('./patientes');
 const { erreur, texte } = require('./saisie');
 
@@ -118,7 +119,9 @@ exports.accueil = async (req, res) => {
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'accueil' } });
   res.json({
     patiente: await profil(p),
-    grossesse: grossesse ? { numero: grossesse.numero, agJours: grossesse.agJoursLe(), dpa: grossesse.datation?.dpa ?? null } : null,
+    grossesse: grossesse ? {
+      numero: grossesse.numero, agJours: grossesse.agJoursLe(), ddr: grossesse.datation?.ddr ?? null, dpa: grossesse.datation?.dpa ?? null,
+    } : null,
     prochainsRendezVous: prochains.map((r) => rdvPourPatiente(r, prenoms)),
     enfants: await Promise.all(enfants.map(async (e) => {
       const carnet = e.carnet();
@@ -306,4 +309,63 @@ exports.supprimerCommentaireArticle = async (req, res) => {
   await a.save();
   await journaliser(req, { action: 'espace.commentaire.suppression', patienteId: req.patiente._id, ressource: { type: 'article', id: a.id } });
   res.json(await vueArticle(a, req.patiente));
+};
+
+/**
+ * Mesures préventives VIH / PTME (codes, résultats de test, CD4, TAR) : non affichées sur le
+ * téléphone, qui peut être vu par d'autres personnes. Elles restent dans le dossier du centre.
+ */
+const GROUPES_NON_AFFICHES = ['VIH', 'PTME'];
+const CONSTANTES = ['poidsKg', 'taSystolique', 'taDiastolique', 'temperature', 'pouls', 'hauteurUterineCm', 'bcf', 'saO2', 'frequenceRespiratoire'];
+
+/** Fiche CPN finalisée, lisible par la patiente (sans les notes de raisonnement du médecin). */
+function fichePourPatiente(c) {
+  const ex = c.examenCpn ?? {};
+  return {
+    id: c.id, type: c.type, date: c.date, agJours: c.agJours, soignant: soignant(c.auteur), motif: c.motif,
+    constantes: Object.fromEntries(CONSTANTES.map((k) => [k, c.constantes?.[k] ?? null])),
+    examen: {
+      etatGeneral: ex.etatGeneral || null, presentation: ex.presentation || null,
+      mouvementsFoetaux: ex.mouvementsFoetaux || null, perimetreBrachialCm: ex.perimetreBrachialCm ?? null,
+      signes: cpn.SIGNES_CPN.filter((x) => ex.signes?.[x.code] === true).map((x) => x.libelle),
+    },
+    mesuresPreventives: cpn.MESURES_PREVENTIVES
+      .filter((m) => !GROUPES_NON_AFFICHES.includes(m.groupe) && c.mesuresPreventives?.[m.code]?.reponse === true)
+      .map((m) => ({ libelle: m.libelle, valeur: c.mesuresPreventives[m.code].valeur || '' })),
+    laboratoire: cpn.EXAMENS_LABO.filter((e) => c.laboratoire?.[e.code]).map((e) => ({ libelle: e.libelle, resultat: c.laboratoire[e.code] })),
+    echographie: c.echographie,
+    traitements: c.traitements.map((t) => ({ produit: t.produit, dose: t.dose, voie: t.voie, frequence: t.frequence, duree: t.duree })),
+    examensDemandes: c.examensDemandes,
+    conseils: c.conseils,
+    orientation: c.orientation,
+    prochainRdv: c.prochainRdv?.date ? { date: c.prochainRdv.date, motif: c.prochainRdv.motif, consignes: c.prochainRdv.consignes } : null,
+    addenda: c.addenda.map((a) => ({ texte: a.texte, le: a.le, soignant: soignant(a.auteur) })),
+  };
+}
+
+/**
+ * Ma grossesse : la grossesse en cours (sinon la plus récente) avec sa datation (DDR, DPA),
+ * ses fiches de consultation CPN finalisées et ses rendez-vous de suivi.
+ */
+exports.grossesse = async (req, res) => {
+  const p = req.patiente;
+  const g = await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 })
+    ?? await Grossesse.findOne({ patienteId: p._id }).sort({ numero: -1 });
+  await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'grossesse' } });
+  if (!g) return res.json({ grossesse: null, consultations: [], rendezVous: [] });
+  const [consultations, rendezVous] = await Promise.all([
+    Consultation.find({ grossesseId: g._id, statut: 'Finalisée' }).sort({ date: -1 }),
+    RendezVous.find({ patienteId: p._id, enfantId: null, $or: [{ grossesseId: g._id }, { grossesseId: null }] }).sort({ date: 1 }),
+  ]);
+  const d = g.datation;
+  res.json({
+    grossesse: {
+      id: g.id, numero: g.numero, statut: g.statut, grossesseMultiple: g.grossesseMultiple,
+      agJours: g.statut === 'En cours' ? g.agJoursLe() : null,
+      datation: d ? { methode: d.methode, ddr: d.ddr, ddrFiabilite: d.ddrFiabilite, dateReference: d.dateReference, dpa: d.dpa } : null,
+      issue: g.issue ? { date: g.issue.date, issue: g.issue.issue, mode: g.issue.mode } : null,
+    },
+    consultations: consultations.map(fichePourPatiente),
+    rendezVous: rendezVous.map((r) => rdvPourPatiente(r, new Map())),
+  });
 };
