@@ -102,3 +102,11 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
 | `GET /accouchements` | Date, type, enfants, sortie, RDV CPoN, conseils, mesures préventives reçues (pas de partogramme) |
 
 Chaque lecture est journalisée (`espace.lecture`), avec la patiente comme actrice.
+
+## Reprise du suivi prénatal à l'ouverture du dossier
+
+`controllers/suiviPrenatal.js` lit les consultations **finalisées** et la dernière échographie de la grossesse :
+
+- **Admission** (copiée à l'admission, puis proposée pour les champs restés vides) : identité, groupe/rhésus, statut Hb, G/P/A/EV, DDR/DPA, statut VIH (DCIP, résultat annoncé, TAR), antécédents médico-chirurgicaux (dont allergies et traitements), une ligne par césarienne antérieure, antécédents obstétricaux.
+- **Examen d'entrée** (tant qu'il n'est pas enregistré) : taille, GS, et derniers Hb / GE / TDR / RPR de la CPN, datés. Les constantes (poids, TA, HU, BCF, présentation) ne sont **jamais** recopiées : elles sont montrées comme repère.
+- **`rappelPrenatal`** dans la vue : terme à l'admission, dernière CPN, dernière échographie, laboratoire, préventions et **points d'attention** (allergies, VIH+, utérus cicatriciel, Rh−, drépanocytose, HTA/diabète/cardiopathie, grossesse multiple, présentation non céphalique, prématurité / terme dépassé, anémie, RPR+, anomalie du liquide, placenta prævia, facteurs de risque, absence de CPN).

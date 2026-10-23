@@ -16,6 +16,7 @@ const { jourKinshasa } = require('../config/vaccination');
 const { trouverPatiente } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
 const enfants = require('./enfants');
+const suiviPrenatal = require('./suiviPrenatal');
 const { erreur, texte, nombre, instant, jour, objet, T, N, B, C, D, J, lire, fusionner, valider, pasDansLeFutur } = require('./saisie');
 
 const { STATUTS_ACTIFS } = RendezVous;
@@ -133,8 +134,9 @@ function manquantsCloture(a, nouveauNes) {
 
 /** Dossier complet : partogramme, temps écoulés, planning post-partum et nouveau-nés. */
 async function vue(a) {
-  const [patiente, nouveauNes] = await Promise.all([
-    Patiente.findById(a.patienteId).select('numero nom postnom prenom photoCle'),
+  const [patiente, grossesse, nouveauNes] = await Promise.all([
+    Patiente.findById(a.patienteId),
+    Grossesse.findById(a.grossesseId),
     Enfant.find({ accouchementId: a._id }).sort({ rang: 1 }),
   ]);
   const rupture = ruptureLe(a);
@@ -152,6 +154,16 @@ async function vue(a) {
   json.planningPostPartum = planningPostPartum(a);
   json.patiente = patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl: await urlSignee(patiente.photoCle) } : null;
   json.nouveauNes = nouveauNes.map(enfants.resume);
+  // Suivi prénatal : synthèse en tête du dossier et, tant qu'il est ouvert, valeurs proposées
+  // pour les champs encore vides de l'admission et de l'examen d'entrée (à vérifier, puis enregistrer).
+  if (patiente) {
+    const suivi = await suiviPrenatal.charger(grossesse);
+    json.rappelPrenatal = suiviPrenatal.rappel(patiente, grossesse, suivi, a.admission.admiseLe);
+    json.preRemplissage = a.statut === 'Clôturé' ? null : {
+      admission: suiviPrenatal.admission(patiente, grossesse, suivi),
+      examen: a.examenClinique ? null : suiviPrenatal.examen(patiente, suivi),
+    };
+  }
   json.manquantsCloture = a.statut === 'Clôturé' ? [] : manquantsCloture(a, nouveauNes);
   return json;
 }
@@ -203,23 +215,6 @@ exports.alertes = async (req, res) => {
   res.json(liste.sort((x, y) => y.le - x.le));
 };
 
-/** Identité et anamnèse pré-remplies depuis le dossier de la patiente et sa grossesse. */
-function admissionPreRemplie(p, g) {
-  const a = p.adresse ?? {};
-  const atcd = p.antecedents ?? {};
-  return {
-    nom: p.nom, postnom: p.postnom, prenom: p.prenom, age: p.age(), occupation: p.occupation,
-    etatMatrimonial: p.etatCivil, nomPartenaire: p.nomPartenaire,
-    adresse: [a.avenue, a.quartier, a.commune, a.province].filter(Boolean).join(', '),
-    personneAPrevenir: { nom: p.contactUrgence?.nom ?? '', telephone: p.contactUrgence?.telephone ?? '' },
-    groupeSanguin: p.groupeSanguin, rhesus: p.rhesus,
-    statutHb: acc.STATUTS_HB.includes(p.electrophoreseHb) ? p.electrophoreseHb : '',
-    gestite: atcd.gestite ?? null, parite: atcd.parite ?? null, avortements: atcd.avortements ?? null, enfantsVivants: atcd.enfantsVivants ?? null,
-    ddr: g?.datation?.ddr ?? null, dpa: g?.datation?.dpa ?? null,
-    antecedents: { medicoChirurgicaux: [atcd.medicaux, atcd.chirurgicaux].filter(Boolean).join(' — ') },
-  };
-}
-
 /**
  * Module 1 — Admission en salle de travail d'une patiente enregistrée. Sans grossesse en cours
  * dans la plateforme (arrivée directement en travail), une grossesse est ouverte, non datée.
@@ -234,7 +229,7 @@ exports.admettre = async (req, res) => {
   }
   const saisie = lire(SPEC_ADMISSION, req.body.admission);
   const admiseLe = pasDansLeFutur(instant(objet(req.body.admission).admiseLe, 'Heure d’admission') ?? new Date(), 'L’admission');
-  const admission = { ...fusionner(admissionPreRemplie(p, g), saisie), admiseLe, admisePar: auteur };
+  const admission = { ...fusionner(suiviPrenatal.admission(p, g, await suiviPrenatal.charger(g)), saisie), admiseLe, admisePar: auteur };
   if (!g) {
     const derniere = await Grossesse.findOne({ patienteId: p._id }).sort({ numero: -1 }).select('numero');
     g = new Grossesse({ patienteId: p._id, numero: (derniere?.numero ?? 0) + 1, creePar: auteur });

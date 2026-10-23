@@ -151,6 +151,67 @@ test('admission : réservée aux médecins et sages-femmes, identité et anamnè
   assert.equal(double.status, 409, 'un seul dossier par grossesse');
 });
 
+test('ouverture du dossier : données du suivi prénatal pré-remplies et points d’attention', async () => {
+  const r = await creerPatiente({
+    patiente: {
+      nom: 'Mbuyi', prenom: 'Ruth', dateNaissance: '1990-02-02', telephone: '+243 81 333 4455', email: 'ruth@essai.test',
+      groupeSanguin: 'A', rhesus: 'Négatif', tailleCm: 158, adresse: { province: 'Kinshasa' },
+      antecedents: {
+        gestite: 4, parite: 2, enfantsVivants: 2, cesariennes: 1, allergies: 'Pénicilline',
+        atcdMedicaux: ['Hypertension artérielle (HTA)'], atcdObstetricaux: ['Dystocie'],
+      },
+    },
+    compte: { motDePasse: 'Bebe2026ok' },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYaJ(266) } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const Grossesse = require('../models/Grossesse');
+  const Consultation = require('../models/Consultation');
+  const Echographie = require('../models/Echographie');
+  const g = await Grossesse.findOne({ patienteId: r.corps.id });
+  const auteur = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
+  const commun = { patienteId: g.patienteId, grossesseId: g._id, type: 'Suivi prénatal', auteur, statut: 'Finalisée' };
+  await Consultation.create({
+    ...commun, date: new Date(Date.now() - 40 * 86400000),
+    laboratoire: { hb: '9,1' }, mesuresPreventives: { resultatTest: { reponse: true, valeur: 'négatif' }, dcip: { reponse: true }, rpr: { reponse: false } },
+  });
+  await Consultation.create({
+    ...commun, date: new Date(Date.now() - 10 * 86400000),
+    constantes: { poidsKg: 72, taSystolique: 130, taDiastolique: 85, hauteurUterineCm: 34 }, examenCpn: { presentation: 'Siège' },
+  });
+  await Consultation.create({ ...commun, date: new Date(), statut: 'Brouillon', laboratoire: { hb: '15' } });
+  await Echographie.create({ ...commun, date: ilYaJ(20), nombreFoetus: 1, foetus: [{ presentation: 'Siège', poidsEstimeG: 2900 }] });
+
+  const a = await appel('medecin', 'POST', '/accouchements', { patienteId: r.corps.id, admission: { admiseLe: ilYaH(1) } });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  const adm = a.corps.admission;
+  assert.equal(adm.rhesus, 'Négatif');
+  assert.deepEqual(adm.vih, { conseillee: true, testee: true, informee: true, resultat: 'Négatif' });
+  assert.equal(adm.antecedents.gynecoObstetricaux.cesariennes.length, 1, 'une ligne par césarienne antérieure');
+  assert.match(adm.antecedents.medicoChirurgicaux, /Allergies : Pénicilline/);
+  assert.match(adm.antecedents.gynecoObstetricaux.autres, /Dystocie/);
+
+  // Examen d'entrée : données durables proposées, mesures du jour laissées vides.
+  const ex = a.corps.preRemplissage.examen;
+  assert.equal(ex.physique.tailleCm, 158);
+  assert.equal(ex.physique.poidsKg, undefined, 'le poids de la CPN n’est pas recopié');
+  assert.equal(ex.laboratoire.gs, 'A−');
+  assert.match(ex.laboratoire.hb, /^9,1 \(CPN du /, 'consultation brouillon ignorée');
+  assert.match(ex.laboratoire.rprSyphilis, /^Négatif/);
+
+  const rp = a.corps.rappelPrenatal;
+  assert.equal(rp.nombreCpn, 2);
+  assert.equal(rp.derniereCpn.poidsKg, 72);
+  assert.equal(rp.echographie.poidsEstimeG, 2900);
+  const textes = rp.points.map((p) => p.texte).join(' | ');
+  for (const attendu of [/Allergies : Pénicilline/, /Utérus cicatriciel/, /Rhésus négatif/, /HTA/, /Présentation siège/, /Anémie : Hb 9,1/]) {
+    assert.match(textes, attendu);
+  }
+
+  const supp = await appel('medecin', 'DELETE', `/accouchements/${a.corps.id}`, { confirmation: a.corps.numero });
+  assert.equal(supp.status, 204);
+});
+
 test('examen clinique d’entrée : examinateur = soignant connecté', async () => {
   const r = await appel('sageFemme', 'PUT', `/accouchements/${dossierId}/examen-clinique`, {
     examineLe: ilYaH(11.9),
