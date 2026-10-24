@@ -8,5 +8,6 @@ const router = express.Router();
 router.use(authentifier);
 
 router.get('/patientes', ctrl.patientes);
+router.get('/enfants', ctrl.enfants);
 
 module.exports = router;

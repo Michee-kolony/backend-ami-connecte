@@ -4,9 +4,11 @@
 const Patiente = require('../models/Patiente');
 const Grossesse = require('../models/Grossesse');
 const RendezVous = require('../models/RendezVous');
+const Enfant = require('../models/Enfant');
 const { ROLES_MEDECIN } = require('../models/Soignant');
 const { PROVINCES_RDC } = require('../config/referentiels');
 const { urlSignee } = require('../config/r2');
+const vaccination = require('../config/vaccination');
 
 const JOUR = 86400000;
 const FUSEAU_MS = 60 * 60000; // Africa/Kinshasa : UTC+1, sans heure d'été
@@ -155,5 +157,75 @@ exports.patientes = async (req, res) => {
         patiente: p ? { numero: p.numero, nom: p.nom, prenom: p.prenom, postnom: p.postnom } : null,
       };
     }),
+  });
+};
+
+/** Antigènes suivis pour la couverture vaccinale du tableau de bord (codes du calendrier PEV). */
+const COUVERTURE = [
+  { code: 'bcg', age: 'Naissance' },
+  { code: 'penta1', age: '6 sem.' },
+  { code: 'penta3', age: '14 sem.' },
+  { code: 'vpi1', age: '14 sem.' },
+  { code: 'var1', age: '9 mois' },
+  { code: 'vaa', age: '9 mois' },
+];
+
+// Bébés pris en charge et vaccination (PEV), calculés sur les dossiers des enfants.
+exports.enfants = async (req, res) => {
+  const jour = vaccination.jourKinshasa();
+  const mois = jour.slice(0, 7);
+  const moisPrecedent = vaccination.jourKinshasa(debutMois(-1)).slice(0, 7);
+  const enfants = await Enfant.find().select('numero nom postnom prenom sexe neLe dateNaissance etatNaissance statut vaccinations mereId');
+
+  const suivis = enfants.filter((e) => e.estSuivi());
+  const carnets = new Map(suivis.map((e) => [e.id, e.carnet(jour)]));
+  const resumes = suivis.map((e) => carnets.get(e.id).resume);
+  const nesCeMois = enfants.filter((e) => e.dateNaissance.startsWith(mois)).length;
+  const nesMoisPrecedent = enfants.filter((e) => e.dateNaissance.startsWith(moisPrecedent)).length;
+  const doses = suivis.flatMap((e) => e.vaccinationsValides());
+
+  // Couverture : enfants en âge d'avoir reçu la dose (statut échu ou faite).
+  const couverture = COUVERTURE.map(({ code, age }) => {
+    const d = vaccination.PAR_CODE.get(code);
+    let eligibles = 0;
+    let recus = 0;
+    for (const e of suivis) {
+      const dose = carnets.get(e.id).doses.find((x) => x.code === code);
+      if (!dose || ['À venir', 'À faire'].includes(dose.statut)) continue;
+      eligibles++;
+      if (dose.statut === 'Faite') recus++;
+    }
+    return { code, libelle: d.libelle, age, eligibles, recus, pct: eligibles ? Math.round((recus / eligibles) * 100) : 0 };
+  });
+
+  // Enfants à rattraper : les plus en retard d'abord, avec le téléphone de la mère pour la relance.
+  const enRetard = suivis
+    .map((e) => ({ e, retard: carnets.get(e.id).doses.filter((d) => d.statut === 'En retard') }))
+    .filter((x) => x.retard.length)
+    .sort((a, b) => a.retard[0].datePrevue.localeCompare(b.retard[0].datePrevue));
+  const aRattraper = enRetard.slice(0, 6);
+  const meres = await Patiente.find({ _id: { $in: aRattraper.map((x) => x.e.mereId) } }).select('telephone').lean();
+  const telephoneDe = new Map(meres.map((m) => [String(m._id), m.telephone || '']));
+
+  res.json({
+    genereLe: new Date(),
+    totaux: {
+      enfants: enfants.length,
+      suivis: suivis.length,
+      filles: enfants.filter((e) => e.sexe === 'Féminin').length,
+      garcons: enfants.filter((e) => e.sexe === 'Masculin').length,
+      nesCeMois,
+      nesMoisPrecedent,
+      complets: resumes.filter((r) => r.completementVaccine).length,
+      enRetard: enRetard.length,
+      dosesCeMois: doses.filter((v) => v.date.startsWith(mois)).length,
+      seancesAujourdhui: suivis.filter((e) => carnets.get(e.id).prochaineSeance?.date === jour).length,
+    },
+    couverture,
+    aRattraper: aRattraper.map(({ e, retard }) => ({
+      id: e.id, numero: e.numero, nom: e.nom, prenom: e.prenom, sexe: e.sexe, age: e.age(jour)?.libelle ?? '',
+      doses: retard.map((d) => d.libelle), depuis: retard[0].datePrevue,
+      telephone: telephoneDe.get(String(e.mereId)) ?? '',
+    })),
   });
 };
