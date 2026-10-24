@@ -1,4 +1,5 @@
-// Calendrier du Programme élargi de vaccination (PEV) de la RDC et suivi préscolaire de l'enfant
+// Calendrier du Programme élargi de vaccination (PEV) de la RDC (affiche « Calendrier vaccinal
+// 0 à 15 mois » du Ministère de la Santé, Hygiène et Prévention) et suivi préscolaire de l'enfant
 // (supplémentation en vitamine A, déparasitage). Source unique : le carnet de l'enfant, les
 // rendez-vous automatiques et l'espace patiente sont calculés d'ici ; l'équipe PEV ajuste cette
 // liste si le calendrier national évolue (nouvel antigène, nouvel âge).
@@ -20,33 +21,46 @@ const vaccin = (code, libelle, antigene, maladies, voie, age, seance, extra = {}
 });
 const serie = (precedent) => ({ apres: precedent, intervalleJours: INTERVALLE_SERIE_JOURS });
 
-const PENTA = 'Diphtérie, tétanos, coqueluche, hépatite B, Haemophilus influenzae b';
+const PENTA = 'Diphtérie, tétanos, coqueluche, hépatite B, infections à Haemophilus influenzae b';
+const PNEUMO = 'Infections à pneumocoque';
+const ROTA = 'Diarrhée à rotavirus';
+const RR = 'Rougeole, rubéole';
+// Vaccin antipaludique (RTS,S ou R21) : 3 doses à 6, 7 et 8 mois, rappel à 15 mois.
+const palu = (n, age, seance, extra = {}) =>
+  vaccin(`palu${n}`, `Vaccin antipaludique — Dose ${n}`, 'Antipaludique', 'Paludisme', 'Intramusculaire (bras gauche)', age, seance, extra);
+
+// Ordre : celui de l'affiche officielle « Calendrier vaccinal 0 à 15 mois » du PEV RDC.
 const CALENDRIER = [
   // Naissance
   vaccin('bcg', 'BCG', 'BCG', 'Tuberculose', 'Intradermique (bras gauche)', { jours: 0 }, 'Naissance', { limiteJours: 365 }),
-  vaccin('vpo0', 'VPO 0', 'VPO', 'Poliomyélite', 'Orale', { jours: 0 }, 'Naissance', { limiteJours: 14 }),
+  vaccin('vpo0', 'VPO 0 (polio oral)', 'VPO', 'Poliomyélite', 'Orale', { jours: 0 }, 'Naissance', { limiteJours: 14 }),
   // 6 semaines
   vaccin('penta1', 'DTC-HepB-Hib 1', 'DTC-HepB-Hib', PENTA, 'Intramusculaire (cuisse gauche)', { semaines: 6 }, '6 semaines'),
   vaccin('vpo1', 'VPO 1', 'VPO', 'Poliomyélite', 'Orale', { semaines: 6 }, '6 semaines'),
-  vaccin('pcv1', 'Pneumo 1 (PCV13)', 'PCV13', 'Infections à pneumocoque', 'Intramusculaire (cuisse droite)', { semaines: 6 }, '6 semaines'),
-  vaccin('rota1', 'Rota 1', 'Rotavirus', 'Diarrhées à rotavirus', 'Orale', { semaines: 6 }, '6 semaines'),
+  vaccin('rota1', 'Rota 1', 'Rotavirus', ROTA, 'Orale', { semaines: 6 }, '6 semaines'),
+  vaccin('pcv1', 'PCV13 - 1', 'PCV13', PNEUMO, 'Intramusculaire (cuisse droite)', { semaines: 6 }, '6 semaines'),
   // 10 semaines
   vaccin('penta2', 'DTC-HepB-Hib 2', 'DTC-HepB-Hib', PENTA, 'Intramusculaire (cuisse gauche)', { semaines: 10 }, '10 semaines', serie('penta1')),
   vaccin('vpo2', 'VPO 2', 'VPO', 'Poliomyélite', 'Orale', { semaines: 10 }, '10 semaines', serie('vpo1')),
-  vaccin('pcv2', 'Pneumo 2 (PCV13)', 'PCV13', 'Infections à pneumocoque', 'Intramusculaire (cuisse droite)', { semaines: 10 }, '10 semaines', serie('pcv1')),
-  vaccin('rota2', 'Rota 2', 'Rotavirus', 'Diarrhées à rotavirus', 'Orale', { semaines: 10 }, '10 semaines', serie('rota1')),
+  vaccin('rota2', 'Rota 2', 'Rotavirus', ROTA, 'Orale', { semaines: 10 }, '10 semaines', serie('rota1')),
+  vaccin('pcv2', 'PCV13 - 2', 'PCV13', PNEUMO, 'Intramusculaire (cuisse droite)', { semaines: 10 }, '10 semaines', serie('pcv1')),
   // 14 semaines
   vaccin('penta3', 'DTC-HepB-Hib 3', 'DTC-HepB-Hib', PENTA, 'Intramusculaire (cuisse gauche)', { semaines: 14 }, '14 semaines', serie('penta2')),
   vaccin('vpo3', 'VPO 3', 'VPO', 'Poliomyélite', 'Orale', { semaines: 14 }, '14 semaines', serie('vpo2')),
-  vaccin('pcv3', 'Pneumo 3 (PCV13)', 'PCV13', 'Infections à pneumocoque', 'Intramusculaire (cuisse droite)', { semaines: 14 }, '14 semaines', serie('pcv2')),
-  vaccin('rota3', 'Rota 3', 'Rotavirus', 'Diarrhées à rotavirus', 'Orale', { semaines: 14 }, '14 semaines', serie('rota2')),
-  vaccin('vpi1', 'VPI 1', 'VPI', 'Poliomyélite', 'Intramusculaire (cuisse droite)', { semaines: 14 }, '14 semaines'),
+  vaccin('rota3', 'Rota 3', 'Rotavirus', ROTA, 'Orale', { semaines: 14 }, '14 semaines', serie('rota2')),
+  vaccin('pcv3', 'PCV13 - 3', 'PCV13', PNEUMO, 'Intramusculaire (cuisse droite)', { semaines: 14 }, '14 semaines', serie('pcv2')),
+  vaccin('vpi1', 'VPI (polio injectable)', 'VPI', 'Poliomyélite', 'Intramusculaire (cuisse droite)', { semaines: 14 }, '14 semaines'),
+  // 6, 7 et 8 mois : vaccin antipaludique
+  palu(1, { mois: 6 }, '6 mois'),
+  palu(2, { mois: 7 }, '7 mois', serie('palu1')),
+  palu(3, { mois: 8 }, '8 mois', serie('palu2')),
   // 9 mois
-  vaccin('var1', 'VAR 1', 'VAR', 'Rougeole', 'Sous-cutanée (bras gauche)', { mois: 9 }, '9 mois'),
+  vaccin('var1', 'VAR (RR1)', 'RR', RR, 'Sous-cutanée (bras gauche)', { mois: 9 }, '9 mois'),
   vaccin('vaa', 'VAA', 'VAA', 'Fièvre jaune', 'Sous-cutanée (bras droit)', { mois: 9 }, '9 mois'),
   vaccin('vpi2', 'VPI 2', 'VPI', 'Poliomyélite', 'Intramusculaire', { mois: 9 }, '9 mois', serie('vpi1')),
   // 15 mois
-  vaccin('var2', 'VAR 2', 'VAR', 'Rougeole', 'Sous-cutanée (bras gauche)', { mois: 15 }, '15 mois', serie('var1')),
+  vaccin('var2', 'RR2', 'RR', RR, 'Sous-cutanée (bras gauche)', { mois: 15 }, '15 mois', serie('var1')),
+  palu(4, { mois: 15 }, '15 mois', serie('palu3')),
 
   // Suivi préscolaire : vitamine A tous les 6 mois de 6 à 59 mois, mébendazole tous les 6 mois dès 12 mois.
   ...[6, 12, 18, 24, 30, 36, 42, 48, 54].map((m, i) => ({
@@ -58,6 +72,10 @@ const CALENDRIER = [
     voie: 'Orale', age: { mois: m }, seance: `${m} mois`, type: 'Déparasitage', limiteJours: 1825,
   })),
 ];
+// Ordre chronologique (stable) : vitamine A et mébendazole rejoignent la séance du même âge,
+// et chaque dose d'une série reste après la précédente.
+const ageApprox = ({ jours = 0, semaines = 0, mois = 0 }) => jours + semaines * 7 + mois * 30.44;
+CALENDRIER.sort((a, b) => ageApprox(a.age) - ageApprox(b.age));
 const CODES = CALENDRIER.map((d) => d.code);
 const PAR_CODE = new Map(CALENDRIER.map((d) => [d.code, d]));
 
@@ -126,7 +144,7 @@ function calendrier(dateNaissance, administrations = [], aujourdhui = jourKinsha
       vaccinsFaits: vaccins.filter((d) => d.statut === 'Faite').length,
       vaccinsTotal: vaccins.length,
       enRetard: doses.filter((d) => d.statut === 'En retard').length,
-      // Vaccins de la 1re année (jusqu'à VAR 1 / VAA) tous faits : enfant complètement vacciné.
+      // Vaccins jusqu'à 9 mois (antipaludique 1 à 3, VAR (RR1), VAA) tous faits : enfant complètement vacciné.
       completementVaccine: vaccins.filter((d) => d.seance !== '15 mois').every((d) => d.statut === 'Faite'),
     },
   };

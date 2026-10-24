@@ -166,6 +166,7 @@ const COUVERTURE = [
   { code: 'penta1', age: '6 sem.' },
   { code: 'penta3', age: '14 sem.' },
   { code: 'vpi1', age: '14 sem.' },
+  { code: 'palu3', age: '8 mois' },
   { code: 'var1', age: '9 mois' },
   { code: 'vaa', age: '9 mois' },
 ];

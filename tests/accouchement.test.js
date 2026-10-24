@@ -117,6 +117,24 @@ test('calendrier PEV RDC : dates des séances, intervalle de 4 semaines dans une
   assert.equal(tard.doses.find((d) => d.code === 'bcg').statut, 'En retard');
 });
 
+test('calendrier PEV RDC : vaccin antipaludique (6, 7, 8 et 15 mois) et rougeole-rubéole (RR1, RR2)', () => {
+  const { calendrier } = require('../config/vaccination');
+  const c = calendrier('2026-01-01', [], '2026-01-01');
+  const dose = (code) => c.doses.find((d) => d.code === code);
+  assert.deepEqual(['palu1', 'palu2', 'palu3', 'palu4'].map((x) => dose(x).datePrevue), ['2026-07-01', '2026-08-01', '2026-09-01', '2027-04-01']);
+  assert.equal(dose('palu1').maladies, 'Paludisme');
+  assert.equal(dose('var1').maladies, 'Rougeole, rubéole');
+  assert.equal(dose('var2').libelle, 'RR2');
+  // Séances dans l'ordre chronologique : la vitamine A de 6 mois rejoint le vaccin antipaludique.
+  const seances = [...new Set(c.doses.map((d) => d.seance))];
+  assert.deepEqual(seances.slice(0, 9), ['Naissance', '6 semaines', '10 semaines', '14 semaines', '6 mois', '7 mois', '8 mois', '9 mois', '12 mois']);
+  assert.deepEqual(c.doses.filter((d) => d.seance === '15 mois').map((d) => d.code), ['var2', 'palu4']);
+
+  // Dose 1 faite en retard : la dose 2 au moins 4 semaines après.
+  const tard = calendrier('2026-01-01', [{ code: 'palu1', date: '2026-07-20' }], '2026-07-20');
+  assert.equal(tard.doses.find((d) => d.code === 'palu2').datePrevue, '2026-08-17');
+});
+
 let patiente;
 let dossierId;
 let enfantId;
