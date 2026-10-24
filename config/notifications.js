@@ -7,10 +7,13 @@
 // Les textes restent discrets (écran verrouillé) : jamais de contenu médical ni de message.
 const path = require('path');
 const Patiente = require('../models/Patiente');
+const r2 = require('./r2');
 
 /** Jetons à oublier : application désinstallée ou jeton remplacé. */
 const JETONS_PERIMES = ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token', 'messaging/invalid-argument'];
 const MAX_APPAREILS = 5;
+/** Lien signé d'une photo de notification : le téléphone peut la télécharger plus tard (hors ligne). */
+const DUREE_LIEN_PHOTO_S = 24 * 3600;
 /** Limite de Firebase pour un envoi groupé. */
 const JETONS_PAR_ENVOI = 500;
 
@@ -42,6 +45,13 @@ function client() {
   return messagerie;
 }
 
+/** Photo d'un soignant pour une notification (lien signé de 24 h, sinon URL https enregistrée) ; null sans photo. */
+async function photoNotification(soignant) {
+  if (!soignant) return null;
+  const signee = soignant.photoCle ? await r2.urlSignee(soignant.photoCle, DUREE_LIEN_PHOTO_S) : null;
+  return signee ?? (soignant.photo?.startsWith('https://') ? soignant.photo : null);
+}
+
 /** Enregistre le téléphone de la patiente (un même jeton n'est gardé qu'une fois). */
 async function enregistrerAppareil(patienteId, jeton, plateforme) {
   await Patiente.updateOne({ _id: patienteId }, { $pull: { appareils: { jeton } } });
@@ -54,12 +64,16 @@ async function retirerAppareil(patienteId, jeton) {
   await Patiente.updateOne({ _id: patienteId }, { $pull: { appareils: { jeton } } });
 }
 
-/** Message Firebase : `donnees` (chaînes) indique à l'application quelle page ouvrir au toucher. */
-const message = ({ titre, corps, donnees = {} }) => ({
-  notification: { title: titre, body: corps },
+/**
+ * Message Firebase : `donnees` (chaînes) indique à l'application quelle page ouvrir au toucher ;
+ * `image` (URL https joignable par le téléphone) s'affiche en grand dans la notification.
+ */
+const message = ({ titre, corps, donnees = {}, image }) => ({
+  notification: { title: titre, body: corps, ...(image ? { imageUrl: image } : {}) },
   data: Object.fromEntries(Object.entries(donnees).map(([k, v]) => [k, String(v)])),
   android: { priority: 'high', notification: { channelId: 'ami-general', color: '#0055a5', icon: 'ic_stat_notification' } },
-  apns: { payload: { aps: { sound: 'default' } } },
+  // mutable-content : iOS laisse l'extension de notification télécharger l'image.
+  apns: { payload: { aps: { sound: 'default', ...(image ? { 'mutable-content': 1 } : {}) } }, ...(image ? { fcmOptions: { imageUrl: image } } : {}) },
 });
 
 /** Envoi à une liste de jetons ; renvoie le nombre de téléphones atteints et les jetons périmés. */
@@ -115,4 +129,4 @@ async function notifierPatientes(filtre, contenu) {
   }
 }
 
-module.exports = { client, enregistrerAppareil, retirerAppareil, notifierPatiente, notifierPatientes };
+module.exports = { client, enregistrerAppareil, retirerAppareil, notifierPatiente, notifierPatientes, photoNotification };

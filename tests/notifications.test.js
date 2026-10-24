@@ -11,7 +11,7 @@ let http;
 let mongoose;
 const jetons = {};
 const comptes = {};
-/** Envois reçus par le faux Firebase : { tokens, titre, corps, donnees }. */
+/** Envois reçus par le faux Firebase : { tokens, titre, corps, donnees, image }. */
 const envois = [];
 
 async function appel(qui, methode, chemin, corps) {
@@ -33,9 +33,10 @@ async function creerPatiente(corps) {
   return { status: r.status, corps: await r.json() };
 }
 
-async function publier(qui, champs) {
+async function publier(qui, champs, { photo = false } = {}) {
   const f = new FormData();
   for (const [k, v] of Object.entries(champs)) f.append(k, v);
+  if (photo) f.append('medias', new Blob([PNG], { type: 'image/png' }), 'photo.png');
   const r = await fetch(`${api}/articles`, { method: 'POST', headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f });
   return { status: r.status, corps: await r.json() };
 }
@@ -67,7 +68,7 @@ before(async () => {
   const notifications = require('../config/notifications');
   notifications.client = () => ({
     async sendEachForMulticast(m) {
-      envois.push({ tokens: m.tokens, titre: m.notification.title, corps: m.notification.body, donnees: m.data });
+      envois.push({ tokens: m.tokens, titre: m.notification.title, corps: m.notification.body, donnees: m.data, image: m.notification.imageUrl });
       return {
         successCount: m.tokens.filter((t) => t !== 'perime').length,
         responses: m.tokens.map((t) => (t === 'perime' ? { success: false, error: { code: 'messaging/registration-token-not-registered' } } : { success: true })),
@@ -210,13 +211,14 @@ test('vaccination : séance prévue demain, dose en retard rappelée une fois pa
 
 test('article de conseils : annoncé aux patientes concernées dès qu’il est visible (publication du chef ou approbation)', async () => {
   envois.length = 0;
-  const chef = await publier('chef', { titre: 'Bien manger pendant la grossesse', contenu: 'Conseils…', cible: 'Grossesse (CPN)' });
+  const chef = await publier('chef', { titre: 'Bien manger pendant la grossesse', contenu: 'Conseils…', cible: 'Grossesse (CPN)' }, { photo: true });
   assert.equal(chef.status, 201, JSON.stringify(chef.corps));
   await attendreEnvois(1);
   assert.equal(envois[0].titre, 'Nouveau conseil du Dr Claire CHEF');
   assert.equal(envois[0].corps, 'Bien manger pendant la grossesse');
   assert.deepEqual(envois[0].tokens, ['tel-grace'], 'seulement les patientes qui ont l’application');
   assert.deepEqual(envois[0].donnees, { type: 'article', articleId: chef.corps.id });
+  assert.equal(envois[0].image, 'https://public.invalid/articles/essai.png', 'première photo de l’article');
 
   // Article d'un médecin : rien tant que le chef ne l'a pas approuvé.
   const enAttente = await publier('medecin', { titre: 'Allaitement', contenu: 'Conseils…', cible: 'Après l’accouchement' });
@@ -231,6 +233,7 @@ test('article de conseils : annoncé aux patientes concernées dès qu’il est 
   await appel('chef', 'POST', `/articles/${tous.corps.id}/approuver`);
   await attendreEnvois(2);
   assert.equal(envois[1].titre, 'Nouveau conseil du Dr Marie MEDECIN');
+  assert.equal(envois[1].image, undefined, 'ni photo d’article ni photo du médecin');
 });
 
 test('bouton « Envoyer les rappels » : médecins seulement, prochain rendez-vous de chaque patiente, pas deux fois de suite', async () => {

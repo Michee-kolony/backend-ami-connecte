@@ -151,12 +151,13 @@ exports.envoyer = async (req, res) => {
   for (const p of d.participants) presence.emettre(String(p), 'discussion:message', message);
   // Message d'un soignant à une patiente : notification push (sans le contenu du message).
   if (d.patienteId?.equals(autre)) {
-    const auteur = await Soignant.findById(moi).select('prenom nom');
-    notifications.notifierPatiente(autre, {
+    const auteur = await Soignant.findById(moi).select('prenom nom photo photoCle');
+    notifications.photoNotification(auteur).catch(() => null).then((image) => notifications.notifierPatiente(autre, {
       titre: auteur ? `Message de ${auteur.prenom} ${auteur.nom}`.trim() : 'Nouveau message',
       corps: 'Vous avez reçu un nouveau message. Ouvrez l’application pour le lire.',
       donnees: { type: 'message', discussionId: d.id },
-    });
+      image,
+    }));
   }
   res.status(201).json(message);
 };
