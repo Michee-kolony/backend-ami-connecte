@@ -3,6 +3,7 @@ const Consultation = require('../models/Consultation');
 const RendezVous = require('../models/RendezVous');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
+const notifications = require('../config/notifications');
 const { trouverGrossesse } = require('./patientes');
 const cpn = require('../config/cpn');
 const { messageValidation } = require('../config/erreursFr');
@@ -212,6 +213,14 @@ async function finaliser(c, req, res) {
   }
   await c.save();
   await journaliser(req, { action: 'consultation.finalisation', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id }, details: { type: c.type } });
+  // Conseils donnés à la patiente : visibles dans son application (rubrique Conseils).
+  if (c.conseils) {
+    notifications.notifierPatiente(c.patienteId, {
+      titre: `Nouveau conseil de ${req.soignant.prenom} ${req.soignant.nom}`.trim(),
+      corps: 'Votre médecin vous a laissé des conseils. Ouvrez l’application pour les lire.',
+      donnees: { type: 'conseil', consultationId: c.id },
+    });
+  }
   res.json(c);
 }
 

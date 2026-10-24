@@ -110,6 +110,16 @@ const patienteSchema = new mongoose.Schema({
   statut: { type: String, enum: STATUTS_PATIENTE, default: 'Suivi prénatal' },
   /** Espace en ligne de la patiente (activation par lien sécurisé : phase application mobile). */
   espaceEnLigne: { type: String, enum: ['Non activé', 'Invitation envoyée', 'Activé'], default: 'Non activé' },
+  /** Téléphones de l'application mobile : jetons Firebase Cloud Messaging (notifications push). */
+  appareils: {
+    type: [new mongoose.Schema({
+      jeton: { type: String, required: true },
+      plateforme: { type: String, enum: ['android', 'ios', 'web'], default: 'android' },
+      le: { type: Date, required: true },
+    }, { _id: false })],
+    default: [],
+    select: false,
+  },
 
   creePar: { type: auteurSchema, required: true },
   modifiePar: { type: auteurSchema, default: undefined },

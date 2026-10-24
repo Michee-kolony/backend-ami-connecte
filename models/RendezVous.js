@@ -36,9 +36,40 @@ const rendezVousSchema = new mongoose.Schema({
   creePar: { type: auteurSchema, required: true },
   modifiePar: { type: auteurSchema, default: undefined },
   historique: { type: [evenementSchema], default: [] },
+  /** Rappels push envoyés la veille et le matin même (voir config/rappels.js). */
+  rappelPushLe: { type: Date, default: null },
+  rappelJourPushLe: { type: Date, default: null },
 }, { timestamps: true, toJSON: { transform: versJson } });
 
+/** Notification push à la patiente : rendez-vous créé, déplacé ou annulé. */
+rendezVousSchema.pre('save', function () {
+  this.$locals.nouveau = this.isNew;
+  this.$locals.deplace = !this.isNew && this.isModified('date');
+  this.$locals.annule = !this.isNew && this.isModified('statut') && this.statut === 'Annulé';
+});
+
+rendezVousSchema.post('save', function (rdv) {
+  const { nouveau, deplace, annule } = rdv.$locals;
+  if (!nouveau && !deplace && !annule) return;
+  if (!annule && !STATUTS_ACTIFS.includes(rdv.statut)) return;
+  if (!annule && rdv.date < new Date()) return;
+  // Chargé ici : config/notifications dépend du modèle Patiente.
+  const { notifierPatiente } = require('../config/notifications');
+  const quand = dateLisible(rdv.date);
+  const pour = rdv.enfantId ? ' de votre enfant' : '';
+  const titre = annule ? `Rendez-vous${pour} annulé` : deplace ? `Rendez-vous${pour} déplacé` : `Nouveau rendez-vous${pour}`;
+  const corps = annule ? `Le rendez-vous du ${quand} est annulé.` : `Le ${quand}. Ouvrez l’application pour les détails.`;
+  notifierPatiente(rdv.patienteId, { titre, corps, donnees: { type: 'rendez-vous', rendezVousId: rdv.id } });
+});
+
+/** « vendredi 30 octobre à 09:00 », heure de Kinshasa. */
+function dateLisible(date) {
+  return new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Kinshasa', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    .format(date);
+}
+
 module.exports = mongoose.model('RendezVous', rendezVousSchema, 'rendezvous');
+module.exports.dateLisible = dateLisible;
 module.exports.STATUTS_RDV = STATUTS_RDV;
 module.exports.STATUTS_ACTIFS = STATUTS_ACTIFS;
 module.exports.CANAUX_RAPPEL = CANAUX_RAPPEL;

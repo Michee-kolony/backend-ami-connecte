@@ -3,6 +3,7 @@ const Article = require('../models/Article');
 const { auteurDe } = require('../models/commun');
 const { ROLES_GESTION } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
+const notifications = require('../config/notifications');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
 
@@ -12,6 +13,22 @@ const IMAGE_TAILLE_MAX = 5 * 1024 * 1024;
 
 const erreur = (status, message) => Object.assign(new Error(message), { status });
 const texte = (v, max) => (v == null ? '' : String(v).trim().slice(0, max));
+
+/** Patientes concernées par un article selon son public (dossiers archivés exclus). */
+const PATIENTES_CIBLES = {
+  'Grossesse (CPN)': { statut: 'Suivi prénatal' },
+  'Après l’accouchement': { statut: { $in: ['Grossesse terminée', 'Suivi postnatal'] } },
+  'Tous publics': { statut: { $ne: 'Archivé' } },
+};
+
+/** Article devenu visible des patientes : notification push à celles qu'il concerne (sans attendre). */
+function annoncer(article) {
+  notifications.notifierPatientes(PATIENTES_CIBLES[article.cible] ?? PATIENTES_CIBLES['Tous publics'], {
+    titre: `Nouveau conseil du Dr ${article.auteur.nom}`.trim(),
+    corps: article.titre,
+    donnees: { type: 'article', articleId: article.id },
+  });
+}
 
 /** Médecin chef : approuve et supprime les articles, supprime tout commentaire. */
 const estChef = (req) => ROLES_GESTION.includes(req.soignant.role);
@@ -121,6 +138,7 @@ exports.creer = async (req, res) => {
     throw err;
   }
   await journaliser(req, { action: 'article.publication', ressource: { type: 'article', id: article.id }, details: { statut: article.statut } });
+  if (!article.enAttente) annoncer(article);
   res.status(201).json(vue(article, req));
 };
 
@@ -133,6 +151,7 @@ exports.approuver = async (req, res) => {
   article.approbation = { par: auteurDe(req.soignant), le: new Date() };
   await article.save();
   await journaliser(req, { action: 'article.approbation', ressource: { type: 'article', id: article.id }, details: { auteur: article.auteur.id } });
+  annoncer(article);
   res.json(vue(article, req));
 };
 

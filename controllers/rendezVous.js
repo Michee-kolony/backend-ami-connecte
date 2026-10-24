@@ -7,6 +7,7 @@ const JournalAudit = require('../models/JournalAudit');
 const { auteurDe } = require('../models/commun');
 const { journaliser, ACTIONS } = require('../config/audit');
 const { trouverPatiente } = require('./patientes');
+const rappels = require('../config/rappels');
 
 const { STATUTS_ACTIFS, CANAUX_RAPPEL } = RendezVous;
 const erreur = (status, message, extra) => Object.assign(new Error(message), { status, ...extra });
@@ -113,6 +114,25 @@ exports.modifier = async (req, res) => {
   await rdv.save();
   await journaliser(req, { action: 'rdv.modification', patienteId: rdv.patienteId, ressource: { type: 'rendezvous', id: rdv.id }, details: { statut: regle.statut } });
   res.json(rdv);
+};
+
+/** Délai minimal entre deux rappels envoyés à la demande (évite les doubles clics et les envois répétés). */
+const DELAI_RAPPELS_MS = 10 * 60000;
+
+/**
+ * Bouton « Envoyer les rappels » de l'agenda (médecins) : chaque patiente ayant un rendez-vous
+ * attendu dans les 30 prochains jours reçoit une notification avec la date du prochain.
+ */
+exports.envoyerRappels = async (req, res) => {
+  const dernier = await JournalAudit.findOne({ action: 'rdv.rappels', le: { $gte: new Date(Date.now() - DELAI_RAPPELS_MS) } }).sort({ le: -1 });
+  if (dernier) {
+    const minutes = Math.ceil((dernier.le.getTime() + DELAI_RAPPELS_MS - Date.now()) / 60000);
+    throw erreur(429, `Rappels déjà envoyés par ${dernier.acteur?.nom ?? 'un médecin'} il y a quelques minutes. Réessayez dans ${minutes} min.`);
+  }
+  // Journalisé avant l'envoi : un second clic pendant l'envoi est refusé.
+  await journaliser(req, { action: 'rdv.rappels' });
+  const bilan = await rappels.rappelerProchainsRendezVous();
+  res.json({ ...bilan, horizonJours: rappels.HORIZON_MANUEL_JOURS });
 };
 
 /** Journal d'audit global (médecin chef) : paginé, sans contenu clinique. */

@@ -15,6 +15,7 @@ const Consultation = require('../models/Consultation');
 const Article = require('../models/Article');
 const Soignant = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
+const notifications = require('../config/notifications');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
@@ -368,4 +369,20 @@ exports.grossesse = async (req, res) => {
     consultations: consultations.map(fichePourPatiente),
     rendezVous: rendezVous.map((r) => rdvPourPatiente(r, new Map())),
   });
+};
+
+/** Téléphone de la patiente : jeton Firebase pour recevoir les notifications push. */
+exports.enregistrerAppareil = async (req, res) => {
+  const jeton = texte(req.body?.jeton, 4096);
+  if (!jeton) throw erreur(400, 'Jeton de notification requis.');
+  const plateforme = ['android', 'ios', 'web'].includes(req.body?.plateforme) ? req.body.plateforme : 'android';
+  await notifications.enregistrerAppareil(req.patiente._id, jeton, plateforme);
+  res.status(204).end();
+};
+
+/** Déconnexion du téléphone : il ne reçoit plus de notifications. */
+exports.retirerAppareil = async (req, res) => {
+  const jeton = texte(req.body?.jeton, 4096);
+  if (jeton) await notifications.retirerAppareil(req.patiente._id, jeton);
+  res.status(204).end();
 };

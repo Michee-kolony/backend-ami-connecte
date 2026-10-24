@@ -454,6 +454,18 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   const jeton = c.corps.jeton;
   assert.equal(c.corps.patiente.numero, patiente.numero);
 
+  // Téléphone pour les notifications push : un jeton n'est gardé qu'une fois, et jamais exposé.
+  const PatienteM = require('../models/Patiente');
+  assert.equal((await appel(jeton, 'POST', '/espace-patiente/appareils', {})).status, 400);
+  assert.equal((await appel(jeton, 'POST', '/espace-patiente/appareils', { jeton: 'fcm-1', plateforme: 'android' })).status, 204);
+  await appel(jeton, 'POST', '/espace-patiente/appareils', { jeton: 'fcm-1', plateforme: 'android' });
+  await appel(jeton, 'POST', '/espace-patiente/appareils', { jeton: 'fcm-2', plateforme: 'ios' });
+  assert.deepEqual((await PatienteM.findById(patiente.id).select('+appareils')).appareils.map((a) => a.jeton), ['fcm-1', 'fcm-2']);
+  assert.equal((await appel(jeton, 'DELETE', '/espace-patiente/appareils', { jeton: 'fcm-1' })).status, 204);
+  assert.deepEqual((await PatienteM.findById(patiente.id).select('+appareils')).appareils.map((a) => a.jeton), ['fcm-2']);
+  assert.equal((await appel(jeton, 'GET', '/espace-patiente/moi')).corps.appareils, undefined);
+  await PatienteM.updateOne({ _id: patiente.id }, { appareils: [] });
+
   const accueil = await appel(jeton, 'GET', '/espace-patiente/accueil');
   assert.equal(accueil.status, 200);
   assert.equal(accueil.corps.enfants[0].prenom, 'Joie');

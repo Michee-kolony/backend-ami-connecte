@@ -23,6 +23,7 @@ const ACTIONS = {
   'consultation.annulation': 'Consultation annulée',
   'rdv.creation': 'Rendez-vous planifié',
   'rdv.modification': 'Rendez-vous modifié',
+  'rdv.rappels': 'Rappels de rendez-vous envoyés aux patientes (notifications)',
   'journal.lecture': 'Consultation du journal d’audit',
   'acces.refuse': 'Accès refusé',
   'article.publication': 'Article de conseils publié',

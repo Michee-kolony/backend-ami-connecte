@@ -11,6 +11,8 @@ router.post('/connexion', ctrl.connexion);
 router.use(authentifierPatiente);
 router.get('/moi', ctrl.moi);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
+router.post('/appareils', ctrl.enregistrerAppareil);
+router.delete('/appareils', ctrl.retirerAppareil);
 router.get('/accueil', ctrl.accueil);
 router.get('/rendez-vous', ctrl.rendezVous);
 router.get('/grossesse', ctrl.grossesse);

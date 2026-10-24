@@ -102,6 +102,8 @@ const enfantSchema = new mongoose.Schema({
   suivis: { type: [suiviSchema], default: [] },
 
   statut: { type: String, enum: STATUTS_ENFANT, default: 'Suivi' },
+  /** Dernier rappel push de vaccination envoyé à la mère (AAAA-MM-JJ, voir config/rappels.js). */
+  rappelVaccinJour: { type: String, default: null },
   creePar: { type: auteurSchema, required: true },
   modifiePar: { type: auteurSchema, default: undefined },
 }, {
@@ -110,6 +112,7 @@ const enfantSchema = new mongoose.Schema({
     transform: (doc, ret) => {
       versJson(doc, ret);
       delete ret.photoCle;
+      delete ret.rappelVaccinJour;
       return ret;
     },
   },

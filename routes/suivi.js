@@ -32,6 +32,7 @@ consult.post('/:id/annuler', consultations.annuler);
 const rdv = express.Router();
 rdv.use(authentifier);
 rdv.get('/', rendezVous.agenda);
+rdv.post('/rappels', exigerMedecin, rendezVous.envoyerRappels);
 rdv.patch('/:id', exigerMedecin, rendezVous.modifier);
 
 const journal = express.Router();

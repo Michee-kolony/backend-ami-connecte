@@ -10,6 +10,7 @@ const Patiente = require('../models/Patiente');
 const { urlSignee } = require('../config/r2');
 const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const presence = require('../config/presence');
+const notifications = require('../config/notifications');
 
 const TAILLE_MAX = 2000;
 const PAR_PAGE = 50;
@@ -148,6 +149,15 @@ exports.envoyer = async (req, res) => {
   await d.save();
   const message = versClient(m);
   for (const p of d.participants) presence.emettre(String(p), 'discussion:message', message);
+  // Message d'un soignant à une patiente : notification push (sans le contenu du message).
+  if (d.patienteId?.equals(autre)) {
+    const auteur = await Soignant.findById(moi).select('prenom nom');
+    notifications.notifierPatiente(autre, {
+      titre: auteur ? `Message de ${auteur.prenom} ${auteur.nom}`.trim() : 'Nouveau message',
+      corps: 'Vous avez reçu un nouveau message. Ouvrez l’application pour le lire.',
+      donnees: { type: 'message', discussionId: d.id },
+    });
+  }
   res.status(201).json(message);
 };
 
