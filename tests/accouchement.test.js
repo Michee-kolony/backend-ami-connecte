@@ -260,7 +260,7 @@ test('surveillance du travail : latence puis phase active, alertes BCF, zone jau
   const saisir = (corps) => appel('sageFemme', 'POST', `/accouchements/${dossierId}/surveillances`, corps);
   assert.equal((await saisir({})).status, 400, 'au moins une mesure');
 
-  const latence = await saisir({ le: ilYaH(11), dilatationCm: 2, bcf: 140, contractions10min: 2, dureeContractionsSec: 30, saignement: '0' });
+  const latence = await saisir({ le: ilYaH(11), dilatationCm: 2, effacementPct: 30, bcf: 140, contractions10min: 2, dureeContractionsSec: 30, saignement: '0' });
   assert.equal(latence.status, 201, JSON.stringify(latence.corps));
   assert.equal(latence.corps.surveillance.phase, 'Latence');
   assert.equal(latence.corps.alertes.length, 0);
@@ -270,7 +270,7 @@ test('surveillance du travail : latence puis phase active, alertes BCF, zone jau
   assert.deepEqual(debutActive.corps.alertes.map((x) => x.code), ['BCF'], 'BCF > 160');
   assert.equal(debutActive.corps.alertes[0].sonore, true);
 
-  const jaune = await saisir({ le: ilYaH(8), dilatationCm: 5, bcf: 138 });
+  const jaune = await saisir({ le: ilYaH(8), dilatationCm: 5, effacementPct: 70, bcf: 138 });
   assert.deepEqual(jaune.corps.alertes.map((x) => x.code), ['Zone jaune']);
 
   const stagnation = await saisir({ le: ilYaH(6), dilatationCm: 5, bcf: 135 });
@@ -288,6 +288,10 @@ test('surveillance du travail : latence puis phase active, alertes BCF, zone jau
   assert.equal(dossier.corps.surveillances[0].tempsDepuis.ruptureH, 2);
   assert.equal(dossier.corps.surveillances[0].tempsDepuis.debutTravailH, 3);
   assert.equal(dossier.corps.partogramme.bcf.points.length, 5);
+  // Effacement du col : courbe propre, heures comptées depuis le début de la phase active.
+  assert.deepEqual(dossier.corps.partogramme.effacement.points.map((x) => [x.pct, x.phase, x.heures]), [[30, 'Latence', -1], [70, 'Active', 2]]);
+  assert.equal(dossier.corps.surveillances[0].effacementPct, 30);
+  assert.equal((await saisir({ effacementPct: 120 })).status, 400, 'effacement entre 0 et 100 %');
 
   const alertes = await appel('medecin', 'GET', '/accouchements/alertes');
   assert.equal(alertes.corps.length, 5);

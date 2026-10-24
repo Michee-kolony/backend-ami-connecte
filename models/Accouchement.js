@@ -101,6 +101,8 @@ const surveillanceSchema = new mongoose.Schema({
   taSystolique: nombre(50, 260), taDiastolique: nombre(30, 180),
   diurese: texte,
   dilatationCm: nombre(0, 10),
+  /** Effacement du col (%). */
+  effacementPct: nombre(0, 100),
   // Phase de latence
   affection: texte,
   traitements: texte,

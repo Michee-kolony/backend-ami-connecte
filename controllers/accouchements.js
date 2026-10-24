@@ -60,7 +60,7 @@ const SPEC_EXAMEN = {
 };
 const SPEC_SURVEILLANCE = {
   saignement: C(acc.SAIGNEMENTS), contractions10min: N, dureeContractionsSec: N, bcf: N, temperature: N, pouls: N,
-  taSystolique: N, taDiastolique: N, diurese: T(200), dilatationCm: N, affection: T(1000), traitements: T(1000),
+  taSystolique: N, taDiastolique: N, diurese: T(200), dilatationCm: N, effacementPct: N, affection: T(1000), traitements: T(1000),
   membranes: C(acc.MEMBRANES), liquideAmniotique: C(acc.ASPECTS_LA), ocytocine: { uParMl: N, gouttesMin: N },
   medicamentsIV: T(1000), engagement: C(codes(acc.ENGAGEMENTS_PARTOGRAMME)), incident: T(1000),
 };
@@ -177,7 +177,7 @@ function resume(a, patiente, photoUrl = null) {
     patiente: patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl } : null,
     admiseLe: a.admission.admiseLe,
     phase: a.phaseActiveLe ? 'Active' : 'Latence',
-    derniereSurveillance: derniere ? { le: derniere.le, dilatationCm: derniere.dilatationCm, bcf: derniere.bcf } : null,
+    derniereSurveillance: derniere ? { le: derniere.le, dilatationCm: derniere.dilatationCm, effacementPct: derniere.effacementPct, bcf: derniere.bcf } : null,
     zoneActuelle: partogramme.pointsDilatation(a.surveillances, a.phaseActiveLe).at(-1)?.zone ?? null,
     alertesActives: actives.length,
     alertesCritiques: actives.filter((x) => x.niveau === 'Critique').length,

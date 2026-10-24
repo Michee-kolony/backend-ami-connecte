@@ -48,10 +48,11 @@ function pointsDilatation(surveillances, debutPhaseActive) {
     });
 }
 
-/** Données des deux graphes de la phase active (BCF et dilatation). */
+/** Données des graphes du partogramme (BCF, dilatation et effacement du col). */
 function partogramme(surveillances, debutPhaseActive) {
   const debut = debutPhaseActive ? new Date(debutPhaseActive).getTime() : null;
   const points = pointsDilatation(surveillances, debutPhaseActive);
+  const heures = (s) => (debut != null ? Math.round(((s.le - debut) / HEURE) * 100) / 100 : null);
   return {
     debutPhaseActive: debutPhaseActive ?? null,
     bcf: {
@@ -60,9 +61,15 @@ function partogramme(surveillances, debutPhaseActive) {
         .filter((s) => s.bcf != null)
         .sort((a, b) => a.le - b.le)
         .map((s) => ({
-          id: String(s._id), le: s.le, phase: s.phase, bcf: s.bcf, anormal: bcfAnormal(s.bcf),
-          heures: debut != null ? Math.round(((s.le - debut) / HEURE) * 100) / 100 : null,
+          id: String(s._id), le: s.le, phase: s.phase, bcf: s.bcf, anormal: bcfAnormal(s.bcf), heures: heures(s),
         })),
+    },
+    effacement: {
+      echelle: [0, 100],
+      points: surveillances
+        .filter((s) => s.effacementPct != null)
+        .sort((a, b) => a.le - b.le)
+        .map((s) => ({ id: String(s._id), le: s.le, phase: s.phase, pct: s.effacementPct, heures: heures(s) })),
     },
     dilatation: {
       echelle: [PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM],
