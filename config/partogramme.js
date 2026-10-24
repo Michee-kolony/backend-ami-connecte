@@ -86,6 +86,35 @@ function partogramme(surveillances, debutPhaseActive) {
 }
 
 /**
+ * Mesures d'un dossier d'accouchement tracées sur le partogramme : surveillances du travail et,
+ * en premier point, le BCF, la dilatation et l'effacement de l'examen clinique d'entrée. Une
+ * dilatation ≥ 4 cm à l'entrée fait commencer la phase active à l'heure de l'examen.
+ */
+function mesures(a) {
+  const liste = [...a.surveillances];
+  let debutPhaseActive = a.phaseActiveLe ?? null;
+  const ex = a.examenClinique;
+  const o = ex?.obstetrical;
+  const tv = o?.toucherVaginal;
+  if (ex?.examineLe && (o?.bcf != null || tv?.dilatationCm != null || tv?.effacementPct != null)) {
+    const le = ex.examineLe;
+    const active = tv?.dilatationCm != null && tv.dilatationCm >= PHASE_ACTIVE_CM;
+    if (active && (!debutPhaseActive || le < debutPhaseActive)) debutPhaseActive = le;
+    liste.push({
+      _id: 'examen-entree', le, phase: active ? 'Active' : 'Latence',
+      bcf: o.bcf ?? null, dilatationCm: tv?.dilatationCm ?? null, effacementPct: tv?.effacementPct ?? null,
+    });
+  }
+  return { surveillances: liste, debutPhaseActive };
+}
+
+/** Partogramme d'un dossier d'accouchement (examen d'entrée compris). */
+function duDossier(a) {
+  const m = mesures(a);
+  return partogramme(m.surveillances, m.debutPhaseActive);
+}
+
+/**
  * Alertes déclenchées par une nouvelle saisie. `alertesExistantes` évite de répéter la même
  * alerte de stagnation pendant un même épisode en zone jaune.
  */
@@ -135,5 +164,5 @@ function alertesDe(entree, surveillances, debutPhaseActive, alertesExistantes = 
 
 module.exports = {
   BCF, PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM, VITESSE_CM_H, DECALAGE_ACTION_H, STAGNATION_H,
-  zoneDilatation, bcfAnormal, partogramme, pointsDilatation, alertesDe,
+  zoneDilatation, bcfAnormal, partogramme, pointsDilatation, alertesDe, mesures, duDossier,
 };

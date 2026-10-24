@@ -1,3 +1,4 @@
+const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const Accouchement = require('../models/Accouchement');
 const Patiente = require('../models/Patiente');
@@ -13,7 +14,7 @@ const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
 const { urlSignee, supprimerFichier } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
-const { trouverPatiente, champsAdministratifs, chercherDoublons } = require('./patientes');
+const { trouverPatiente, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
 const enfants = require('./enfants');
 const suiviPrenatal = require('./suiviPrenatal');
@@ -22,6 +23,7 @@ const { erreur, texte, nombre, instant, jour, objet, T, N, B, C, D, J, lire, fus
 const { STATUTS_ACTIFS } = RendezVous;
 const codes = (liste) => liste.map((x) => x.code);
 const HEURE = 3600000;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const heuresEntre = (debut, fin) => (debut ? Math.round(((fin - debut) / HEURE) * 100) / 100 : null);
 
 // Spécifications des formulaires (liste blanche des champs, convertis).
@@ -150,7 +152,7 @@ async function vue(a) {
       debutTravailH: a.admission.debutTravail ? heuresEntre(a.admission.debutTravail, s.le) : null,
     },
   }));
-  json.partogramme = partogramme.partogramme(a.surveillances, a.phaseActiveLe);
+  json.partogramme = partogramme.duDossier(a);
   json.planningPostPartum = planningPostPartum(a);
   json.patiente = patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl: await urlSignee(patiente.photoCle) } : null;
   json.nouveauNes = await Promise.all(nouveauNes.map(enfants.resumeAvecPhoto));
@@ -172,13 +174,14 @@ async function vue(a) {
 function resume(a, patiente, photoUrl = null) {
   const derniere = [...a.surveillances].sort((x, y) => x.le - y.le).at(-1);
   const actives = a.alertes.filter((x) => !x.acquitteeLe);
+  const m = partogramme.mesures(a);
   return {
     id: a.id, numero: a.numero, statut: a.statut, etablissementId: a.etablissementId,
     patiente: patiente ? { id: patiente.id, numero: patiente.numero, nom: patiente.nom, postnom: patiente.postnom, prenom: patiente.prenom, photoUrl } : null,
     admiseLe: a.admission.admiseLe,
-    phase: a.phaseActiveLe ? 'Active' : 'Latence',
+    phase: m.debutPhaseActive ? 'Active' : 'Latence',
     derniereSurveillance: derniere ? { le: derniere.le, dilatationCm: derniere.dilatationCm, effacementPct: derniere.effacementPct, bcf: derniere.bcf } : null,
-    zoneActuelle: partogramme.pointsDilatation(a.surveillances, a.phaseActiveLe).at(-1)?.zone ?? null,
+    zoneActuelle: partogramme.pointsDilatation(m.surveillances, m.debutPhaseActive).at(-1)?.zone ?? null,
     alertesActives: actives.length,
     alertesCritiques: actives.filter((x) => x.niveau === 'Critique').length,
     accoucheeLe: a.accouchement?.heure ?? null,
@@ -217,19 +220,34 @@ exports.alertes = async (req, res) => {
 
 /**
  * Admission directe : femme venue accoucher sans aucun dossier dans la plateforme (pas de CPN).
- * Dossier patiente minimal (identité, âge, contact) ; photo, e-mail et espace en ligne pourront
- * être ajoutés plus tard depuis son dossier. Renvoie null après avoir répondu 409 si des dossiers
- * possiblement identiques existent et que le soignant n'a pas confirmé.
+ * Dossier patiente minimal (identité, âge, contact) et compte de l'application patiente (e-mail et
+ * mot de passe choisis par elle, comme à l'enregistrement CPN) pour suivre son bébé ; la photo
+ * pourra être ajoutée plus tard. Renvoie null après avoir répondu 409 si des dossiers possiblement
+ * identiques existent et que le soignant n'a pas confirmé.
  */
 async function patienteAdmissionDirecte(req, res) {
   const d = objet(req.body.nouvellePatiente);
   const champs = champsAdministratifs({
     nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
-    telephone: d.telephone, contactUrgence: objet(d.contactUrgence), adresse: objet(d.adresse),
+    telephone: d.telephone, contactUrgence: objet(d.contactUrgence), adresse: objet(d.adresse), email: d.email,
   });
-  delete champs.email;
   if (!champs.nom) throw erreur(400, 'Le nom de la patiente est obligatoire.');
   if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge de la patiente obligatoire.');
+  if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide (application patiente).');
+  const motDePasse = objet(req.body.compte).motDePasse;
+  if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la patiente trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
+  const memeEmail = await Patiente.findOne({ email: champs.email });
+  if (memeEmail) {
+    res.status(409).json({
+      message: `Cette adresse e-mail appartient déjà au dossier ${memeEmail.numero} : si c’est la même patiente, choisissez son dossier.`,
+      emailExistant: true,
+      doublons: [{
+        id: memeEmail.id, numero: memeEmail.numero, nom: memeEmail.nom, postnom: memeEmail.postnom, prenom: memeEmail.prenom,
+        age: memeEmail.age(), telephoneMasque: memeEmail.telephoneMasque(), commune: memeEmail.adresse?.commune ?? '',
+      }],
+    });
+    return null;
+  }
   const doublons = await chercherDoublons(champs);
   if (doublons.length && req.body.confirmerMalgreDoublons !== true) {
     res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : si c’est la même patiente, choisissez son dossier.', doublons });
@@ -240,6 +258,8 @@ async function patienteAdmissionDirecte(req, res) {
     ageDeclareLe: champs.ageDeclare != null ? new Date().toISOString().slice(0, 10) : null,
     etablissementId: req.etablissementId ?? null,
     enregistreeVia: 'Admission directe',
+    motDePasse: await bcrypt.hash(motDePasse, 12),
+    espaceEnLigne: 'Activé',
     creePar: auteurDe(req.soignant),
     numero: await Patiente.prochainNumero(),
   });
@@ -350,7 +370,9 @@ exports.surveiller = async (req, res) => {
   const le = pasDansLeFutur(instant(req.body.le, 'Heure de la surveillance') ?? new Date(), 'La surveillance');
   if (le < new Date(a.admission.admiseLe.getTime() - 60000)) throw erreur(400, 'La surveillance précède l’admission.');
 
-  let phase = a.phaseActiveLe && le >= a.phaseActiveLe ? 'Active' : 'Latence';
+  // Début de la phase active : surveillances, ou examen d'entrée à 4 cm ou plus.
+  const debutAvant = partogramme.mesures(a).debutPhaseActive;
+  let phase = debutAvant && le >= debutAvant ? 'Active' : 'Latence';
   if (champs.dilatationCm != null && champs.dilatationCm >= partogramme.PHASE_ACTIVE_CM) {
     phase = 'Active';
     if (!a.phaseActiveLe || le < a.phaseActiveLe) a.phaseActiveLe = le;
@@ -358,7 +380,8 @@ exports.surveiller = async (req, res) => {
   a.surveillances.push({ ...champs, le, phase, auteur: auteurDe(req.soignant) });
   const entree = a.surveillances.at(-1);
 
-  const nouvelles = partogramme.alertesDe(entree, a.surveillances, a.phaseActiveLe, a.alertes);
+  const m = partogramme.mesures(a);
+  const nouvelles = partogramme.alertesDe(entree, m.surveillances, m.debutPhaseActive, a.alertes);
   for (const alerte of nouvelles) {
     const medecinsNotifies = alerte.notifierMedecins ? await medecinsANotifier(a.etablissementId) : [];
     a.alertes.push({ ...alerte, surveillanceId: entree._id, le, medecinsNotifies });
@@ -383,13 +406,13 @@ exports.surveiller = async (req, res) => {
   res.status(201).json({
     surveillance: entree.toJSON(),
     alertes: ajoutees.map((x) => x.toJSON()),
-    partogramme: partogramme.partogramme(a.surveillances, a.phaseActiveLe),
+    partogramme: partogramme.duDossier(a),
   });
 };
 
 exports.partogramme = async (req, res) => {
   const a = await trouver(req.params.id);
-  res.json(partogramme.partogramme(a.surveillances, a.phaseActiveLe));
+  res.json(partogramme.duDossier(a));
 };
 
 /** Alerte prise en charge : le soignant et l'heure sont conservés. */

@@ -287,9 +287,13 @@ test('surveillance du travail : latence puis phase active, alertes BCF, zone jau
   assert.equal(dossier.corps.surveillances[0].tempsDepuis.arriveeH, 1);
   assert.equal(dossier.corps.surveillances[0].tempsDepuis.ruptureH, 2);
   assert.equal(dossier.corps.surveillances[0].tempsDepuis.debutTravailH, 3);
-  assert.equal(dossier.corps.partogramme.bcf.points.length, 5);
+  // Examen d'entrée (BCF 140, effacement 50 %) en premier point, puis les 5 surveillances.
+  assert.equal(dossier.corps.partogramme.bcf.points.length, 6);
+  assert.deepEqual([dossier.corps.partogramme.bcf.points[0].bcf, dossier.corps.partogramme.bcf.points[0].id], [140, 'examen-entree']);
   // Effacement du col : courbe propre, heures comptées depuis le début de la phase active.
-  assert.deepEqual(dossier.corps.partogramme.effacement.points.map((x) => [x.pct, x.phase, x.heures]), [[30, 'Latence', -1], [70, 'Active', 2]]);
+  const effacement = dossier.corps.partogramme.effacement.points;
+  assert.deepEqual([effacement[0].pct, effacement[0].phase], [50, 'Latence']);
+  assert.deepEqual(effacement.slice(1).map((x) => [x.pct, x.phase, x.heures]), [[30, 'Latence', -1], [70, 'Active', 2]]);
   assert.equal(dossier.corps.surveillances[0].effacementPct, 30);
   assert.equal((await saisir({ effacementPct: 120 })).status, 400, 'effacement entre 0 et 100 %');
 
@@ -596,33 +600,72 @@ test('suppression d’un dossier d’accouchement : médecins seulement, numéro
   assert.equal((await appel('sageFemme', 'POST', '/accouchements', { patienteId: r.corps.id })).status, 201);
 });
 
-test('admission directe : femme venue accoucher sans dossier ni CPN, dossier minimal créé, doublons signalés', async () => {
+
+test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et compte patiente créés, doublons signalés', async () => {
   const nouvelle = {
-    nom: 'Mbuyi', prenom: 'Grâce', ageDeclare: 24, telephone: '+243 99 555 6677',
+    nom: 'Mbuyi', prenom: 'Grâce', ageDeclare: 24, telephone: '+243 99 555 6677', email: 'grace@essai.test',
     adresse: { commune: 'Ngaliema', quartier: 'Binza' }, contactUrgence: { nom: 'Paul Mbuyi', lien: 'Mari', telephone: '+243 99 000 1111' },
   };
-  assert.equal((await appel('infirmiere', 'POST', '/accouchements', { nouvellePatiente: nouvelle })).status, 403, 'infirmière refusée');
-  assert.equal((await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, nom: '' } })).status, 400, 'nom obligatoire');
-  assert.equal((await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, ageDeclare: null } })).status, 400, 'âge obligatoire');
+  const compte = { motDePasse: 'Bebe2026ok' };
+  const admettre = (corps) => appel('sageFemme', 'POST', '/accouchements', { compte, ...corps });
+  assert.equal((await appel('infirmiere', 'POST', '/accouchements', { nouvellePatiente: nouvelle, compte })).status, 403, 'infirmière refusée');
+  assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, nom: '' } })).status, 400, 'nom obligatoire');
+  assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, ageDeclare: null } })).status, 400, 'âge obligatoire');
+  assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, email: 'pas-un-email' } })).status, 400, 'e-mail obligatoire et valide');
+  assert.equal((await admettre({ nouvellePatiente: nouvelle, compte: { motDePasse: 'court' } })).status, 400, 'mot de passe robuste');
 
-  const a = await appel('sageFemme', 'POST', '/accouchements', {
-    nouvellePatiente: nouvelle, admission: { admiseLe: ilYaH(1), motif: 'Contractions', provenance: 'AS' },
-  });
+  const a = await admettre({ nouvellePatiente: nouvelle, admission: { admiseLe: ilYaH(1), motif: 'Contractions', provenance: 'AS' } });
   assert.equal(a.status, 201, JSON.stringify(a.corps));
   assert.equal(a.corps.admission.nom, 'MBUYI');
   assert.equal(a.corps.admission.personneAPrevenir.nom, 'Paul Mbuyi');
   const mere = await appel('medecin', 'GET', `/patientes/${a.corps.patiente.id}`);
   assert.equal(mere.status, 200);
   assert.equal(mere.corps.patiente.enregistreeVia, 'Admission directe');
-  assert.equal(mere.corps.patiente.email, undefined, 'pas d’espace en ligne imposé');
+  assert.equal(mere.corps.patiente.motDePasse, undefined, 'mot de passe jamais renvoyé');
   assert.equal(mere.corps.grossesses.length, 1, 'grossesse ouverte à l’admission');
 
-  // Même femme revenue : le dossier existant est proposé au lieu d'un doublon.
-  const doublon = await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: nouvelle });
+  // Application patiente : elle se connecte avec l'e-mail et le mot de passe choisis à l'admission.
+  const c = await appel(null, 'POST', '/espace-patiente/connexion', { email: 'grace@essai.test', motDePasse: 'Bebe2026ok' });
+  assert.equal(c.status, 200, JSON.stringify(c.corps));
+  assert.equal(c.corps.patiente.numero, mere.corps.patiente.numero);
+
+  // Même femme revenue (même e-mail, ou même identité) : son dossier existant est proposé.
+  const memeEmail = await admettre({ nouvellePatiente: nouvelle });
+  assert.equal(memeEmail.status, 409);
+  assert.equal(memeEmail.corps.emailExistant, true);
+  assert.equal(memeEmail.corps.doublons[0].numero, mere.corps.patiente.numero);
+  const doublon = await admettre({ nouvellePatiente: { ...nouvelle, email: 'grace2@essai.test' } });
   assert.equal(doublon.status, 409);
   assert.equal(doublon.corps.doublons[0].numero, mere.corps.patiente.numero);
   // Homonyme confirmée par le soignant : nouveau dossier.
-  const homonyme = await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, telephone: '' }, confirmerMalgreDoublons: true });
+  const homonyme = await admettre({ nouvellePatiente: { ...nouvelle, telephone: '', email: 'grace2@essai.test' }, confirmerMalgreDoublons: true });
   assert.equal(homonyme.status, 201, JSON.stringify(homonyme.corps));
   assert.notEqual(homonyme.corps.patiente.id, a.corps.patiente.id);
+});
+
+test('partogramme : BCF, dilatation et effacement de l’examen clinique d’entrée tracés en premier point', async () => {
+  const a = await appel('sageFemme', 'POST', '/accouchements', {
+    nouvellePatiente: { nom: 'Ilunga', prenom: 'Sarah', ageDeclare: 27, email: 'sarah@essai.test' }, compte: { motDePasse: 'Bebe2026ok' },
+    admission: { admiseLe: ilYaH(3) },
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  assert.equal(a.corps.partogramme.bcf.points.length, 0, 'rien avant l’examen');
+
+  const ex = await appel('sageFemme', 'PUT', `/accouchements/${a.corps.id}/examen-clinique`, {
+    examineLe: ilYaH(2.5), obstetrical: { bcf: 150, toucherVaginal: { effacementPct: 80, dilatationCm: 5 } },
+  });
+  assert.equal(ex.status, 200, JSON.stringify(ex.corps));
+  const p = ex.corps.partogramme;
+  assert.equal(p.bcf.points.length, 1);
+  assert.equal(p.bcf.points[0].bcf, 150);
+  assert.equal(p.effacement.points[0].pct, 80);
+  assert.ok(p.debutPhaseActive, 'dilatation ≥ 4 cm à l’entrée : phase active commencée');
+  assert.deepEqual(p.dilatation.points.map((x) => [x.heures, x.cm]), [[0, 5]]);
+
+  // La surveillance suivante se trace à la suite, sur la même phase active.
+  const s = await appel('sageFemme', 'POST', `/accouchements/${a.corps.id}/surveillances`, { le: ilYaH(0.5), bcf: 145, dilatationCm: 7 });
+  assert.equal(s.status, 201, JSON.stringify(s.corps));
+  assert.equal(s.corps.surveillance.phase, 'Active');
+  assert.deepEqual(s.corps.partogramme.dilatation.points.map((x) => x.cm), [5, 7]);
+  assert.deepEqual(s.corps.partogramme.bcf.points.map((x) => x.bcf), [150, 145]);
 });
