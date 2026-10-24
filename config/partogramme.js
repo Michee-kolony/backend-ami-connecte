@@ -77,6 +77,11 @@ function partogramme(surveillances, debutPhaseActive) {
       points,
       zoneActuelle: points.at(-1)?.zone ?? null,
     },
+    // Lignes « Engagement » (M, A, F, E, D) et « Incident » sous le graphe des BCF.
+    reperes: surveillances
+      .filter((s) => s.engagement || s.incident)
+      .sort((a, b) => a.le - b.le)
+      .map((s) => ({ id: String(s._id), le: s.le, heures: heures(s), engagement: s.engagement || null, incident: s.incident || null })),
   };
 }
 
