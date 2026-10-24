@@ -186,6 +186,8 @@ async function chercherDoublons({ nom, prenom, dateNaissance, telephone }, exclu
     age: p.age(), telephoneMasque: p.telephoneMasque(), commune: p.adresse?.commune ?? '',
   }));
 }
+exports.chercherDoublons = chercherDoublons;
+exports.champsAdministratifs = champsAdministratifs;
 
 exports.doublons = async (req, res) => {
   res.json(await chercherDoublons({

@@ -13,7 +13,7 @@ const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
 const { urlSignee, supprimerFichier } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
-const { trouverPatiente } = require('./patientes');
+const { trouverPatiente, champsAdministratifs, chercherDoublons } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
 const enfants = require('./enfants');
 const suiviPrenatal = require('./suiviPrenatal');
@@ -216,13 +216,46 @@ exports.alertes = async (req, res) => {
 };
 
 /**
- * Module 1 — Admission en salle de travail d'une patiente enregistrée. Sans grossesse en cours
- * dans la plateforme (arrivée directement en travail), une grossesse est ouverte, non datée.
+ * Admission directe : femme venue accoucher sans aucun dossier dans la plateforme (pas de CPN).
+ * Dossier patiente minimal (identité, âge, contact) ; photo, e-mail et espace en ligne pourront
+ * être ajoutés plus tard depuis son dossier. Renvoie null après avoir répondu 409 si des dossiers
+ * possiblement identiques existent et que le soignant n'a pas confirmé.
+ */
+async function patienteAdmissionDirecte(req, res) {
+  const d = objet(req.body.nouvellePatiente);
+  const champs = champsAdministratifs({
+    nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
+    telephone: d.telephone, contactUrgence: objet(d.contactUrgence), adresse: objet(d.adresse),
+  });
+  delete champs.email;
+  if (!champs.nom) throw erreur(400, 'Le nom de la patiente est obligatoire.');
+  if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge de la patiente obligatoire.');
+  const doublons = await chercherDoublons(champs);
+  if (doublons.length && req.body.confirmerMalgreDoublons !== true) {
+    res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : si c’est la même patiente, choisissez son dossier.', doublons });
+    return null;
+  }
+  return new Patiente({
+    ...champs,
+    ageDeclareLe: champs.ageDeclare != null ? new Date().toISOString().slice(0, 10) : null,
+    etablissementId: req.etablissementId ?? null,
+    enregistreeVia: 'Admission directe',
+    creePar: auteurDe(req.soignant),
+    numero: await Patiente.prochainNumero(),
+  });
+}
+
+/**
+ * Module 1 — Admission en salle de travail : patiente enregistrée (`patienteId`) ou femme venue
+ * directement accoucher sans dossier (`nouvellePatiente`). Sans grossesse en cours dans la
+ * plateforme (arrivée directement en travail), une grossesse est ouverte, non datée.
  */
 exports.admettre = async (req, res) => {
-  const p = await trouverPatiente(String(req.body?.patienteId || ''));
+  const directe = !req.body?.patienteId && req.body?.nouvellePatiente;
+  const p = directe ? await patienteAdmissionDirecte(req, res) : await trouverPatiente(String(req.body?.patienteId || ''));
+  if (!p) return;
   const auteur = auteurDe(req.soignant);
-  let g = await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 });
+  let g = p.isNew ? null : await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 });
   if (g) {
     const existant = await Accouchement.findOne({ grossesseId: g._id }).select('numero');
     if (existant) throw erreur(409, `Un dossier d’accouchement existe déjà pour cette grossesse (${existant.numero}).`, { accouchementId: existant.id });
@@ -239,17 +272,25 @@ exports.admettre = async (req, res) => {
     patienteId: p._id, grossesseId: g._id, etablissementId: req.etablissementId,
     admission, creePar: auteur,
   });
+  if (p.isNew) await valider(p);
   await valider(a);
-  if (g.isNew) {
-    await g.save();
-    await journaliser(req, { action: 'grossesse.creation', patienteId: p._id, ressource: { type: 'grossesse', id: g.id } });
-  }
+  // Sans transaction (MongoDB autonome) : en cas d'échec, les documents créés ici sont retirés.
+  const nouvellePatiente = p.isNew;
+  const nouvelleGrossesse = g.isNew;
   try {
+    if (nouvellePatiente) await p.save();
+    if (nouvelleGrossesse) await g.save();
     await a.save();
   } catch (err) {
+    await Promise.all([
+      nouvelleGrossesse && Grossesse.deleteOne({ _id: g._id }),
+      nouvellePatiente && Patiente.deleteOne({ _id: p._id }),
+    ]).catch(() => {});
     if (err.code === 11000) throw erreur(409, 'Identifiant déjà attribué, réessayez.');
     throw err;
   }
+  if (nouvellePatiente) await journaliser(req, { action: 'patiente.creation', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { via: 'Admission directe' } });
+  if (nouvelleGrossesse) await journaliser(req, { action: 'grossesse.creation', patienteId: p._id, ressource: { type: 'grossesse', id: g.id } });
   await journaliser(req, { action: 'accouchement.admission', patienteId: p._id, ressource: { type: 'accouchement', id: a.numero } });
   res.status(201).json(await vue(a));
 };

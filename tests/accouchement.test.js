@@ -595,3 +595,34 @@ test('suppression d’un dossier d’accouchement : médecins seulement, numéro
   // Nouvelle admission possible pour cette grossesse.
   assert.equal((await appel('sageFemme', 'POST', '/accouchements', { patienteId: r.corps.id })).status, 201);
 });
+
+test('admission directe : femme venue accoucher sans dossier ni CPN, dossier minimal créé, doublons signalés', async () => {
+  const nouvelle = {
+    nom: 'Mbuyi', prenom: 'Grâce', ageDeclare: 24, telephone: '+243 99 555 6677',
+    adresse: { commune: 'Ngaliema', quartier: 'Binza' }, contactUrgence: { nom: 'Paul Mbuyi', lien: 'Mari', telephone: '+243 99 000 1111' },
+  };
+  assert.equal((await appel('infirmiere', 'POST', '/accouchements', { nouvellePatiente: nouvelle })).status, 403, 'infirmière refusée');
+  assert.equal((await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, nom: '' } })).status, 400, 'nom obligatoire');
+  assert.equal((await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, ageDeclare: null } })).status, 400, 'âge obligatoire');
+
+  const a = await appel('sageFemme', 'POST', '/accouchements', {
+    nouvellePatiente: nouvelle, admission: { admiseLe: ilYaH(1), motif: 'Contractions', provenance: 'AS' },
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  assert.equal(a.corps.admission.nom, 'MBUYI');
+  assert.equal(a.corps.admission.personneAPrevenir.nom, 'Paul Mbuyi');
+  const mere = await appel('medecin', 'GET', `/patientes/${a.corps.patiente.id}`);
+  assert.equal(mere.status, 200);
+  assert.equal(mere.corps.patiente.enregistreeVia, 'Admission directe');
+  assert.equal(mere.corps.patiente.email, undefined, 'pas d’espace en ligne imposé');
+  assert.equal(mere.corps.grossesses.length, 1, 'grossesse ouverte à l’admission');
+
+  // Même femme revenue : le dossier existant est proposé au lieu d'un doublon.
+  const doublon = await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: nouvelle });
+  assert.equal(doublon.status, 409);
+  assert.equal(doublon.corps.doublons[0].numero, mere.corps.patiente.numero);
+  // Homonyme confirmée par le soignant : nouveau dossier.
+  const homonyme = await appel('sageFemme', 'POST', '/accouchements', { nouvellePatiente: { ...nouvelle, telephone: '' }, confirmerMalgreDoublons: true });
+  assert.equal(homonyme.status, 201, JSON.stringify(homonyme.corps));
+  assert.notEqual(homonyme.corps.patiente.id, a.corps.patiente.id);
+});
