@@ -61,6 +61,7 @@ exports.moi = async (req, res) => {
 
 /** Carte patiente (PDF), même modèle que celle imprimée par le médecin. */
 exports.carte = carte.cartePatiente;
+exports.apercuCarte = carte.apercuPatiente;
 
 const DUREE_LIEN_CARTE = '5m';
 

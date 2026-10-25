@@ -539,12 +539,27 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.equal(carteDirecte.status, 200);
   assert.equal(carteDirecte.headers.get('content-type'), 'application/pdf');
   assert.equal(Buffer.from(await carteDirecte.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  const apercu = await appel(jeton, 'GET', '/espace-patiente/carte/apercu');
+  assert.equal(apercu.status, 200, JSON.stringify(apercu.corps));
+  assert.match(apercu.corps.qr, /^data:image\/png;base64,/, 'QR code identique au PDF');
+  assert.match(apercu.corps.numero, /^AC-PAT-/);
+  assert.ok(apercu.corps.delivreeLe && apercu.corps.delivreePar);
   const lien = await appel(jeton, 'POST', '/espace-patiente/carte/lien');
   assert.equal(lien.status, 200, JSON.stringify(lien.corps));
   const parLien = await fetch(`${api}${lien.corps.chemin}`);
   assert.equal(parLien.status, 200);
   assert.equal(Buffer.from(await parLien.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
   assert.equal((await fetch(`${api}/espace-patiente/carte.pdf?jeton=faux`)).status, 401);
+  // QR code : même domaine que l'espace admin (mémorisé à la connexion d'un soignant, localhost ignoré).
+  const domaine = require('../config/domaineAdmin');
+  const appUrl = process.env.APP_URL;
+  delete process.env.APP_URL;
+  await domaine.memoriser('https://admin.ami-sante.test/admin/accueil');
+  await domaine.memoriser('http://localhost:4200');
+  assert.equal(await domaine.domaineAdmin(), 'https://admin.ami-sante.test');
+  process.env.APP_URL = 'https://tableau.ami-sante.test';
+  assert.equal(await domaine.domaineAdmin(), 'https://tableau.ami-sante.test', 'APP_URL configurée prioritaire');
+  if (appUrl === undefined) delete process.env.APP_URL; else process.env.APP_URL = appUrl;
   const jetonSession = enTetes.Authorization.split(' ')[1];
   assert.equal((await fetch(`${api}/espace-patiente/carte.pdf?jeton=${jetonSession}`)).status, 401, 'jeton de session refusé dans un lien');
 

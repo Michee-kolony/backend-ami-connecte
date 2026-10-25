@@ -13,6 +13,7 @@ router.get('/carte.pdf', ctrl.carteParLien);
 router.use(authentifierPatiente);
 router.get('/moi', ctrl.moi);
 router.get('/carte', ctrl.carte);
+router.get('/carte/apercu', ctrl.apercuCarte);
 router.post('/carte/lien', ctrl.lienCarte);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 router.post('/appareils', ctrl.enregistrerAppareil);

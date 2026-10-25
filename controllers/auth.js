@@ -7,6 +7,7 @@ const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide } = require('./soignants');
 const presence = require('../config/presence');
 const { messageValidation } = require('../config/erreursFr');
+const domaine = require('../config/domaineAdmin');
 
 const { CHAMPS_PROFIL } = Soignant;
 
@@ -40,6 +41,8 @@ exports.connexion = async (req, res) => {
 
   soignant.derniereConnexion = new Date();
   await soignant.save();
+  // Domaine du tableau de bord : repris par le QR code des cartes imprimées depuis l'application patiente.
+  await domaine.memoriser(req.get('origin'));
 
   const jeton = jwt.sign({ sub: soignant.id, role: soignant.role, etablissement: etablissement?.id ?? null }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '8h',

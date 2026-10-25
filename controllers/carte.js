@@ -7,6 +7,7 @@ const Etablissement = require('../models/Etablissement');
 const { journaliser } = require('../config/audit');
 const { lireFichier } = require('../config/r2');
 const { trouverPatiente } = require('./patientes');
+const domaine = require('../config/domaineAdmin');
 
 const MM = 72 / 25.4;
 const LARGEUR = 85.6 * MM;
@@ -54,6 +55,11 @@ const jourFr = (iso) => (iso
   ? new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${iso}T00:00:00Z`))
   : null);
 
+// Textes communs au PDF et à l'aperçu de l'application patiente.
+const naissanceTexte = (p) => (p.dateNaissance ? `Née le ${jourFr(p.dateNaissance)}` : p.age() != null ? `${p.age()} ans (âge déclaré)` : '');
+const aujourdhuiFr = () => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Kinshasa' }).format(new Date());
+const coordonneesTexte = (e) => [e?.adresse, e?.telephone && `Tél. ${e.telephone}`].filter(Boolean).join(' · ');
+
 function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
   const doc = new PDFDocument({ size: [LARGEUR, HAUTEUR], margin: 0, autoFirstPage: false, info: {
     Title: `Carte patiente ${patiente.numero}`, Author: 'AMI Santé Connect', Subject: 'Carte de suivi prénatal',
@@ -99,7 +105,7 @@ function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
   doc.fillColor(ENCRE).font('Helvetica-Bold').fontSize(8).text(`${patiente.nom} ${patiente.postnom || ''}`.trim(), tx, 19.4 * MM, { width: tw, height: 7 * MM, ellipsis: true });
   doc.fillColor(GRIS).font('Helvetica').fontSize(4.6).text('PRÉNOM', tx, 25 * MM, { lineBreak: false });
   doc.fillColor(ENCRE).font('Helvetica-Bold').fontSize(7.4).text(patiente.prenom || '—', tx, 26.9 * MM, { width: tw, height: 4 * MM, ellipsis: true });
-  const naissance = patiente.dateNaissance ? `Née le ${jourFr(patiente.dateNaissance)}` : patiente.age() != null ? `${patiente.age()} ans (âge déclaré)` : '';
+  const naissance = naissanceTexte(patiente);
   doc.fillColor(GRIS).font('Helvetica').fontSize(5.6).text(naissance, tx, 31.6 * MM, { width: tw, lineBreak: false });
 
   // Numéro du dossier
@@ -120,7 +126,7 @@ function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
   doc.fillColor(BLEU).font('Helvetica-Bold').fontSize(5.4)
     .text(etablissement?.nom ?? 'Établissement non renseigné', 4 * MM, HAUTEUR - 7 * MM, { width: LARGEUR - 8 * MM, lineBreak: false, ellipsis: true });
   doc.fillColor(GRIS).font('Helvetica').fontSize(4.6)
-    .text(`Présentez cette carte à chaque consultation · Délivrée le ${new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Kinshasa' }).format(new Date())}`,
+    .text(`Présentez cette carte à chaque consultation · Délivrée le ${aujourdhuiFr()}`,
       4 * MM, HAUTEUR - 4.2 * MM, { width: LARGEUR - 8 * MM, lineBreak: false, ellipsis: true });
 
   // ------------------------------- VERSO -------------------------------
@@ -145,7 +151,7 @@ function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
 
   doc.fillColor(GRIS).font('Helvetica').fontSize(4.6).text('ÉTABLISSEMENT DE SUIVI', vx, 32.5 * MM);
   doc.fillColor(ENCRE).font('Helvetica-Bold').fontSize(6.2).text(etablissement?.nom ?? '—', vx, 34.6 * MM, { width: vw, lineBreak: false, ellipsis: true });
-  const coordonnees = [etablissement?.adresse, etablissement?.telephone && `Tél. ${etablissement.telephone}`].filter(Boolean).join(' · ');
+  const coordonnees = coordonneesTexte(etablissement);
   doc.fillColor(ENCRE).font('Helvetica').fontSize(5.2).text(coordonnees || '—', vx, 37.8 * MM, { width: vw, height: 6 * MM, ellipsis: true });
 
   doc.moveTo(vx, HAUTEUR - 8.5 * MM).lineTo(LARGEUR - 4 * MM, HAUTEUR - 8.5 * MM).lineWidth(0.4).strokeColor('#e2e8f0').stroke();
@@ -158,14 +164,31 @@ function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
   return fin;
 }
 
-/** PDF de la carte d'une patiente (même carte pour le tableau de bord et l'espace patiente). */
-async function pdfCarte(patiente, { origine, delivreePar }) {
+/** Données d'une carte : établissement, photo lisible (sinon initiales), QR code du dossier. */
+async function donneesCarte(patiente, { origine, delivreePar }) {
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   const brute = await lireFichier(patiente.photoCle);
   const qr = await QRCode.toBuffer(lienDossier(patiente.numero, origine), {
     errorCorrectionLevel: 'M', margin: 1, width: 360, color: { dark: BLEU_FONCE, light: '#ffffff' },
   });
-  return genererPdf({ patiente, etablissement, qr, photo: imageLisible(brute) ? brute : null, delivreePar });
+  return { patiente, etablissement, qr, photo: imageLisible(brute) ? brute : null, delivreePar };
+}
+
+/** PDF de la carte d'une patiente (même carte pour le tableau de bord et l'espace patiente). */
+async function pdfCarte(patiente, options) {
+  return genererPdf(await donneesCarte(patiente, options));
+}
+
+const dataUrl = (buffer) => {
+  if (!buffer) return null;
+  const type = buffer[0] === 0x89 ? 'image/png' : 'image/jpeg';
+  return `data:${type};base64,${buffer.toString('base64')}`;
+};
+
+/** « Délivrée par » de la carte de la patiente : le soignant qui a enregistré le dossier. */
+function delivreeParPatiente(patiente) {
+  const a = patiente.creePar;
+  return a ? `${a.role?.startsWith('Médecin') ? 'Dr ' : ''}${a.nom}` : 'AMI Santé Connect';
 }
 
 function envoyerPdf(res, patiente, pdf) {
@@ -181,8 +204,10 @@ function envoyerPdf(res, patiente, pdf) {
 exports.carte = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
   const s = req.soignant;
+  const origine = origineSite(req);
+  await domaine.memoriser(origine);
   const pdf = await pdfCarte(patiente, {
-    origine: origineSite(req),
+    origine,
     delivreePar: `${s.role.startsWith('Médecin') ? 'Dr ' : ''}${s.prenom} ${s.nom}`,
   });
   await journaliser(req, { action: 'patiente.carte', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
@@ -190,18 +215,32 @@ exports.carte = async (req, res) => {
 };
 
 /**
- * Carte demandée par la patiente depuis l'application. Le QR code pointe vers le tableau de
- * bord (APP_URL) ; « délivrée par » : le soignant qui a enregistré le dossier.
+ * Carte demandée par la patiente depuis l'application. Le QR code pointe vers le même domaine
+ * que l'espace administrateur (voir config/domaineAdmin) ; « délivrée par » : le soignant qui a
+ * enregistré le dossier.
  */
 exports.cartePatiente = async (req, res) => {
   const patiente = req.patiente;
-  const a = patiente.creePar;
-  const pdf = await pdfCarte(patiente, {
-    origine: null,
-    delivreePar: a ? `${a.role?.startsWith('Médecin') ? 'Dr ' : ''}${a.nom}` : 'AMI Santé Connect',
-  });
+  const pdf = await pdfCarte(patiente, { origine: await domaine.domaineAdmin(), delivreePar: delivreeParPatiente(patiente) });
   await journaliser(req, { action: 'patiente.carte', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero }, details: { depuis: 'espace patiente' } });
   envoyerPdf(res, patiente, pdf);
+};
+
+/**
+ * Aperçu de la carte dans l'application patiente : les mêmes données et textes que le PDF
+ * (photo et QR code en images intégrées), affichés recto-verso avant l'impression.
+ */
+exports.apercuPatiente = async (req, res) => {
+  const d = await donneesCarte(req.patiente, { origine: await domaine.domaineAdmin(), delivreePar: delivreeParPatiente(req.patiente) });
+  const p = d.patiente;
+  const e = d.etablissement;
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    nomPostnom: `${p.nom} ${p.postnom || ''}`.trim(), prenom: p.prenom || '', naissance: naissanceTexte(p),
+    initiales: `${(p.prenom || '').charAt(0)}${p.nom.charAt(0)}`.toUpperCase(), numero: p.numero,
+    photo: dataUrl(d.photo), qr: dataUrl(d.qr),
+    etablissement: e?.nom ?? null, coordonnees: coordonneesTexte(e), delivreeLe: aujourdhuiFr(), delivreePar: d.delivreePar,
+  });
 };
 
 exports.lienDossier = lienDossier;
