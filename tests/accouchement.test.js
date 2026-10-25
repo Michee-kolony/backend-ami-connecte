@@ -356,7 +356,14 @@ test('accouchement + nouveau-né : grossesse terminée, dossier de l’enfant ra
   const changee = await fetch(`${api}/enfants/${enfantId}/photo`, { method: 'PUT', headers: { Authorization: `Bearer ${jetons.sageFemme}` }, body: photo });
   assert.equal(changee.status, 200);
 
-  assert.equal((await appel('sageFemme', 'POST', `/accouchements/${dossierId}/surveillances`, { bcf: 140 })).status, 409, 'plus de partogramme après l’accouchement');
+  // Après l'accouchement : saisie rétroactive seulement (heure obligatoire, avant la naissance, sans alerte).
+  const surv = (corps) => appel('sageFemme', 'POST', `/accouchements/${dossierId}/surveillances`, corps);
+  assert.equal((await surv({ bcf: 140 })).status, 400, 'heure obligatoire');
+  assert.equal((await surv({ le: ilYaH(1), bcf: 140 })).status, 409, 'plus de partogramme après la naissance');
+  const retro = await surv({ le: ilYaH(2.2), bcf: 100 });
+  assert.equal(retro.status, 201, JSON.stringify(retro.corps));
+  assert.equal(retro.corps.alertes.length, 0, 'pas d’alerte pour une mesure passée');
+  assert.ok(retro.corps.partogramme.bcf.points.some((x) => x.bcf === 100));
 
   const enfant = await appel('infirmiere', 'GET', `/enfants/${enfantId}`);
   assert.equal(enfant.status, 200);

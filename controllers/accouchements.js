@@ -375,16 +375,21 @@ async function medecinsANotifier(etablissementId) {
  * Module 3 — Une ligne de surveillance du travail. La phase active commence à la première
  * dilatation ≥ 4 cm. Les alertes (BCF, zones jaune/rouge, stagnation) sont calculées et
  * renvoyées ; la zone rouge est notifiée en temps réel aux médecins.
+ * Après l'accouchement, saisie rétroactive seulement (mesure prise avant la naissance, sans alerte).
  */
 exports.surveiller = async (req, res) => {
   const a = await trouver(req.params.id);
   verifierOuvert(a);
-  if (a.accouchement) throw erreur(409, 'L’accouchement est enregistré : saisissez la surveillance post-partum.');
+  const retroactive = Boolean(a.accouchement);
+  if (retroactive && !req.body?.le) throw erreur(400, 'Accouchement enregistré : indiquez l’heure à laquelle la mesure a été prise (avant la naissance).');
   const champs = lire(SPEC_SURVEILLANCE, req.body);
   const mesures = Object.entries(champs).filter(([, v]) => v != null && v !== '' && !(typeof v === 'object' && Object.values(v).every((x) => x == null)));
   if (!mesures.length) throw erreur(400, 'Saisissez au moins une mesure.');
   const le = pasDansLeFutur(instant(req.body.le, 'Heure de la surveillance') ?? new Date(), 'La surveillance');
   if (le < new Date(a.admission.admiseLe.getTime() - 60000)) throw erreur(400, 'La surveillance précède l’admission.');
+  if (retroactive && a.accouchement.heure && le > a.accouchement.heure) {
+    throw erreur(409, 'Mesure postérieure à l’accouchement : saisissez-la dans la surveillance post-partum.');
+  }
 
   // Début de la phase active : surveillances, ou examen d'entrée à 4 cm ou plus.
   const debutAvant = partogramme.mesures(a).debutPhaseActive;
@@ -397,7 +402,7 @@ exports.surveiller = async (req, res) => {
   const entree = a.surveillances.at(-1);
 
   const m = partogramme.mesures(a);
-  const nouvelles = partogramme.alertesDe(entree, m.surveillances, m.debutPhaseActive, a.alertes);
+  const nouvelles = retroactive ? [] : partogramme.alertesDe(entree, m.surveillances, m.debutPhaseActive, a.alertes);
   for (const alerte of nouvelles) {
     const medecinsNotifies = alerte.notifierMedecins ? await medecinsANotifier(a.etablissementId) : [];
     a.alertes.push({ ...alerte, surveillanceId: entree._id, le, medecinsNotifies });
