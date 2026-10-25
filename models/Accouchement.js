@@ -14,6 +14,13 @@ const parCode = (liste, def) => Object.fromEntries(liste.map((x) => [x.code, def
 const codes = (liste) => liste.map((x) => x.code);
 const sansId = { _id: false };
 
+/** Relevé horodaté de l'examen d'entrée : BCF et/ou dilatation, répétables à des heures différentes. */
+const releveSchema = new mongoose.Schema({
+  le: { type: Date, required: true },
+  bcf: nombre(50, 250),
+  dilatationCm: nombre(0, 10),
+}, sansId);
+
 /** Module 1 — Admission : identité (copiée du dossier, modifiable) et anamnèse. */
 const admissionSchema = new mongoose.Schema({
   // A. Identité
@@ -73,6 +80,8 @@ const examenSchema = new mongoose.Schema({
     pocheEaux: { etat: choix(acc.ETATS_POCHE), rompueLe: instant, aspectLiquide: choix(acc.ASPECTS_LA) },
     engagement: choix(acc.ENGAGEMENTS),
     bassin: choix(acc.BASSINS),
+    /** Relevés BCF / dilatation (du plus ancien au plus récent) ; bcf et dilatationCm ci-dessus = dernier relevé. */
+    releves: { type: [releveSchema], default: [] },
   },
   laboratoire: parCode(acc.EXAMENS_LABO_ENTREE, () => texte),
   conclusion: texte,

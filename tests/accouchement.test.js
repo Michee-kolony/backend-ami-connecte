@@ -669,3 +669,39 @@ test('partogramme : BCF, dilatation et effacement de l’examen clinique d’ent
   assert.deepEqual(s.corps.partogramme.dilatation.points.map((x) => x.cm), [5, 7]);
   assert.deepEqual(s.corps.partogramme.bcf.points.map((x) => x.bcf), [150, 145]);
 });
+test('examen clinique d’entrée : plusieurs relevés BCF / dilatation à des heures différentes, tous tracés', async () => {
+  const a = await appel('sageFemme', 'POST', '/accouchements', {
+    nouvellePatiente: { nom: 'Kabeya', prenom: 'Rachel', ageDeclare: 31, email: 'rachel@essai.test' }, compte: { motDePasse: 'Bebe2026ok' }, confirmerMalgreDoublons: true,
+    admission: { admiseLe: ilYaH(5) },
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  const url = `/accouchements/${a.corps.id}/examen-clinique`;
+
+  // Relevés envoyés dans le désordre, une ligne vide ignorée.
+  const ex = await appel('sageFemme', 'PUT', url, {
+    examineLe: ilYaH(4.5),
+    obstetrical: {
+      toucherVaginal: { effacementPct: 60 },
+      releves: [
+        { le: ilYaH(2.5), bcf: 138, dilatationCm: 5 },
+        { le: ilYaH(4.5), bcf: 150, dilatationCm: 3 },
+        { le: ilYaH(3.5), bcf: 112 },
+        { le: ilYaH(3), bcf: null, dilatationCm: null },
+      ],
+    },
+  });
+  assert.equal(ex.status, 200, JSON.stringify(ex.corps));
+  const o = ex.corps.examenClinique.obstetrical;
+  assert.deepEqual(o.releves.map((r) => r.bcf), [150, 112, 138], 'triés par heure, ligne vide retirée');
+  assert.deepEqual([o.bcf, o.toucherVaginal.dilatationCm], [138, 5], 'champs uniques = dernier relevé');
+  const p = ex.corps.partogramme;
+  assert.deepEqual(p.bcf.points.map((x) => x.bcf), [150, 112, 138]);
+  assert.deepEqual(p.dilatation.points.map((x) => [x.heures, x.cm]), [[0, 5]], 'phase active à partir du relevé à 5 cm');
+  assert.equal(p.effacement.points.length, 1);
+
+  // Heure manquante ou dans le futur : refus.
+  const sansHeure = await appel('sageFemme', 'PUT', url, { obstetrical: { releves: [{ bcf: 140 }] } });
+  assert.equal(sansHeure.status, 400);
+  const futur = await appel('sageFemme', 'PUT', url, { obstetrical: { releves: [{ le: new Date(Date.now() + 3 * 3600000).toISOString(), bcf: 140 }] } });
+  assert.equal(futur.status, 400);
+});

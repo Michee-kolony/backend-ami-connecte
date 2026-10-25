@@ -56,6 +56,9 @@ const SPEC_EXAMEN = {
     toucherVaginal: { effacementPct: N, dilatationCm: N, oedemeCol: B },
     pocheEaux: { etat: C(acc.ETATS_POCHE), rompueLe: D, aspectLiquide: C(acc.ASPECTS_LA) },
     engagement: C(acc.ENGAGEMENTS), bassin: C(acc.BASSINS),
+    releves: (v) => (Array.isArray(v) ? v : []).slice(0, 48)
+      .map((r) => ({ le: instant(objet(r).le, 'Heure du relevé'), bcf: nombre(objet(r).bcf), dilatationCm: nombre(objet(r).dilatationCm) }))
+      .filter((r) => r.bcf != null || r.dilatationCm != null),
   },
   laboratoire: Object.fromEntries(acc.EXAMENS_LABO_ENTREE.map(({ code }) => [code, T(300)])),
   conclusion: T(), pronostic: T(), conduiteATenir: T(),
@@ -340,7 +343,20 @@ exports.examiner = async (req, res) => {
   const a = await trouver(req.params.id);
   verifierOuvert(a);
   const examineLe = pasDansLeFutur(instant(req.body?.examineLe, 'Heure de l’examen') ?? new Date(), 'L’examen');
-  a.examenClinique = { ...lire(SPEC_EXAMEN, req.body), examinateur: auteurDe(req.soignant), examineLe };
+  const examen = lire(SPEC_EXAMEN, req.body);
+  const o = examen.obstetrical ?? {};
+  if (o.releves?.length) {
+    for (const r of o.releves) {
+      if (!r.le) throw erreur(400, 'Indiquez l’heure de chaque relevé BCF / dilatation.');
+      pasDansLeFutur(r.le, 'Un relevé BCF / dilatation');
+    }
+    o.releves.sort((x, y) => x.le - y.le);
+    // Champs uniques conservés pour la compatibilité : valeurs du dernier relevé.
+    const dernier = (k) => [...o.releves].reverse().find((r) => r[k] != null)?.[k] ?? null;
+    o.bcf = dernier('bcf');
+    o.toucherVaginal = { ...o.toucherVaginal, dilatationCm: dernier('dilatationCm') };
+  }
+  a.examenClinique = { ...examen, examinateur: auteurDe(req.soignant), examineLe };
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.examen', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });

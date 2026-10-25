@@ -96,15 +96,18 @@ function mesures(a) {
   const ex = a.examenClinique;
   const o = ex?.obstetrical;
   const tv = o?.toucherVaginal;
-  if (ex?.examineLe && (o?.bcf != null || tv?.dilatationCm != null || tv?.effacementPct != null)) {
-    const le = ex.examineLe;
-    const active = tv?.dilatationCm != null && tv.dilatationCm >= PHASE_ACTIVE_CM;
-    if (active && (!debutPhaseActive || le < debutPhaseActive)) debutPhaseActive = le;
+  // Relevés horodatés ; anciens dossiers : un seul BCF / dilatation à l'heure de l'examen.
+  const releves = o?.releves?.length ? o.releves
+    : ex?.examineLe && (o?.bcf != null || tv?.dilatationCm != null || tv?.effacementPct != null)
+      ? [{ le: ex.examineLe, bcf: o.bcf, dilatationCm: tv?.dilatationCm }] : [];
+  releves.forEach((r, i) => {
+    const active = r.dilatationCm != null && r.dilatationCm >= PHASE_ACTIVE_CM;
+    if (active && (!debutPhaseActive || r.le < debutPhaseActive)) debutPhaseActive = r.le;
     liste.push({
-      _id: 'examen-entree', le, phase: active ? 'Active' : 'Latence',
-      bcf: o.bcf ?? null, dilatationCm: tv?.dilatationCm ?? null, effacementPct: tv?.effacementPct ?? null,
+      _id: i ? `examen-entree-${i + 1}` : 'examen-entree', le: r.le, phase: active ? 'Active' : 'Latence',
+      bcf: r.bcf ?? null, dilatationCm: r.dilatationCm ?? null, effacementPct: i ? null : tv?.effacementPct ?? null,
     });
-  }
+  });
   return { surveillances: liste, debutPhaseActive };
 }
 
