@@ -524,7 +524,14 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   const accouchements = await appel(jeton, 'GET', '/espace-patiente/accouchements');
   assert.equal(accouchements.corps[0].mode, 'Normal');
   assert.ok(accouchements.corps[0].mesuresPreventives.nouveauNe.includes('BCG / VPO'));
-  assert.ok(!('surveillances' in accouchements.corps[0]), 'pas de partogramme');
+  const vu = accouchements.corps[0];
+  assert.ok(vu.examen && vu.examen.le, 'examen clinique d’entrée visible');
+  assert.ok(vu.travail.some((m) => m.bcf != null), 'BCF du travail visibles');
+  assert.ok(vu.travail.some((m) => m.dilatationCm != null), 'dilatations du travail visibles');
+  assert.ok(vu.travail.every((m, i, l) => !i || new Date(l[i - 1].le) >= new Date(m.le)), 'du plus récent au plus ancien');
+  assert.ok(vu.postPartum.length >= 1, 'contrôles post-partum visibles');
+  assert.ok(!('alertes' in vu) && !('surveillances' in vu), 'alertes internes non exposées');
+  assert.ok(!JSON.stringify(vu).includes(comptes.medecin.id), 'pas d’identifiant de soignant');
 
   // Conseils : ceux de la sortie de maternité, et les articles approuvés seulement.
   const Article = require('../models/Article');

@@ -19,6 +19,7 @@ const notifications = require('../config/notifications');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
+const partogramme = require('../config/partogramme');
 const { motDePasseValide } = require('./patientes');
 const { erreur, texte } = require('./saisie');
 
@@ -162,22 +163,67 @@ exports.enfant = async (req, res) => {
   res.json(await enfantPourPatiente(e, rendezVous, new Map([[e.id, e.prenom]])));
 };
 
-/** Accouchements : résumé (pas de partogramme), sortie, rendez-vous CPoN, conseils et mesures préventives. */
+/** Examen clinique d'entrée vu par la patiente : constantes, examen obstétrical, conclusion. */
+function examenPourPatiente(ex) {
+  if (!ex) return null;
+  const ph = ex.physique ?? {};
+  const o = ex.obstetrical ?? {};
+  return {
+    le: ex.examineLe, soignant: soignant(ex.examinateur),
+    poidsKg: ph.poidsKg ?? null, temperature: ph.temperature ?? null, pouls: ph.pouls ?? null,
+    taSystolique: ph.taSystolique ?? null, taDiastolique: ph.taDiastolique ?? null,
+    hauteurUterineCm: o.hauteurUterineCm ?? null, presentation: o.presentation ?? '',
+    contractions10min: o.contractions10min ?? null, effacementPct: o.toucherVaginal?.effacementPct ?? null,
+    pocheEaux: o.pocheEaux?.etat ?? '', conclusion: ex.conclusion ?? '',
+  };
+}
+
+const CRENEAUX = new Map(acc.CRENEAUX_POST_PARTUM.map((c) => [c.code, c.libelle]));
+
+/**
+ * Accouchements, y compris le travail en cours : examen d'entrée, mesures du travail (BCF,
+ * dilatation… de l'examen d'entrée et de la surveillance), accouchement, contrôles post-partum,
+ * traitements, sortie, conseils et mesures préventives. Les alertes internes ne sont pas exposées.
+ */
 exports.accouchements = async (req, res) => {
   const p = req.patiente;
   const [dossiers, enfants] = await Promise.all([
-    Accouchement.find({ patienteId: p._id, accouchement: { $exists: true } }).sort({ 'accouchement.heure': -1 }),
+    Accouchement.find({ patienteId: p._id }).sort({ 'admission.admiseLe': -1 }),
     Enfant.find({ mereId: p._id }).select('prenom sexe neLe etatNaissance accouchementId'),
   ]);
   const libelles = (liste, valeurs) => liste.filter(({ code }) => valeurs?.[code] === true).map(({ libelle }) => libelle);
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'accouchements' } });
   res.json(dossiers.map((a) => {
     const pp = a.postPartum ?? {};
+    const enfantsDuDossier = enfants.filter((e) => String(e.accouchementId) === a.id);
+    const prenoms = new Map(enfantsDuDossier.map((e) => [e.id, e.prenom]));
+    const travail = partogramme.mesures(a).surveillances
+      .map((s) => ({
+        le: s.le, phase: s.phase, examenEntree: String(s._id).startsWith('examen-entree'),
+        bcf: s.bcf ?? null, dilatationCm: s.dilatationCm ?? null, effacementPct: s.effacementPct ?? null,
+        contractions10min: s.contractions10min ?? null, temperature: s.temperature ?? null, pouls: s.pouls ?? null,
+        taSystolique: s.taSystolique ?? null, taDiastolique: s.taDiastolique ?? null,
+        soignant: soignant(s.auteur),
+      }))
+      .sort((x, y) => y.le - x.le);
     return {
-      id: a.id, numero: a.numero, statut: a.statut,
-      date: a.accouchement.heure, mode: a.accouchement.mode, multiple: a.accouchement.multiple,
-      accoucheur: a.accouchement.accoucheur,
-      enfants: enfants.filter((e) => String(e.accouchementId) === a.id)
+      id: a.id, numero: a.numero, statut: a.statut, admiseLe: a.admission.admiseLe,
+      date: a.accouchement?.heure ?? null, mode: a.accouchement?.mode ?? '', multiple: a.accouchement?.multiple ?? null,
+      accoucheur: a.accouchement?.accoucheur ?? '',
+      examen: examenPourPatiente(a.examenClinique),
+      travail,
+      postPartum: (pp.surveillances ?? []).map((s) => ({
+        le: s.le, creneau: CRENEAUX.get(s.creneau) ?? s.creneau,
+        taSystolique: s.mere?.taSystolique ?? null, taDiastolique: s.mere?.taDiastolique ?? null,
+        pouls: s.mere?.pouls ?? null, temperature: s.mere?.temperature ?? null, saignement: s.mere?.saignement ?? '',
+        observations: s.observations ?? '', soignant: soignant(s.auteur),
+      })).sort((x, y) => y.le - x.le),
+      traitements: (pp.traitements ?? []).map((t) => ({
+        pour: t.pour === 'Nouveau-né' ? prenoms.get(String(t.enfantId)) || 'Bébé' : 'Vous',
+        produit: t.produit, dose: t.dose, voie: t.voie, frequence: t.frequence, duree: t.duree,
+        statut: t.statut, administreLe: t.administreLe,
+      })),
+      enfants: enfantsDuDossier
         .map((e) => ({ id: e.id, prenom: e.prenom, sexe: e.sexe, neLe: e.neLe, etatNaissance: e.etatNaissance })),
       sortie: pp.sortie ? { date: pp.sortie.date, rdvCpon: pp.sortie.rdvCpon, observations: pp.sortie.observations } : null,
       conseils: pp.conseils ?? '',
