@@ -11,8 +11,9 @@ router.use(authentifier, exigerMaternite);
 
 router.get('/', ctrl.lister);
 router.get('/alertes', ctrl.alertes);
-// Module 1 — Admission
-router.post('/', ctrl.admettre);
+// Module 1 — Admission. Admission directe (sans dossier) : formulaire multipart, données JSON
+// dans « donnees », photo de la patiente (obligatoire) dans « photo ».
+router.post('/', televerserPhoto, ctrl.admettre);
 router.get('/:id', ctrl.obtenir);
 router.patch('/:id/admission', ctrl.modifierAdmission);
 // Module 2 — Examen clinique d'entrée

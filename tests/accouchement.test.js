@@ -32,6 +32,15 @@ async function creerPatiente(corps) {
   return { status: r.status, corps: await r.json() };
 }
 
+/** Admission directe (sans dossier) : formulaire multipart (données + photo de la patiente, sauf `sansPhoto`). */
+async function admissionDirecte(qui, donnees, { sansPhoto = false } = {}) {
+  const f = new FormData();
+  f.append('donnees', JSON.stringify(donnees));
+  if (!sansPhoto) f.append('photo', new Blob([PNG], { type: 'image/png' }), 'patiente.png');
+  const r = await fetch(`${api}/accouchements`, { method: 'POST', headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f });
+  return { status: r.status, corps: await r.json() };
+}
+
 /** Nouveau-né : formulaire multipart (données + photo, sauf `sansPhoto`). */
 async function ajouterNouveauNe(qui, dossier, donnees, { sansPhoto = false } = {}) {
   const f = new FormData();
@@ -651,8 +660,11 @@ test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et 
     adresse: { commune: 'Ngaliema', quartier: 'Binza' }, contactUrgence: { nom: 'Paul Mbuyi', lien: 'Mari', telephone: '+243 99 000 1111' },
   };
   const compte = { motDePasse: 'Bebe2026ok' };
-  const admettre = (corps) => appel('sageFemme', 'POST', '/accouchements', { compte, ...corps });
-  assert.equal((await appel('infirmiere', 'POST', '/accouchements', { nouvellePatiente: nouvelle, compte })).status, 403, 'infirmière refusée');
+  const admettre = (corps, options) => admissionDirecte('sageFemme', { compte, ...corps }, options);
+  assert.equal((await admissionDirecte('infirmiere', { nouvellePatiente: nouvelle, compte })).status, 403, 'infirmière refusée');
+  const sansPhoto = await admettre({ nouvellePatiente: nouvelle }, { sansPhoto: true });
+  assert.equal(sansPhoto.status, 400, 'photo obligatoire');
+  assert.match(sansPhoto.corps.message, /photo/i);
   assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, nom: '' } })).status, 400, 'nom obligatoire');
   assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, ageDeclare: null } })).status, 400, 'âge obligatoire');
   assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, email: 'pas-un-email' } })).status, 400, 'e-mail obligatoire et valide');
@@ -665,6 +677,7 @@ test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et 
   const mere = await appel('medecin', 'GET', `/patientes/${a.corps.patiente.id}`);
   assert.equal(mere.status, 200);
   assert.equal(mere.corps.patiente.enregistreeVia, 'Admission directe');
+  assert.ok(mere.corps.patiente.photoUrl, 'photo d’identification enregistrée');
   assert.equal(mere.corps.patiente.motDePasse, undefined, 'mot de passe jamais renvoyé');
   assert.equal(mere.corps.grossesses.length, 1, 'grossesse ouverte à l’admission');
 
@@ -688,7 +701,7 @@ test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et 
 });
 
 test('partogramme : BCF, dilatation et effacement de l’examen clinique d’entrée tracés en premier point', async () => {
-  const a = await appel('sageFemme', 'POST', '/accouchements', {
+  const a = await admissionDirecte('sageFemme', {
     nouvellePatiente: { nom: 'Ilunga', prenom: 'Sarah', ageDeclare: 27, email: 'sarah@essai.test' }, compte: { motDePasse: 'Bebe2026ok' },
     admission: { admiseLe: ilYaH(3) },
   });
@@ -714,7 +727,7 @@ test('partogramme : BCF, dilatation et effacement de l’examen clinique d’ent
   assert.deepEqual(s.corps.partogramme.bcf.points.map((x) => x.bcf), [150, 145]);
 });
 test('examen clinique d’entrée : plusieurs relevés BCF / dilatation à des heures différentes, tous tracés', async () => {
-  const a = await appel('sageFemme', 'POST', '/accouchements', {
+  const a = await admissionDirecte('sageFemme', {
     nouvellePatiente: { nom: 'Kabeya', prenom: 'Rachel', ageDeclare: 31, email: 'rachel@essai.test' }, compte: { motDePasse: 'Bebe2026ok' }, confirmerMalgreDoublons: true,
     admission: { admiseLe: ilYaH(5) },
   });

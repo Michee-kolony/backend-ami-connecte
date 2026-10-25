@@ -34,6 +34,8 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
 
 1. **Admission** `POST /api/accouchements` `{ patienteId, admission }` — patiente déjà enregistrée. Sans grossesse en cours
    dans la plateforme (arrivée directement en travail), une grossesse non datée est ouverte.
+   Femme venue accoucher sans dossier (pas de CPN) : multipart, `donnees` en JSON `{ nouvellePatiente, compte, admission }`
+   + `photo` de la patiente, **obligatoire** (400 sinon), comme à l'enregistrement CPN.
 2. **Examen clinique** `PUT /:id/examen-clinique` — physique (6 systèmes), gynéco-obstétrical (TV, poche des eaux, engagement, bassin),
    labo d'entrée, conclusion / pronostic / CAT. Examinateur = soignant connecté.
 3. **Surveillance du travail** `POST /:id/surveillances` — une ligne du tableau (latence ou phase active, mêmes champs).

@@ -12,7 +12,7 @@ const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
-const { urlSignee, supprimerFichier } = require('../config/r2');
+const { envoyerFichier, urlSignee, supprimerFichier } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
 const { trouverPatiente, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
@@ -225,19 +225,20 @@ exports.alertes = async (req, res) => {
  * Admission directe : femme venue accoucher sans aucun dossier dans la plateforme (pas de CPN).
  * Dossier patiente minimal (identité, âge, contact) et compte de l'application patiente (e-mail et
  * mot de passe choisis par elle, comme à l'enregistrement CPN) pour suivre son bébé ; la photo
- * pourra être ajoutée plus tard. Renvoie null après avoir répondu 409 si des dossiers possiblement
- * identiques existent et que le soignant n'a pas confirmé.
+ * d'identification est obligatoire, comme à l'enregistrement CPN. Renvoie null après avoir répondu
+ * 409 si des dossiers possiblement identiques existent et que le soignant n'a pas confirmé.
  */
-async function patienteAdmissionDirecte(req, res) {
-  const d = objet(req.body.nouvellePatiente);
+async function patienteAdmissionDirecte(req, res, corps) {
+  const d = objet(corps.nouvellePatiente);
   const champs = champsAdministratifs({
     nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
     telephone: d.telephone, contactUrgence: objet(d.contactUrgence), adresse: objet(d.adresse), email: d.email,
   });
+  if (!req.file) throw erreur(400, 'La photo de la patiente est obligatoire.');
   if (!champs.nom) throw erreur(400, 'Le nom de la patiente est obligatoire.');
   if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge de la patiente obligatoire.');
   if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide (application patiente).');
-  const motDePasse = objet(req.body.compte).motDePasse;
+  const motDePasse = objet(corps.compte).motDePasse;
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la patiente trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
   const memeEmail = await Patiente.findOne({ email: champs.email });
   if (memeEmail) {
@@ -252,7 +253,7 @@ async function patienteAdmissionDirecte(req, res) {
     return null;
   }
   const doublons = await chercherDoublons(champs);
-  if (doublons.length && req.body.confirmerMalgreDoublons !== true) {
+  if (doublons.length && corps.confirmerMalgreDoublons !== true) {
     res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : si c’est la même patiente, choisissez son dossier.', doublons });
     return null;
   }
@@ -272,10 +273,20 @@ async function patienteAdmissionDirecte(req, res) {
  * Module 1 — Admission en salle de travail : patiente enregistrée (`patienteId`) ou femme venue
  * directement accoucher sans dossier (`nouvellePatiente`). Sans grossesse en cours dans la
  * plateforme (arrivée directement en travail), une grossesse est ouverte, non datée.
+ * Admission directe en multipart (données JSON dans « donnees », photo dans « photo ») ; un corps
+ * JSON reste accepté pour une patiente déjà enregistrée.
  */
 exports.admettre = async (req, res) => {
-  const directe = !req.body?.patienteId && req.body?.nouvellePatiente;
-  const p = directe ? await patienteAdmissionDirecte(req, res) : await trouverPatiente(String(req.body?.patienteId || ''));
+  let corps = objet(req.body);
+  if (typeof corps.donnees === 'string') {
+    try {
+      corps = objet(JSON.parse(corps.donnees));
+    } catch {
+      throw erreur(400, 'Données du formulaire invalides.');
+    }
+  }
+  const directe = !corps.patienteId && corps.nouvellePatiente;
+  const p = directe ? await patienteAdmissionDirecte(req, res, corps) : await trouverPatiente(String(corps.patienteId || ''));
   if (!p) return;
   const auteur = auteurDe(req.soignant);
   let g = p.isNew ? null : await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 });
@@ -283,8 +294,8 @@ exports.admettre = async (req, res) => {
     const existant = await Accouchement.findOne({ grossesseId: g._id }).select('numero');
     if (existant) throw erreur(409, `Un dossier d’accouchement existe déjà pour cette grossesse (${existant.numero}).`, { accouchementId: existant.id });
   }
-  const saisie = lire(SPEC_ADMISSION, req.body.admission);
-  const admiseLe = pasDansLeFutur(instant(objet(req.body.admission).admiseLe, 'Heure d’admission') ?? new Date(), 'L’admission');
+  const saisie = lire(SPEC_ADMISSION, corps.admission);
+  const admiseLe = pasDansLeFutur(instant(objet(corps.admission).admiseLe, 'Heure d’admission') ?? new Date(), 'L’admission');
   const admission = { ...fusionner(suiviPrenatal.admission(p, g, await suiviPrenatal.charger(g)), saisie), admiseLe, admisePar: auteur };
   if (!g) {
     const derniere = await Grossesse.findOne({ patienteId: p._id }).sort({ numero: -1 }).select('numero');
@@ -297,6 +308,8 @@ exports.admettre = async (req, res) => {
   });
   if (p.isNew) await valider(p);
   await valider(a);
+  // Photo envoyée après toutes les validations, pour ne pas laisser de fichier orphelin.
+  if (p.isNew) p.photoCle = (await envoyerFichier(req.file, 'patiente')).cle;
   // Sans transaction (MongoDB autonome) : en cas d'échec, les documents créés ici sont retirés.
   const nouvellePatiente = p.isNew;
   const nouvelleGrossesse = g.isNew;
@@ -308,6 +321,7 @@ exports.admettre = async (req, res) => {
     await Promise.all([
       nouvelleGrossesse && Grossesse.deleteOne({ _id: g._id }),
       nouvellePatiente && Patiente.deleteOne({ _id: p._id }),
+      nouvellePatiente && supprimerFichier(p.photoCle),
     ]).catch(() => {});
     if (err.code === 11000) throw erreur(409, 'Identifiant déjà attribué, réessayez.');
     throw err;
