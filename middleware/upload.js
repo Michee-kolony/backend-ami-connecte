@@ -11,6 +11,13 @@ const photo = multer({
   fileFilter: imagesSeulement,
 }).single('photo');
 
+/** Enfant né hors plateforme : sa photo (« photo ») et, pour une nouvelle mère, la sienne (« photoMere »). */
+const photosEnfantEtMere = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 2 },
+  fileFilter: imagesSeulement,
+}).fields([{ name: 'photo', maxCount: 1 }, { name: 'photoMere', maxCount: 1 }]);
+
 const photosEtablissement = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 6 },
@@ -48,6 +55,7 @@ function avecMessages(upload, tailleMax, { nombreMax = 6, formats = 'JPG, PNG ou
 
 module.exports = {
   televerserPhoto: avecMessages(photo, '2 Mo'),
+  televerserPhotosEnfantEtMere: avecMessages(photosEnfantEtMere, '2 Mo', { nombreMax: 2 }),
   televerserPhotosEtablissement: avecMessages(photosEtablissement, '5 Mo'),
   televerserMediasArticle: avecMessages(mediasArticle, '50 Mo', { nombreMax: 4, formats: 'photos JPG, PNG ou WebP, vidéo MP4, WebM ou MOV' }),
   televerserFichiersEchographie: avecMessages(fichiersEchographie, '10 Mo', { nombreMax: 6, formats: 'compte rendu PDF ou images JPG, PNG, WebP' }),

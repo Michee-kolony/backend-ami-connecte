@@ -45,6 +45,7 @@ const ACTIONS = {
   'accouchement.cloture': 'Dossier d’accouchement clôturé',
   'accouchement.suppression': 'Dossier d’accouchement supprimé définitivement',
   'enfant.creation': 'Naissance enregistrée (dossier de l’enfant)',
+  'enfant.enregistrement': 'Enfant né hors plateforme enregistré (vaccination)',
   'enfant.lecture': 'Ouverture du dossier de l’enfant',
   'enfant.modification': 'Dossier de l’enfant modifié',
   'enfant.photo': 'Photo de l’enfant ajoutée ou remplacée',

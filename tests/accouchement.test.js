@@ -41,6 +41,16 @@ async function admissionDirecte(qui, donnees, { sansPhoto = false } = {}) {
   return { status: r.status, corps: await r.json() };
 }
 
+/** Enfant né hors plateforme : multipart (données + photo de l'enfant + photo de la nouvelle mère). */
+async function enregistrerEnfant(qui, donnees, { photo = true, photoMere = false } = {}) {
+  const f = new FormData();
+  f.append('donnees', JSON.stringify(donnees));
+  if (photo) f.append('photo', new Blob([PNG], { type: 'image/png' }), 'enfant.png');
+  if (photoMere) f.append('photoMere', new Blob([PNG], { type: 'image/png' }), 'mere.png');
+  const r = await fetch(`${api}/enfants`, { method: 'POST', headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f });
+  return { status: r.status, corps: await r.json() };
+}
+
 /** Nouveau-né : formulaire multipart (données + photo, sauf `sansPhoto`). */
 async function ajouterNouveauNe(qui, dossier, donnees, { sansPhoto = false } = {}) {
   const f = new FormData();
@@ -761,4 +771,70 @@ test('examen clinique d’entrée : plusieurs relevés BCF / dilatation à des h
   assert.equal(sansHeure.status, 400);
   const futur = await appel('sageFemme', 'PUT', url, { obstetrical: { releves: [{ le: new Date(Date.now() + 3 * 3600000).toISOString(), bcf: 140 }] } });
   assert.equal(futur.status, 400);
+});
+
+test('enfant né hors plateforme (mère sans CPN ni accouchement ici) : enregistré pour la vaccination, doses du carnet reprises', async () => {
+  const neLe = ilYaJ(70); // 10 semaines
+  const enfant = { prenom: 'Divine', sexe: 'Féminin', dateNaissance: neLe, lieuNaissance: 'CS Fictif de Lemba', naissance: { poidsG: 3100 } };
+  const mere = { nom: 'Tshala', prenom: 'Ruth', ageDeclare: 29, email: 'ruth.tshala@essai.test', telephone: '+243 85 777 0011' };
+  const compte = { motDePasse: 'Vaccin2026ok' };
+  const anterieures = [{ code: 'bcg', date: neLe, lieu: 'CS Fictif de Lemba' }, { code: 'vpo0', date: neLe }];
+
+  // Contrôles : photos obligatoires, mère obligatoire, dates.
+  assert.equal((await enregistrerEnfant('infirmiere', { enfant, nouvelleMere: mere, compte }, { photo: false, photoMere: true })).status, 400, 'photo de l’enfant obligatoire');
+  const sansPhotoMere = await enregistrerEnfant('infirmiere', { enfant, nouvelleMere: mere, compte });
+  assert.equal(sansPhotoMere.status, 400, 'photo de la mère obligatoire');
+  assert.match(sansPhotoMere.corps.message, /photo de la mère/);
+  assert.equal((await enregistrerEnfant('infirmiere', { enfant })).status, 400, 'mère obligatoire');
+  assert.equal((await enregistrerEnfant('infirmiere', { enfant: { ...enfant, dateNaissance: ilYaJ(-2) }, nouvelleMere: mere, compte }, { photoMere: true })).status, 400, 'pas dans le futur');
+  assert.equal((await enregistrerEnfant('infirmiere', { enfant: { ...enfant, dateNaissance: '2010-01-01' }, nouvelleMere: mere, compte }, { photoMere: true })).status, 400, 'âge préscolaire');
+  assert.equal((await enregistrerEnfant('infirmiere', {
+    enfant, nouvelleMere: mere, compte, vaccinationsAnterieures: [{ code: 'bcg' }],
+  }, { photoMere: true })).status, 400, 'date de la dose reportée obligatoire');
+
+  // Infirmière (vaccination) : mère et enfant créés ensemble.
+  const r = await enregistrerEnfant('infirmiere', { enfant, nouvelleMere: mere, compte, vaccinationsAnterieures: anterieures }, { photoMere: true });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  assert.equal(r.corps.origine, 'Né hors plateforme');
+  assert.equal(r.corps.lieuNaissance, 'CS Fictif de Lemba');
+  assert.equal(r.corps.accouchementId, null);
+  assert.equal(r.corps.dateNaissance, neLe);
+  assert.equal(r.corps.nom, 'TSHALA', 'nom de la mère par défaut');
+  assert.ok(r.corps.photoUrl);
+  assert.equal(r.corps.naissance.poidsG, 3100);
+  assert.deepEqual(r.corps.vaccinations.map((v) => [v.code, v.reportee]), [['bcg', true], ['vpo0', true]]);
+  const statut = (code) => r.corps.carnet.doses.find((x) => x.code === code).statut;
+  assert.equal(statut('bcg'), 'Faite');
+  assert.equal(statut('penta1'), 'En retard', '6 semaines dépassées');
+  assert.equal(r.corps.carnet.prochaineSeance.date, require('../config/vaccination').jourKinshasa(), 'rattrapage dès aujourd’hui');
+  assert.equal(r.corps.rendezVous.length, 1, 'prochaine séance programmée');
+
+  const Patiente = require('../models/Patiente');
+  const m = await Patiente.findById(r.corps.mere.id);
+  assert.equal(m.enregistreeVia, 'Enregistrement enfant');
+  assert.equal(m.statut, 'Suivi postnatal');
+  assert.ok(m.photoCle);
+
+  // La mère suit son enfant dans l'application patiente.
+  const c = await appel(null, 'POST', '/espace-patiente/connexion', { email: 'ruth.tshala@essai.test', motDePasse: 'Vaccin2026ok' });
+  assert.equal(c.status, 200, JSON.stringify(c.corps));
+  const accueil = await appel(c.corps.jeton, 'GET', '/espace-patiente/accueil');
+  assert.equal(accueil.status, 200, JSON.stringify(accueil.corps));
+  assert.ok(accueil.corps.enfants.some((x) => x.prenom === 'Divine'));
+
+  // Même mère revenue : son dossier est proposé ; le même enfant n'est pas enregistré deux fois.
+  const memeEmail = await enregistrerEnfant('infirmiere', { enfant, nouvelleMere: mere, compte }, { photoMere: true });
+  assert.equal(memeEmail.status, 409);
+  assert.equal(memeEmail.corps.doublons[0].numero, m.numero);
+  const deuxFois = await enregistrerEnfant('infirmiere', { enfant, mereId: m.numero });
+  assert.equal(deuxFois.status, 409);
+  assert.equal(deuxFois.corps.enfantExistant.numero, r.corps.numero);
+
+  // Second enfant de la même mère (dossier existant), sans photo de la mère.
+  const frere = await enregistrerEnfant('infirmiere', { enfant: { prenom: 'Josué', sexe: 'Masculin', dateNaissance: ilYaJ(400) }, mereId: m.numero });
+  assert.equal(frere.status, 201, JSON.stringify(frere.corps));
+  assert.equal(frere.corps.mere.numero, m.numero);
+  const liste = await appel('infirmiere', 'GET', `/enfants?mereId=${m.id}`);
+  assert.equal(liste.corps.length, 2);
+  assert.ok(liste.corps.every((x) => x.origine === 'Né hors plateforme'));
 });

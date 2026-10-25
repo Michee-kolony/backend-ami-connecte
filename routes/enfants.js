@@ -3,7 +3,7 @@
 // ne sont modifiables que par les médecins et les sages-femmes (contrôlé dans le contrôleur).
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
-const { televerserPhoto } = require('../middleware/upload');
+const { televerserPhoto, televerserPhotosEnfantEtMere } = require('../middleware/upload');
 const ctrl = require('../controllers/enfants');
 const rendezVous = require('../controllers/rendezVous');
 
@@ -11,6 +11,9 @@ const router = express.Router();
 router.use(authentifier);
 
 router.get('/', ctrl.rechercher);
+// Enfant né hors plateforme (ni CPN ni accouchement ici) enregistré pour sa vaccination : multipart,
+// données JSON dans « donnees », photo de l'enfant dans « photo », de la nouvelle mère dans « photoMere ».
+router.post('/', televerserPhotosEnfantEtMere, ctrl.enregistrer);
 router.get('/:id', ctrl.obtenir);
 router.patch('/:id', ctrl.modifier);
 router.put('/:id/photo', televerserPhoto, ctrl.changerPhoto);

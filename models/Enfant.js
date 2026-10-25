@@ -9,6 +9,8 @@ const nombre = (min, max) => ({ type: Number, min, max, default: null });
 const sansId = { _id: false };
 
 const STATUTS_ENFANT = ['Suivi', 'Décédé', 'Transféré'];
+/** Né dans la plateforme (dossier d'accouchement), ou ailleurs puis enregistré pour sa vaccination. */
+const ORIGINES = ['Né dans la plateforme', 'Né hors plateforme'];
 const ALIMENTATIONS = ['Allaitement exclusif', 'Allaitement mixte', 'Alimentation de complément', 'Alimentation familiale'];
 
 /** Cotation APGAR à une minute donnée : 5 critères de 0 à 2, total calculé. */
@@ -49,6 +51,8 @@ const administrationSchema = new mongoose.Schema({
   lieu: texte,
   etablissementId: { type: String, default: null },
   observations: texte,
+  /** Dose reçue ailleurs, recopiée du carnet papier à l'enregistrement (administreePar : qui l'a recopiée). */
+  reportee: { type: Boolean, default: false },
   administreePar: { type: auteurSchema, required: true },
   le: { type: Date, required: true },
   annulation: {
@@ -83,6 +87,9 @@ const enfantSchema = new mongoose.Schema({
   accouchementId: { type: mongoose.Schema.Types.ObjectId, ref: 'Accouchement', default: null, index: true },
   grossesseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Grossesse', default: null },
   etablissementId: { type: String, default: null },
+  origine: { type: String, enum: ORIGINES, default: 'Né dans la plateforme' },
+  /** Né hors plateforme : lieu de naissance déclaré (autre maternité, domicile…). */
+  lieuNaissance: texte,
 
   nom: { type: String, default: '', trim: true, uppercase: true },
   postnom: { type: String, default: '', trim: true, uppercase: true },
@@ -170,4 +177,5 @@ enfantSchema.methods.age = function (aujourdhui = vaccination.jourKinshasa()) {
 
 module.exports = mongoose.model('Enfant', enfantSchema);
 module.exports.STATUTS_ENFANT = STATUTS_ENFANT;
+module.exports.ORIGINES = ORIGINES;
 module.exports.ALIMENTATIONS = ALIMENTATIONS;

@@ -1,3 +1,4 @@
+const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const Enfant = require('../models/Enfant');
 const Patiente = require('../models/Patiente');
@@ -9,13 +10,17 @@ const acc = require('../config/accouchement');
 const vaccination = require('../config/vaccination');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const { verifierDoublon } = require('./rendezVous');
-const { erreur, texte, nombre, instant, jour, T, N, B, lire, fusionner, valider, pasDansLeFutur } = require('./saisie');
+const { trouverPatiente, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
+const { erreur, texte, nombre, instant, jour, objet, T, N, B, lire, fusionner, valider, pasDansLeFutur } = require('./saisie');
 
 const { STATUTS_ACTIFS, CANAUX_RAPPEL } = RendezVous;
 const echapperRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Heure par défaut des séances de vaccination : 9 h à Kinshasa (8 h UTC). */
 const HEURE_SEANCE_UTC = 'T08:00:00Z';
 const DOSSIER_PHOTOS = 'enfant';
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Âge maximal à l'enregistrement d'un enfant né hors plateforme (suivi jusqu'à l'âge préscolaire). */
+const AGE_MAX_ENREGISTREMENT_ANS = 6;
 
 const APGAR = Object.fromEntries(acc.APGAR_CRITERES.map(({ code }) => [code, N]));
 /** Module 5 — champs de la naissance acceptés depuis le formulaire. */
@@ -52,7 +57,7 @@ function resume(e, photoUrl = null) {
   return {
     id: e.id, numero: e.numero, nom: e.nom, postnom: e.postnom, prenom: e.prenom, sexe: e.sexe,
     neLe: e.neLe, dateNaissance: e.dateNaissance, rang: e.rang, etatNaissance: e.etatNaissance, statut: e.statut,
-    age: e.age(), mereId: e.mereId, accouchementId: e.accouchementId, photoUrl,
+    age: e.age(), mereId: e.mereId, accouchementId: e.accouchementId, origine: e.origine, photoUrl,
     vaccination: carnet ? { prochaineSeance: carnet.prochaineSeance, ...carnet.resume } : null,
   };
 }
@@ -128,6 +133,131 @@ async function creerNaissance(dossier, d, req) {
   return e;
 }
 exports.creerNaissance = creerNaissance;
+
+/**
+ * Mère d'un enfant né hors plateforme, sans dossier (ni CPN ni accouchement ici) : dossier minimal,
+ * photo d'identification et compte de l'application patiente (suivi des vaccins de son enfant).
+ * Renvoie null après avoir répondu 409 si elle semble déjà enregistrée et que le soignant n'a pas confirmé.
+ */
+async function nouvelleMere(req, res, corps) {
+  const d = objet(corps.nouvelleMere);
+  const champs = champsAdministratifs({
+    nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
+    telephone: d.telephone, contactUrgence: objet(d.contactUrgence), adresse: objet(d.adresse), email: d.email,
+  });
+  if (!req.files?.photoMere?.[0]) throw erreur(400, 'La photo de la mère est obligatoire.');
+  if (!champs.nom) throw erreur(400, 'Le nom de la mère est obligatoire.');
+  if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge de la mère obligatoire.');
+  if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la mère obligatoire et valide (application patiente).');
+  const motDePasse = objet(corps.compte).motDePasse;
+  if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la mère trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
+  const memeEmail = await Patiente.findOne({ email: champs.email });
+  if (memeEmail) {
+    res.status(409).json({
+      message: `Cette adresse e-mail appartient déjà au dossier ${memeEmail.numero} : si c’est la même mère, choisissez son dossier.`,
+      emailExistant: true,
+      doublons: [{
+        id: memeEmail.id, numero: memeEmail.numero, nom: memeEmail.nom, postnom: memeEmail.postnom, prenom: memeEmail.prenom,
+        age: memeEmail.age(), telephoneMasque: memeEmail.telephoneMasque(), commune: memeEmail.adresse?.commune ?? '',
+      }],
+    });
+    return null;
+  }
+  const doublons = await chercherDoublons(champs);
+  if (doublons.length && corps.confirmerMalgreDoublons !== true) {
+    res.status(409).json({ message: 'Dossier(s) existant(s) possiblement identique(s) : si c’est la même mère, choisissez son dossier.', doublons });
+    return null;
+  }
+  return new Patiente({
+    ...champs,
+    ageDeclareLe: champs.ageDeclare != null ? new Date().toISOString().slice(0, 10) : null,
+    etablissementId: req.etablissementId ?? null,
+    enregistreeVia: 'Enregistrement enfant',
+    statut: 'Suivi postnatal',
+    motDePasse: await bcrypt.hash(motDePasse, 12),
+    espaceEnLigne: 'Activé',
+    creePar: auteurDe(req.soignant),
+    numero: await Patiente.prochainNumero(),
+  });
+}
+
+/**
+ * Enfant né hors plateforme (sa mère n'a pas suivi ses CPN ni accouché ici) enregistré pour sa
+ * vaccination : rattaché à sa mère (dossier existant `mereId`, ou créé : `nouvelleMere` + `compte`),
+ * photo obligatoire, doses déjà reçues recopiées du carnet (`vaccinationsAnterieures`), puis la
+ * prochaine séance du calendrier est programmée. Tout le personnel soignant.
+ */
+exports.enregistrer = async (req, res) => {
+  let corps;
+  try {
+    corps = objet(typeof req.body?.donnees === 'string' ? JSON.parse(req.body.donnees) : req.body);
+  } catch {
+    throw erreur(400, 'Données du formulaire invalides.');
+  }
+  const d = objet(corps.enfant);
+  const photo = req.files?.photo?.[0];
+  if (!photo) throw erreur(400, 'La photo de l’enfant est obligatoire.');
+  if (!acc.SEXES.includes(d.sexe)) throw erreur(400, 'Sexe de l’enfant requis.');
+  const dateNaissance = jour(d.dateNaissance, 'Date de naissance de l’enfant');
+  if (!dateNaissance) throw erreur(400, 'Date de naissance de l’enfant obligatoire.');
+  const heure = texte(d.heureNaissance, 5);
+  if (heure && !/^([01]\d|2[0-3]):[0-5]\d$/.test(heure)) throw erreur(400, 'Heure de naissance invalide (HH:MM attendu).');
+  // Sans heure connue : midi à Kinshasa, pour garder le bon jour civil (base du calendrier vaccinal).
+  const neLe = pasDansLeFutur(new Date(`${dateNaissance}T${heure || '12:00'}:00+01:00`), 'La naissance');
+  const [an, mois, j] = vaccination.jourKinshasa().split('-');
+  if (dateNaissance < `${Number(an) - AGE_MAX_ENREGISTREMENT_ANS}-${mois}-${j}`) {
+    throw erreur(400, `Enfant de plus de ${AGE_MAX_ENREGISTREMENT_ANS} ans : le suivi vaccinal s’arrête à l’âge préscolaire.`);
+  }
+  const anterieures = Array.isArray(corps.vaccinationsAnterieures) ? corps.vaccinationsAnterieures : [];
+  if (anterieures.length > vaccination.CODES.length) throw erreur(400, 'Trop de doses antérieures.');
+
+  let mere;
+  if (corps.mereId) mere = await trouverPatiente(String(corps.mereId));
+  else if (corps.nouvelleMere) {
+    mere = await nouvelleMere(req, res, corps);
+    if (!mere) return; // 409 déjà envoyée (dossiers possiblement identiques)
+  } else throw erreur(400, 'Choisissez le dossier de la mère ou enregistrez-la.');
+  const prenom = texte(d.prenom, 120);
+  if (!mere.isNew && corps.confirmerMalgreDoublons !== true) {
+    const meme = await Enfant.findOne({ mereId: mere._id, dateNaissance, ...(prenom ? { prenom: new RegExp(`^${echapperRegex(prenom)}$`, 'i') } : {}) }).select('numero');
+    if (meme) return res.status(409).json({ message: `Cet enfant semble déjà enregistré (${meme.numero}).`, enfantExistant: { id: meme.id, numero: meme.numero } });
+  }
+
+  const auteur = auteurDe(req.soignant);
+  const e = new Enfant({
+    numero: await Enfant.prochainNumero(),
+    mereId: mere._id, etablissementId: req.etablissementId ?? null,
+    origine: 'Né hors plateforme', lieuNaissance: texte(d.lieuNaissance, 200),
+    nom: texte(d.nom, 120) || mere.nom || '', postnom: texte(d.postnom, 120), prenom,
+    sexe: d.sexe, neLe, dateNaissance, rang: nombre(d.rang) ?? 1,
+    naissance: lire({ poidsG: N, tailleCm: N, perimetreCranienCm: N }, objet(d.naissance)),
+    creePar: auteur,
+  });
+  ajouterDoses(e, anterieures, auteur, { reportee: true });
+  if (mere.isNew) await valider(mere);
+  await valider(e);
+  // Photos envoyées après toutes les validations, pour ne pas laisser de fichier orphelin.
+  const nouvelle = mere.isNew;
+  e.photoCle = (await envoyerFichier(photo, DOSSIER_PHOTOS)).cle;
+  if (nouvelle) mere.photoCle = (await envoyerFichier(req.files.photoMere[0], 'patiente')).cle;
+  // Sans transaction (MongoDB autonome) : en cas d'échec, les documents et fichiers créés ici sont retirés.
+  try {
+    if (nouvelle) await mere.save();
+    await e.save();
+  } catch (err) {
+    await Promise.all([
+      nouvelle && Patiente.deleteOne({ _id: mere._id }),
+      supprimerFichier(e.photoCle),
+      nouvelle && supprimerFichier(mere.photoCle),
+    ]).catch(() => {});
+    if (err.code === 11000) throw erreur(409, 'Identifiant ou e-mail déjà utilisé, réessayez.');
+    throw err;
+  }
+  if (nouvelle) await journaliser(req, { action: 'patiente.creation', patienteId: mere._id, ressource: { type: 'patiente', id: mere.numero }, details: { via: 'Enregistrement enfant' } });
+  await journaliser(req, { action: 'enfant.enregistrement', patienteId: mere._id, ressource: { type: 'enfant', id: e.numero }, details: { dosesAnterieures: anterieures.length } });
+  await planifierProchaineVaccination(e, auteur, req.etablissementId);
+  res.status(201).json(await vue(e));
+};
 
 /** Dossier complet de l'enfant (carnet vaccinal, croissance, rendez-vous, mère). */
 async function vue(e) {
@@ -230,6 +360,30 @@ exports.modifier = async (req, res) => {
 };
 
 /**
+ * Doses du calendrier ajoutées au dossier (contrôles : dose connue, pas déjà faite, date entre la
+ * naissance et aujourd'hui). `reportee` : doses reçues ailleurs, recopiées du carnet papier.
+ */
+function ajouterDoses(e, saisies, auteur, { etablissementId = null, reportee = false } = {}) {
+  const aujourdhui = vaccination.jourKinshasa();
+  const dejaFaites = new Set(e.vaccinationsValides().map((v) => v.code));
+  for (const s of saisies.map(objet)) {
+    const dose = vaccination.PAR_CODE.get(s.code);
+    if (!dose) throw erreur(400, 'Vaccin ou supplémentation inconnu du calendrier.');
+    if (dejaFaites.has(dose.code)) throw erreur(409, `${dose.libelle} est déjà enregistré pour cet enfant.`);
+    const date = jour(s.date, 'Date d’administration') ?? (reportee ? null : aujourdhui);
+    if (!date) throw erreur(400, `Date de la dose ${dose.libelle} obligatoire (voir le carnet de l’enfant).`);
+    if (date > aujourdhui) throw erreur(400, 'La date d’administration ne peut pas être dans le futur.');
+    if (date < e.dateNaissance) throw erreur(400, 'La date d’administration précède la naissance.');
+    e.vaccinations.push({
+      code: dose.code, date, lot: texte(s.lot, 60), site: texte(s.site, 120), lieu: texte(s.lieu, 200),
+      observations: texte(s.observations, 1000), etablissementId: reportee ? null : etablissementId, reportee,
+      administreePar: auteur, le: new Date(),
+    });
+    dejaFaites.add(dose.code);
+  }
+}
+
+/**
  * Doses administrées (une ou plusieurs d'une même séance) : le rendez-vous de vaccination du jour
  * passe « Effectué » et la séance suivante du calendrier est programmée.
  */
@@ -238,22 +392,8 @@ exports.vacciner = async (req, res) => {
   if (!e.estSuivi()) throw erreur(409, 'Cet enfant n’est pas (ou plus) suivi : aucune vaccination ne peut être enregistrée.');
   const saisies = Array.isArray(req.body?.doses) ? req.body.doses : [req.body || {}];
   if (!saisies.length || saisies.length > 10) throw erreur(400, 'Indiquez entre 1 et 10 doses.');
-  const aujourdhui = vaccination.jourKinshasa();
   const auteur = auteurDe(req.soignant);
-  const dejaFaites = new Set(e.vaccinationsValides().map((v) => v.code));
-  for (const s of saisies) {
-    const dose = vaccination.PAR_CODE.get(s?.code);
-    if (!dose) throw erreur(400, 'Vaccin ou supplémentation inconnu du calendrier.');
-    if (dejaFaites.has(dose.code)) throw erreur(409, `${dose.libelle} est déjà enregistré pour cet enfant.`);
-    const date = jour(s.date, 'Date d’administration') ?? aujourdhui;
-    if (date > aujourdhui) throw erreur(400, 'La date d’administration ne peut pas être dans le futur.');
-    if (date < e.dateNaissance) throw erreur(400, 'La date d’administration précède la naissance.');
-    e.vaccinations.push({
-      code: dose.code, date, lot: texte(s.lot, 60), site: texte(s.site, 120), lieu: texte(s.lieu, 200),
-      observations: texte(s.observations, 1000), etablissementId: req.etablissementId, administreePar: auteur, le: new Date(),
-    });
-    dejaFaites.add(dose.code);
-  }
+  ajouterDoses(e, saisies, auteur, { etablissementId: req.etablissementId });
   await valider(e);
   await e.save();
   await marquerSeancesEffectuees(e, auteur);

@@ -107,8 +107,11 @@ const patienteSchema = new mongoose.Schema({
   },
 
   etablissementId: { type: String, default: null },
-  /** Origine du dossier : enregistrement CPN complet, ou admission directe en salle de travail (sans CPN). */
-  enregistreeVia: { type: String, enum: ['Enregistrement CPN', 'Admission directe'], default: 'Enregistrement CPN' },
+  /**
+   * Origine du dossier : enregistrement CPN complet, admission directe en salle de travail (sans CPN),
+   * ou enregistrement de son enfant né hors plateforme (vaccination, sans CPN ni accouchement ici).
+   */
+  enregistreeVia: { type: String, enum: ['Enregistrement CPN', 'Admission directe', 'Enregistrement enfant'], default: 'Enregistrement CPN' },
   statut: { type: String, enum: STATUTS_PATIENTE, default: 'Suivi prénatal' },
   /** Espace en ligne de la patiente (activation par lien sécurisé : phase application mobile). */
   espaceEnLigne: { type: String, enum: ['Non activé', 'Invitation envoyée', 'Activé'], default: 'Non activé' },

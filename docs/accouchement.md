@@ -94,6 +94,28 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
 - `GET /api/enfants?retard=true` : enfants ayant au moins une dose en retard (relance PEV).
 - Le calendrier est une liste dans `config/vaccination.js` : l'équipe PEV l'ajuste si le calendrier national évolue.
 
+### Enfant né hors plateforme (ni CPN ni accouchement ici)
+
+`POST /api/enfants` — tout le personnel soignant (la vaccination est souvent faite par les infirmier·ères). Multipart :
+`donnees` en JSON, `photo` de l'enfant (**obligatoire**), `photoMere` (obligatoire pour une nouvelle mère).
+
+```json
+{
+  "enfant": { "prenom": "", "nom": "", "sexe": "Féminin", "dateNaissance": "AAAA-MM-JJ", "heureNaissance": "HH:MM",
+              "lieuNaissance": "", "naissance": { "poidsG": 3100, "tailleCm": null, "perimetreCranienCm": null } },
+  "mereId": "AC-PAT-…",
+  "nouvelleMere": { "nom": "", "prenom": "", "ageDeclare": 29, "email": "", "telephone": "" }, "compte": { "motDePasse": "" },
+  "vaccinationsAnterieures": [{ "code": "bcg", "date": "AAAA-MM-JJ", "lieu": "" }],
+  "confirmerMalgreDoublons": false
+}
+```
+
+- `mereId` (dossier existant) **ou** `nouvelleMere` + `compte` : dossier minimal `enregistreeVia: "Enregistrement enfant"`,
+  statut « Suivi postnatal », compte de l'application patiente activé. Doublons de la mère : 409 `doublons` (comme l'admission directe).
+- Enfant `origine: "Né hors plateforme"`, sans `accouchementId` ; 6 ans au plus. Même mère, même date de naissance (et même prénom) : 409 `enfantExistant`.
+- Doses déjà reçues recopiées du carnet papier : `reportee: true`, date obligatoire. Les doses manquantes ressortent « En retard »
+  et la prochaine séance (rattrapage) est programmée tout de suite.
+
 ## Espace patiente (`/api/espace-patiente`)
 
 | Route | Contenu |
