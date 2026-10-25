@@ -533,6 +533,21 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.ok(!('alertes' in vu) && !('surveillances' in vu), 'alertes internes non exposées');
   assert.ok(!JSON.stringify(vu).includes(comptes.medecin.id), 'pas d’identifiant de soignant');
 
+  // Carte patiente : même PDF que celui du médecin, ouvert par un lien temporaire.
+  const enTetes = { Authorization: `Bearer ${jetons[jeton] ?? jeton}` };
+  const carteDirecte = await fetch(`${api}/espace-patiente/carte`, { headers: enTetes });
+  assert.equal(carteDirecte.status, 200);
+  assert.equal(carteDirecte.headers.get('content-type'), 'application/pdf');
+  assert.equal(Buffer.from(await carteDirecte.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  const lien = await appel(jeton, 'POST', '/espace-patiente/carte/lien');
+  assert.equal(lien.status, 200, JSON.stringify(lien.corps));
+  const parLien = await fetch(`${api}${lien.corps.chemin}`);
+  assert.equal(parLien.status, 200);
+  assert.equal(Buffer.from(await parLien.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  assert.equal((await fetch(`${api}/espace-patiente/carte.pdf?jeton=faux`)).status, 401);
+  const jetonSession = enTetes.Authorization.split(' ')[1];
+  assert.equal((await fetch(`${api}/espace-patiente/carte.pdf?jeton=${jetonSession}`)).status, 401, 'jeton de session refusé dans un lien');
+
   // Conseils : ceux de la sortie de maternité, et les articles approuvés seulement.
   const Article = require('../models/Article');
   const auteurArticle = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };

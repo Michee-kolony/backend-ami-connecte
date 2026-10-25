@@ -7,9 +7,13 @@ const discussions = require('../controllers/discussions');
 const router = express.Router();
 
 router.post('/connexion', ctrl.connexion);
+// Carte patiente ouverte hors de l'application (lecteur PDF) : lien temporaire signé.
+router.get('/carte.pdf', ctrl.carteParLien);
 
 router.use(authentifierPatiente);
 router.get('/moi', ctrl.moi);
+router.get('/carte', ctrl.carte);
+router.post('/carte/lien', ctrl.lienCarte);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 router.post('/appareils', ctrl.enregistrerAppareil);
 router.delete('/appareils', ctrl.retirerAppareil);

@@ -158,27 +158,50 @@ function genererPdf({ patiente, etablissement, photo, qr, delivreePar }) {
   return fin;
 }
 
-/** GET /api/patientes/:id/carte — PDF de la carte (médecins) ; chaque génération est journalisée. */
-exports.carte = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+/** PDF de la carte d'une patiente (même carte pour le tableau de bord et l'espace patiente). */
+async function pdfCarte(patiente, { origine, delivreePar }) {
   const [etablissement] = patiente.etablissementId ? await Etablissement.actifsParIds([patiente.etablissementId]) : [];
   const brute = await lireFichier(patiente.photoCle);
-  const qr = await QRCode.toBuffer(lienDossier(patiente.numero, origineSite(req)), {
+  const qr = await QRCode.toBuffer(lienDossier(patiente.numero, origine), {
     errorCorrectionLevel: 'M', margin: 1, width: 360, color: { dark: BLEU_FONCE, light: '#ffffff' },
   });
-  const s = req.soignant;
-  const pdf = await genererPdf({
-    patiente, etablissement, qr,
-    photo: imageLisible(brute) ? brute : null,
-    delivreePar: `${s.role.startsWith('Médecin') ? 'Dr ' : ''}${s.prenom} ${s.nom}`,
-  });
-  await journaliser(req, { action: 'patiente.carte', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
+  return genererPdf({ patiente, etablissement, qr, photo: imageLisible(brute) ? brute : null, delivreePar });
+}
+
+function envoyerPdf(res, patiente, pdf) {
   res.set({
     'Content-Type': 'application/pdf',
     'Content-Disposition': `inline; filename="carte-${patiente.numero}.pdf"`,
     'Cache-Control': 'no-store',
   });
   res.send(pdf);
+}
+
+/** GET /api/patientes/:id/carte — PDF de la carte (médecins) ; chaque génération est journalisée. */
+exports.carte = async (req, res) => {
+  const patiente = await trouverPatiente(req.params.id);
+  const s = req.soignant;
+  const pdf = await pdfCarte(patiente, {
+    origine: origineSite(req),
+    delivreePar: `${s.role.startsWith('Médecin') ? 'Dr ' : ''}${s.prenom} ${s.nom}`,
+  });
+  await journaliser(req, { action: 'patiente.carte', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
+  envoyerPdf(res, patiente, pdf);
+};
+
+/**
+ * Carte demandée par la patiente depuis l'application. Le QR code pointe vers le tableau de
+ * bord (APP_URL) ; « délivrée par » : le soignant qui a enregistré le dossier.
+ */
+exports.cartePatiente = async (req, res) => {
+  const patiente = req.patiente;
+  const a = patiente.creePar;
+  const pdf = await pdfCarte(patiente, {
+    origine: null,
+    delivreePar: a ? `${a.role?.startsWith('Médecin') ? 'Dr ' : ''}${a.nom}` : 'AMI Santé Connect',
+  });
+  await journaliser(req, { action: 'patiente.carte', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero }, details: { depuis: 'espace patiente' } });
+  envoyerPdf(res, patiente, pdf);
 };
 
 exports.lienDossier = lienDossier;

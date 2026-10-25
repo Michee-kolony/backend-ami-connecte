@@ -21,6 +21,7 @@ const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const { motDePasseValide } = require('./patientes');
+const carte = require('./carte');
 const { erreur, texte } = require('./saisie');
 
 const { STATUTS_ACTIFS } = RendezVous;
@@ -56,6 +57,35 @@ async function profil(p) {
 
 exports.moi = async (req, res) => {
   res.json(await profil(req.patiente));
+};
+
+/** Carte patiente (PDF), même modèle que celle imprimée par le médecin. */
+exports.carte = carte.cartePatiente;
+
+const DUREE_LIEN_CARTE = '5m';
+
+/**
+ * Lien de téléchargement de la carte, valable 5 minutes : le téléphone l'ouvre dans son lecteur
+ * PDF (impression, partage) sans y transmettre le jeton de session de la patiente.
+ */
+exports.lienCarte = async (req, res) => {
+  const jeton = jwt.sign({ sub: req.patiente.id, typ: 'carte-patiente' }, process.env.JWT_SECRET, { expiresIn: DUREE_LIEN_CARTE });
+  res.json({ chemin: `/espace-patiente/carte.pdf?jeton=${encodeURIComponent(jeton)}` });
+};
+
+/** GET /espace-patiente/carte.pdf?jeton=… — carte ouverte par le lien temporaire. */
+exports.carteParLien = async (req, res) => {
+  let sub;
+  try {
+    ({ sub } = jwt.verify(String(req.query.jeton || ''), process.env.JWT_SECRET, { maxAge: DUREE_LIEN_CARTE }));
+    if (jwt.decode(String(req.query.jeton)).typ !== 'carte-patiente') throw new Error('type');
+  } catch {
+    throw erreur(401, 'Lien expiré : téléchargez à nouveau la carte depuis l’application.');
+  }
+  const patiente = await Patiente.findById(sub);
+  if (!patiente || patiente.espaceEnLigne !== 'Activé') throw erreur(401, 'Compte inactif ou introuvable.');
+  req.patiente = patiente;
+  return carte.cartePatiente(req, res);
 };
 
 exports.changerMotDePasse = async (req, res) => {
