@@ -118,6 +118,27 @@ test('partogramme : zones verte / jaune / rouge (ligne d’alerte 1 cm/h, ligne 
   assert.equal(zoneDilatation(12, 10), 'Verte', 'dilatation complète');
 });
 
+test('partogramme : tableau horaire sous la dilatation (14 colonnes, dernière valeur de l’heure, médicaments IV cumulés)', () => {
+  const { tableauHoraire } = require('../config/partogramme');
+  const debut = new Date('2026-01-01T08:00:00Z');
+  const a = (minutes, champs) => ({ le: new Date(debut.getTime() + minutes * 60000), ...champs });
+  const { colonnes } = tableauHoraire([
+    a(-30, { pouls: 70 }),
+    a(10, { contractions10min: 2, pouls: 80, medicamentsIV: 'Sérum glucosé' }),
+    a(50, { contractions10min: 3, ocytocine: { uParMl: 5, gouttesMin: 8 }, medicamentsIV: 'Ampicilline' }),
+    a(65, { taSystolique: 120, taDiastolique: 80, membranes: 'Rompues' }),
+    a(15 * 60 + 5, { temperature: 37.8 }),
+  ], debut);
+  assert.equal(colonnes.length, 16, 'au moins 14 colonnes, prolongées jusqu’à la dernière mesure');
+  assert.deepEqual(
+    [colonnes[0].contractions10min, colonnes[0].pouls, colonnes[0].ocytocineGouttesMin, colonnes[0].medicamentsIV],
+    [3, 80, 8, ['Sérum glucosé', 'Ampicilline']],
+  );
+  assert.deepEqual([colonnes[1].taSystolique, colonnes[1].membranes, colonnes[1].contractions10min], [120, 'Rompues', null]);
+  assert.equal(colonnes[15].temperature, 37.8);
+  assert.deepEqual(tableauHoraire([a(10, { pouls: 80 })], null), { colonnes: [] }, 'pas de tableau avant la phase active');
+});
+
 test('calendrier PEV RDC : dates des séances, intervalle de 4 semaines dans une série, VPO 0 hors délai après 14 jours', () => {
   const { calendrier, dateAge } = require('../config/vaccination');
   assert.equal(dateAge('2026-01-31', { mois: 1 }), '2026-02-28', 'mois plus court : dernier jour du mois');

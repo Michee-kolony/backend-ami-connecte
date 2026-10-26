@@ -62,6 +62,9 @@ Référentiels : `config/accouchement.js` (listes de la fiche), `config/partogra
 - Graphe BCF : échelle 100–180, lignes 120 et 160. Graphe dilatation : ligne d'alerte (4 cm → 10 cm à 1 cm/h),
   ligne d'action 4 h à droite ; zone **verte** à gauche de la ligne d'alerte, **jaune** entre les deux, **rouge** au-delà.
   `GET /:id/partogramme` renvoie les points, les lignes et la zone de chaque point.
+- Tableau sous la dilatation (`partogramme.tableau.colonnes`) : une colonne par heure de phase active (14 au minimum,
+  colonne 1 = 0 à 1 h) avec contractions /10 min, durée, membranes, LA, pertes de sang, température, pouls, TA,
+  diurèse, ocytocine (U/ml, gttes/min) — dernière valeur saisie dans l'heure — et tous les médicaments / injections IV de l'heure.
 - Alertes calculées à chaque saisie (renvoyées dans la réponse, `sonore: true` pour celles qui doivent sonner) :
 
 | Code | Déclencheur | Sonore | Notification |

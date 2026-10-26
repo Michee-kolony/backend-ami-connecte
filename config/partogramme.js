@@ -48,6 +48,43 @@ function pointsDilatation(surveillances, debutPhaseActive) {
     });
 }
 
+/** Nombre minimal de colonnes horaires du tableau sous les graphes, comme sur la feuille. */
+const COLONNES_TABLEAU = 14;
+
+/**
+ * Tableau horaire sous le graphe de dilatation : une colonne par heure écoulée depuis le début
+ * de la phase active (colonne 1 = de 0 à 1 h). Dans une colonne, chaque ligne garde la dernière
+ * valeur saisie dans l'heure ; les médicaments et injections IV de l'heure sont tous repris.
+ */
+function tableauHoraire(surveillances, debutPhaseActive) {
+  if (!debutPhaseActive) return { colonnes: [] };
+  const debut = new Date(debutPhaseActive).getTime();
+  const actives = surveillances
+    .filter((s) => new Date(s.le).getTime() >= debut)
+    .sort((a, b) => a.le - b.le);
+  const numero = (s) => Math.floor((new Date(s.le).getTime() - debut) / HEURE) + 1;
+  const nombre = Math.max(COLONNES_TABLEAU, ...actives.map(numero));
+  const colonnes = Array.from({ length: nombre }, (_, i) => ({
+    heure: i + 1,
+    debut: new Date(debut + i * HEURE),
+    contractions10min: null, dureeContractionsSec: null, membranes: null, liquideAmniotique: null,
+    pertesSang: null, temperature: null, pouls: null, taSystolique: null, taDiastolique: null, diurese: null,
+    ocytocineUParMl: null, ocytocineGouttesMin: null, medicamentsIV: [],
+  }));
+  const valeurs = (s) => ({
+    contractions10min: s.contractions10min, dureeContractionsSec: s.dureeContractionsSec, membranes: s.membranes,
+    liquideAmniotique: s.liquideAmniotique, pertesSang: s.saignement, temperature: s.temperature, pouls: s.pouls,
+    taSystolique: s.taSystolique, taDiastolique: s.taDiastolique, diurese: s.diurese,
+    ocytocineUParMl: s.ocytocine?.uParMl, ocytocineGouttesMin: s.ocytocine?.gouttesMin,
+  });
+  for (const s of actives) {
+    const c = colonnes[numero(s) - 1];
+    for (const [cle, v] of Object.entries(valeurs(s))) if (v != null && v !== '') c[cle] = v;
+    if (s.medicamentsIV && !c.medicamentsIV.includes(s.medicamentsIV)) c.medicamentsIV.push(s.medicamentsIV);
+  }
+  return { colonnes };
+}
+
 /** Données des graphes du partogramme (BCF, dilatation et effacement du col). */
 function partogramme(surveillances, debutPhaseActive) {
   const debut = debutPhaseActive ? new Date(debutPhaseActive).getTime() : null;
@@ -82,6 +119,8 @@ function partogramme(surveillances, debutPhaseActive) {
       .filter((s) => s.engagement || s.incident)
       .sort((a, b) => a.le - b.le)
       .map((s) => ({ id: String(s._id), le: s.le, heures: heures(s), engagement: s.engagement || null, incident: s.incident || null })),
+    // Tableau sous le graphe de dilatation (contractions, membranes, LA, constantes, ocytocine, médicaments IV).
+    tableau: tableauHoraire(surveillances, debutPhaseActive),
   };
 }
 
@@ -167,5 +206,5 @@ function alertesDe(entree, surveillances, debutPhaseActive, alertesExistantes = 
 
 module.exports = {
   BCF, PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM, VITESSE_CM_H, DECALAGE_ACTION_H, STAGNATION_H,
-  zoneDilatation, bcfAnormal, partogramme, pointsDilatation, alertesDe, mesures, duDossier,
+  COLONNES_TABLEAU, zoneDilatation, bcfAnormal, partogramme, pointsDilatation, tableauHoraire, alertesDe, mesures, duDossier,
 };
