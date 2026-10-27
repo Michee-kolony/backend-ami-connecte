@@ -14,6 +14,8 @@ router.get('/moi', ctrl.moi);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 router.get('/mission', urgences.missionEnCours);
 router.get('/missions', urgences.historiqueMissions);
+// Tableau de bord : courses effectuées, délais moyens, activité de la semaine.
+router.get('/statistiques', urgences.statistiquesChauffeur);
 router.post('/missions/:numero/statut', urgences.changerStatutCourse);
 // Chat de la mission avec la patiente et la régulation
 router.get('/missions/:numero/messages', messages.lister);

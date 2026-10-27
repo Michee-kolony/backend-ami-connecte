@@ -213,6 +213,9 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   assert.deepEqual([libre.statut, libre.urgence], ['Disponible', null], 'ambulance libérée');
   assert.deepEqual((await appel('patiente', 'GET', '/espace-patiente/urgences/active')).corps, { urgence: null });
   assert.equal((await appel('chauffeur', 'GET', `/chauffeur/missions/URG-999999/messages`)).status, 404);
+  const stats = (await appel('chauffeur', 'GET', '/chauffeur/statistiques')).corps;
+  assert.deepEqual([stats.courses.total, stats.courses.aujourdhui, stats.patientesTransportees, stats.parGravite['élevée'], stats.septJours.length, stats.septJours[6].courses],
+    [1, 1, 1, 1, 7, 1]);
 });
 
 test('urgence : annulation par la patiente avant le départ, fausse alerte annulée par la régulation', async () => {

@@ -392,6 +392,47 @@ exports.historiqueMissions = async (req, res) => {
   })));
 };
 
+/** Moyenne arrondie (minutes) ; null sans valeur. */
+const moyenne = (liste) => (liste.length ? Math.round(liste.reduce((s, v) => s + v, 0) / liste.length) : null);
+const minutesEntre = (a, b) => (a && b ? (new Date(b) - new Date(a)) / 60000 : null);
+
+/**
+ * Tableau de bord du chauffeur : courses effectuées (aujourd'hui, semaine, mois, total),
+ * annulations, délais moyens, répartition par gravité et activité des 7 derniers jours.
+ * Jours comptés à l'heure de Kinshasa. Une mission qui lui a été retirée n'est pas comptée.
+ */
+exports.statistiquesChauffeur = async (req, res) => {
+  const liste = await Urgence.find({ chauffeurId: req.chauffeur._id }).select('etat statutCourse gravite evenements createdAt clotureLe').lean();
+  const jourDe = (d) => heureLocale(d).slice(0, 10);
+  const aujourdhui = jourDe(new Date());
+  const jours = Array.from({ length: 7 }, (_, i) => jourDe(new Date(Date.now() - (6 - i) * 86400000)));
+  const debutSemaine = jours[0];
+  const mois = aujourdhui.slice(0, 7);
+
+  const effectuees = liste.filter((x) => x.etat === 'résolue');
+  const evenement = (x, type) => x.evenements.find((e) => e.type === type)?.le;
+  // Délai d'arrivée : de l'envoi de l'ambulance à l'arrivée sur place ; durée : de l'envoi à la clôture.
+  const delais = effectuees.map((x) => minutesEntre(evenement(x, 'Ambulance envoyée'), evenement(x, 'Arrivée sur place'))).filter((v) => v != null && v >= 0);
+  const durees = effectuees.map((x) => minutesEntre(evenement(x, 'Ambulance envoyée'), x.clotureLe)).filter((v) => v != null && v >= 0);
+
+  res.json({
+    courses: {
+      total: effectuees.length,
+      aujourdhui: effectuees.filter((x) => jourDe(x.createdAt) === aujourdhui).length,
+      semaine: effectuees.filter((x) => jourDe(x.createdAt) >= debutSemaine).length,
+      mois: effectuees.filter((x) => jourDe(x.createdAt).startsWith(mois)).length,
+    },
+    patientesTransportees: effectuees.filter((x) => x.evenements.some((e) => e.type === 'Patiente à bord')).length,
+    annulees: liste.filter((x) => x.etat === 'annulée').length,
+    enCours: liste.filter((x) => u.ETATS_ACTIFS.includes(x.etat)).length,
+    delaiArriveeMoyenMin: moyenne(delais),
+    dureeMoyenneMin: moyenne(durees),
+    parGravite: Object.fromEntries(u.GRAVITES.map((g) => [g, effectuees.filter((x) => x.gravite === g).length])),
+    septJours: jours.map((jour) => ({ jour, courses: effectuees.filter((x) => jourDe(x.createdAt) === jour).length })),
+    derniereCourse: effectuees.reduce((d, x) => (!d || x.clotureLe > d ? x.clotureLe : d), null),
+  });
+};
+
 /**
  * Statut de la course, dans l'ordre (une étape peut être sautée, jamais reprise en arrière).
  * « Terminée » clôt l'urgence et libère l'ambulance.
