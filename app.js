@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { identifierRequete } = require('./middleware/clinique');
+const { idempotence } = require('./middleware/idempotence');
 
 process.loadEnvFile();
 
@@ -18,6 +19,10 @@ app.use(cors({ exposedHeaders: ['X-Request-Id'] }));
 app.use(identifierRequete);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Saisies hors connexion de l'espace administrateur : une opération (X-Operation-Id) n'est
+// jamais exécutée deux fois, même renvoyée plusieurs fois à la synchronisation.
+app.use('/api', idempotence);
 
 app.get('/', (req, res) => {
   res.json({ message: 'API ami-connecte opérationnelle' });

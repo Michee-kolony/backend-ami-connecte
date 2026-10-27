@@ -249,3 +249,29 @@ test('urgence : annulation par la patiente avant le départ, fausse alerte annul
   const historique = await appel('medecin', 'GET', '/urgences?etat=toutes');
   assert.equal(historique.corps.length, 3);
 });
+
+test('hors connexion : une saisie renvoyée avec le même X-Operation-Id n’est enregistrée qu’une fois', async () => {
+  const envoyer = () => fetch(`${api}/flotte/ambulances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jetons.medecin}`, 'X-Operation-Id': 'op-essai-0001-hors-ligne' },
+    body: JSON.stringify({ immatriculation: 'GR-9999-KN', modele: 'Toyota HiAce', type: 'Type A — transport' }),
+  });
+  const premier = await envoyer();
+  assert.equal(premier.status, 201);
+  const corps = await premier.json();
+  await new Promise((r) => setTimeout(r, 100));
+  const second = await envoyer();
+  assert.deepEqual([second.status, second.headers.get('x-operation-rejouee'), (await second.json()).code], [201, 'oui', corps.code]);
+  const liste = (await appel('medecin', 'GET', '/flotte/ambulances')).corps;
+  assert.equal(liste.filter((a) => a.immatriculation === 'GR-9999-KN').length, 1, 'pas de doublon');
+
+  // Une opération refusée (4xx) n'est pas gardée : elle pourra être retentée après correction.
+  const refus = () => fetch(`${api}/flotte/ambulances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jetons.medecin}`, 'X-Operation-Id': 'op-essai-0002-refus' },
+    body: JSON.stringify({ modele: 'Sans immatriculation', type: 'Type A — transport' }),
+  });
+  assert.equal((await refus()).status, 400);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await refus()).status, 400, 'retentée normalement');
+});
