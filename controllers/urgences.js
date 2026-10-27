@@ -13,6 +13,7 @@ const { journaliser } = require('../config/audit');
 const presence = require('../config/presence');
 const suiviAmbulances = require('../config/suiviAmbulances');
 const notifications = require('../config/notifications');
+const messagesUrgence = require('./messagesUrgence');
 const { urlSignee } = require('../config/r2');
 const u = require('../config/urgences');
 const { erreur, texte, nombre } = require('./saisie');
@@ -159,6 +160,15 @@ async function libererAmbulance(x) {
   await diffuserAmbulance(x.ambulance);
 }
 
+/**
+ * Fin de mission (terminée, clôturée ou annulée) : l'ambulance est libérée et la conversation
+ * de l'urgence est supprimée définitivement ; les trois applications vident leur fil.
+ */
+async function finMission(x) {
+  await libererAmbulance(x);
+  await messagesUrgence.supprimerConversation(x);
+}
+
 async function creerAvecNumero(donnees) {
   for (let essai = 0; ; essai += 1) {
     try {
@@ -232,7 +242,7 @@ exports.annulerParPatiente = async (req, res) => {
   x.clotureLe = new Date();
   x.journaliser('Annulée', 'Application patiente', texte(req.body?.motif, 300) || 'Annulée par la patiente');
   await x.save();
-  await libererAmbulance(x);
+  await finMission(x);
   await journaliser(req, { action: 'urgence.annulation.patiente', patienteId: x.patienteId, ressource: { type: 'urgence', id: x.numero } });
   await diffuser(x);
   res.json(await vuePatiente(x));
@@ -354,7 +364,7 @@ exports.cloturer = async (req, res) => {
   if (x.statutCourse) x.statutCourse = 'Terminée';
   x.journaliser('Clôturée', `${req.soignant.prenom} ${req.soignant.nom}`, texte(req.body?.detail, 500));
   await x.save();
-  await libererAmbulance(x);
+  await finMission(x);
   await journaliser(req, { action: 'urgence.cloture', patienteId: x.patienteId, ressource: { type: 'urgence', id: x.numero } });
   await diffuser(x);
   res.json(await vueRegulation(x));
@@ -369,7 +379,7 @@ exports.annuler = async (req, res) => {
   x.clotureLe = new Date();
   x.journaliser('Annulée', `${req.soignant.prenom} ${req.soignant.nom}`, motif);
   await x.save();
-  await libererAmbulance(x);
+  await finMission(x);
   await journaliser(req, { action: 'urgence.annulation', patienteId: x.patienteId, ressource: { type: 'urgence', id: x.numero } });
   await diffuser(x);
   res.json(await vueRegulation(x));
@@ -458,7 +468,7 @@ exports.changerStatutCourse = async (req, res) => {
     x.journaliser(statut, auteur, texte(req.body?.detail, 500));
   }
   await x.save();
-  if (statut === 'Terminée') await libererAmbulance(x);
+  if (statut === 'Terminée') await finMission(x);
   await journaliser(req, { action: 'urgence.course', patienteId: x.patienteId, ressource: { type: 'urgence', id: x.numero }, details: { statut } });
   await diffuser(x);
   if (statut === 'Arrivée sur place') {

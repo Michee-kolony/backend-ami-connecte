@@ -209,6 +209,10 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   assert.deepEqual(fin.corps.mission.evenements.map((e) => e.type), [
     'Alerte reçue', 'Prise en charge', 'Ambulance envoyée', 'En route', 'Arrivée sur place', 'Patiente à bord', 'Arrivée à l’hôpital', 'Clôturée',
   ]);
+  // Mission terminée : conversation supprimée définitivement, plus d'envoi possible.
+  assert.equal(await MessageUrgence.countDocuments(), 0, 'messages supprimés de la base');
+  assert.deepEqual((await appel('infirmiere', 'GET', `/urgences/${numero}/messages`)).corps, []);
+  assert.equal((await appel('patiente', 'POST', `/espace-patiente/urgences/${numero}/messages`, { texte: 'Merci' })).status, 409);
   const libre = (await appel('medecin', 'GET', '/flotte/ambulances')).corps.find((a) => a.code === 'AMB-01');
   assert.deepEqual([libre.statut, libre.urgence], ['Disponible', null], 'ambulance libérée');
   assert.deepEqual((await appel('patiente', 'GET', '/espace-patiente/urgences/active')).corps, { urgence: null });
@@ -221,7 +225,9 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
 test('urgence : annulation par la patiente avant le départ, fausse alerte annulée par la régulation', async () => {
   const a = await appel('patiente', 'POST', '/espace-patiente/urgences', { motif: 'saignements', lat: -4.33, lng: 15.3 });
   assert.equal(a.corps.gravite, 'critique');
+  await appel('patiente', 'POST', `/espace-patiente/urgences/${a.corps.id}/messages`, { texte: 'Je me suis trompée' });
   const annulee = await appel('patiente', 'POST', `/espace-patiente/urgences/${a.corps.id}/annulation`);
+  assert.equal(await require('../models/MessageUrgence').countDocuments(), 0, 'annulée : conversation supprimée');
   assert.equal(annulee.corps.etat, 'annulée');
 
   const b = await appel('patiente', 'POST', '/espace-patiente/urgences', { motif: 'autre', lat: -4.33, lng: 15.3 });

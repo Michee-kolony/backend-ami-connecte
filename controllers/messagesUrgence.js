@@ -1,6 +1,7 @@
 // Chat d'une urgence : patiente, chauffeur envoyé et régulation échangent dans une même
 // conversation, en temps réel (« urgence:message »). Texte chiffré au repos.
 // Accès : la patiente à ses urgences, le chauffeur à la mission qui lui est confiée, tout le personnel.
+// À la fin de la mission (terminée, clôturée ou annulée), la conversation est supprimée définitivement.
 const Urgence = require('../models/Urgence');
 const MessageUrgence = require('../models/MessageUrgence');
 const presence = require('../config/presence');
@@ -9,8 +10,6 @@ const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const { erreur } = require('./saisie');
 
 const TAILLE_MAX = 1000;
-/** Après la clôture, on peut encore écrire pendant 2 h (remerciements, dernières consignes). */
-const DELAI_APRES_CLOTURE_MS = 2 * 3600000;
 /** Anti-saturation : un message toutes les 500 ms au plus par auteur. */
 const INTERVALLE_MIN_MS = 500;
 const derniersEnvois = new Map();
@@ -52,9 +51,7 @@ exports.envoyer = async (req, res) => {
   const texte = typeof req.body?.texte === 'string' ? req.body.texte.replace(/\r\n/g, '\n').trim() : '';
   if (!texte) throw erreur(400, 'Message vide.');
   if (texte.length > TAILLE_MAX) throw erreur(400, `Message trop long (${TAILLE_MAX} caractères au maximum).`);
-  if (!x.estActive() && (!x.clotureLe || Date.now() - x.clotureLe.getTime() > DELAI_APRES_CLOTURE_MS)) {
-    throw erreur(409, 'Cette urgence est terminée : la conversation est fermée.');
-  }
+  if (!x.estActive()) throw erreur(409, 'Cette mission est terminée : la conversation a été supprimée.');
   const auteur = auteurDe(req);
   const cle = `${auteur.type}:${auteur.id}`;
   if (Date.now() - (derniersEnvois.get(cle) ?? 0) < INTERVALLE_MIN_MS) throw erreur(429, 'Patientez un instant avant le message suivant.');
@@ -75,3 +72,17 @@ exports.envoyer = async (req, res) => {
   }
   res.status(201).json(message);
 };
+
+/**
+ * Suppression définitive de la conversation d'une urgence terminée, puis avis aux trois
+ * applications (« urgence:conversation-supprimee ») pour qu'elles vident leur fil.
+ */
+async function supprimerConversation(x) {
+  await MessageUrgence.deleteMany({ urgenceId: x._id });
+  const avis = { urgence: x.numero };
+  presence.emettrePersonnel('urgence:conversation-supprimee', avis);
+  presence.emettrePatiente(String(x.patienteId), 'urgence:conversation-supprimee', avis);
+  if (x.chauffeurId) presence.emettreChauffeur(String(x.chauffeurId), 'urgence:conversation-supprimee', avis);
+}
+
+module.exports.supprimerConversation = supprimerConversation;
