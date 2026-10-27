@@ -159,6 +159,9 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   // Ambulance en maintenance : refusée ; chauffeur et ambulance disponibles : envoyés.
   await appel('medecin', 'PATCH', '/flotte/ambulances/AMB-02', { statut: 'Maintenance' });
   assert.equal((await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-02' })).status, 409);
+  const profilRecharge = attendre(appli, 'profil:maj');
+  await appel('medecin', 'PATCH', '/flotte/ambulances/AMB-01', { chauffeurId: chauffeur.id });
+  await profilRecharge;
   const missionRecue = attendre(appli, 'mission:nouvelle');
   const suiviPatiente = attendre(tel, 'urgence:maj');
   assert.equal((await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01', infirmierId: idMedecin })).status, 400, 'un médecin n’est pas proposé comme infirmier');
@@ -167,6 +170,9 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   assert.deepEqual(envoi.corps.infirmier, { id: idInfirmiere, nom: 'Inès INF', role: 'Infirmier(ère)', photo: null });
   assert.deepEqual([envoi.corps.ambulanceId, envoi.corps.chauffeur, envoi.corps.statutCourse], ['AMB-01', 'Bienvenu LEMA', 'Assignée']);
   const mission = await missionRecue;
+  // Application rouverte : la mission confiée est rechargée par GET /chauffeur/mission.
+  const rechargee = await appel('chauffeur', 'GET', '/chauffeur/mission');
+  assert.deepEqual([rechargee.status, rechargee.corps.mission?.id, rechargee.corps.mission?.statutCourse], [200, numero, 'Assignée']);
   assert.deepEqual([mission.id, mission.patiente.prenom, mission.lat, mission.infirmier.nom], [numero, 'Marie', -4.3446, 'Inès INF']);
   assert.equal((await suiviPatiente).chauffeur.nom, 'LEMA');
 

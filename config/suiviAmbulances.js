@@ -14,9 +14,14 @@ const contextes = new Map();
 // Chargé à l'usage : presence.js charge aussi ce module.
 const presence = () => require('./presence');
 
-/** À appeler quand l'ambulance ou la mission d'un chauffeur change (affectation, clôture). */
+/**
+ * À appeler quand l'ambulance ou la mission d'un chauffeur change (affectation, clôture) :
+ * le contexte gardé en mémoire est oublié et l'application du chauffeur recharge son profil.
+ */
 function invalider(chauffeurId) {
-  if (chauffeurId) contextes.delete(String(chauffeurId));
+  if (!chauffeurId) return;
+  contextes.delete(String(chauffeurId));
+  presence().emettreChauffeur(String(chauffeurId), 'profil:maj', {});
 }
 
 async function contexte(chauffeurId) {
