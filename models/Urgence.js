@@ -36,6 +36,16 @@ const urgenceSchema = new mongoose.Schema({
   ambulance: { type: String, default: null, index: true },
   chauffeurId: { type: mongoose.Schema.Types.ObjectId, ref: 'Chauffeur', default: null, index: true },
   chauffeurNom: { type: String, default: '' },
+  /** Infirmier·ère ou sage-femme envoyé·e avec l'ambulance (facultatif), figé·e à l'envoi. */
+  infirmier: {
+    type: new mongoose.Schema({
+      id: { type: String, required: true },
+      nom: { type: String, required: true },
+      role: { type: String, required: true },
+      telephone: { type: String, default: '' },
+    }, { _id: false }),
+    default: undefined,
+  },
   statutCourse: { type: String, enum: [...u.STATUTS_COURSE, null], default: null },
 
   evenements: { type: [evenementSchema], default: [] },

@@ -14,6 +14,8 @@ let http;
 let mongoose;
 const jetons = {};
 const sockets = [];
+let idMedecin;
+let idInfirmiere;
 
 async function appel(qui, methode, chemin, corps) {
   const jeton = jetons[qui] ?? qui;
@@ -70,6 +72,8 @@ before(async () => {
   const medecin = await Soignant.create({ ...base, prenom: 'Marie', nom: 'REGULATRICE', role: 'Médecin', matricule: 'MED-9301', email: 'med@urgences.test' });
   const infirmiere = await Soignant.create({ ...base, prenom: 'Inès', nom: 'INF', role: 'Infirmier(ère)', matricule: 'INF-9301', email: 'inf@urgences.test' });
   jetons.medecin = jwt.sign({ sub: medecin.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  idMedecin = medecin.id;
+  idInfirmiere = infirmiere.id;
   jetons.infirmiere = jwt.sign({ sub: infirmiere.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
   const auteur = { id: medecin.id, nom: 'Marie REGULATRICE', role: 'Médecin' };
   const patiente = await Patiente.create({
@@ -157,11 +161,13 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   assert.equal((await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-02' })).status, 409);
   const missionRecue = attendre(appli, 'mission:nouvelle');
   const suiviPatiente = attendre(tel, 'urgence:maj');
-  const envoi = await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01' });
+  assert.equal((await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01', infirmierId: idMedecin })).status, 400, 'un médecin n’est pas proposé comme infirmier');
+  const envoi = await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01', infirmierId: idInfirmiere });
   assert.equal(envoi.status, 200, JSON.stringify(envoi.corps));
+  assert.deepEqual(envoi.corps.infirmier, { id: idInfirmiere, nom: 'Inès INF', role: 'Infirmier(ère)' });
   assert.deepEqual([envoi.corps.ambulanceId, envoi.corps.chauffeur, envoi.corps.statutCourse], ['AMB-01', 'Bienvenu LEMA', 'Assignée']);
   const mission = await missionRecue;
-  assert.deepEqual([mission.id, mission.patiente.prenom, mission.lat], [numero, 'Marie', -4.3446]);
+  assert.deepEqual([mission.id, mission.patiente.prenom, mission.lat, mission.infirmier.nom], [numero, 'Marie', -4.3446, 'Inès INF']);
   assert.equal((await suiviPatiente).chauffeur.nom, 'LEMA');
 
   const ambulances = (await appel('medecin', 'GET', '/flotte/ambulances')).corps;

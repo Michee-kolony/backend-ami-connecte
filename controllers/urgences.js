@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const Urgence = require('../models/Urgence');
 const Ambulance = require('../models/Ambulance');
 const Chauffeur = require('../models/Chauffeur');
+const Soignant = require('../models/Soignant');
 const Patiente = require('../models/Patiente');
 const Etablissement = require('../models/Etablissement');
 const { auteurDe } = require('../models/commun');
@@ -83,6 +84,7 @@ async function vuesRegulation(liste) {
       ambulanceId: x.ambulance ?? undefined,
       chauffeurId: x.chauffeurId ? String(x.chauffeurId) : undefined,
       chauffeur: x.chauffeurNom || undefined,
+      infirmier: x.infirmier ? { id: x.infirmier.id, nom: x.infirmier.nom, role: x.infirmier.role } : null,
       prisEnChargePar: x.prisEnChargePar?.nom ?? null,
       evenements: evenements(x),
     };
@@ -116,6 +118,7 @@ async function vuePatiente(x) {
     creeLe: x.createdAt, lat: x.lat, lng: x.lng,
     ambulance: vueAmbulanceCourte(ambulance),
     chauffeur: chauffeur ? { prenom: chauffeur.prenom, nom: chauffeur.nom, telephone: chauffeur.telephone, photo: chauffeur.photo } : null,
+    infirmier: x.infirmier ? { nom: x.infirmier.nom, role: x.infirmier.role } : null,
     destination: await destination(x),
     evenements: x.evenements.map((e) => ({ le: e.le, type: e.type })),
   };
@@ -132,6 +135,7 @@ async function vueMission(x) {
       adresse: { commune: p.adresse?.commune ?? '', quartier: p.adresse?.quartier ?? '', avenue: p.adresse?.avenue ?? '' },
     } : null,
     destination: await destination(x),
+    infirmier: x.infirmier ? { nom: x.infirmier.nom, role: x.infirmier.role, telephone: x.infirmier.telephone } : null,
     evenements: evenements(x),
   };
 }
@@ -309,6 +313,16 @@ exports.affecter = async (req, res) => {
 
   const ambulance = await Ambulance.findOne({ code: String(req.body?.ambulance || '') });
   if (!ambulance) throw erreur(400, 'Choisissez l’ambulance.');
+
+  // Infirmier·ère ou sage-femme qui accompagne l'ambulance (facultatif).
+  const infirmierId = String(req.body?.infirmierId || '');
+  let infirmier = null;
+  if (infirmierId) {
+    const s = mongoose.isValidObjectId(infirmierId) ? await Soignant.findById(infirmierId) : null;
+    if (!s || s.statut !== 'Actif') throw erreur(400, 'Infirmier·ère introuvable ou suspendu·e.');
+    if (!/^(Infirmier|Sage-femme)/.test(s.role)) throw erreur(400, 'Choisissez un·e infirmier·ère ou une sage-femme.');
+    infirmier = { id: s.id, nom: `${s.prenom} ${s.nom}`.trim(), role: s.role, telephone: s.telephone };
+  }
   const memeAmbulance = ambulance.urgence === x.numero;
   if (!memeAmbulance && ambulance.statut !== 'Disponible') {
     throw erreur(409, ambulance.statut === 'En mission' ? `${ambulance.code} est occupée sur une autre urgence.` : `${ambulance.code} est en ${ambulance.statut.toLowerCase()}.`);
@@ -331,8 +345,10 @@ exports.affecter = async (req, res) => {
   x.chauffeurId = chauffeur._id;
   x.chauffeurNom = nomChauffeur(chauffeur);
   x.statutCourse = 'Assignée';
+  x.infirmier = infirmier ?? undefined;
   if (!x.etablissementId && req.etablissementId) x.etablissementId = req.etablissementId;
-  x.journaliser('Ambulance envoyée', `${req.soignant.prenom} ${req.soignant.nom}`, `${ambulance.code} — ${x.chauffeurNom}`);
+  x.journaliser('Ambulance envoyée', `${req.soignant.prenom} ${req.soignant.nom}`,
+    `${ambulance.code} — ${x.chauffeurNom}${infirmier ? ` · ${infirmier.nom} (${infirmier.role})` : ''}`);
   await x.save();
 
   suiviAmbulances.invalider(chauffeur.id);
@@ -342,7 +358,7 @@ exports.affecter = async (req, res) => {
   }
   await journaliser(req, {
     action: 'urgence.affectation', patienteId: x.patienteId, ressource: { type: 'urgence', id: x.numero },
-    details: { ambulance: ambulance.code, chauffeur: chauffeur.matricule },
+    details: { ambulance: ambulance.code, chauffeur: chauffeur.matricule, infirmier: infirmier?.id ?? null },
   });
   presence.emettreChauffeur(chauffeur.id, 'mission:nouvelle', await vueMission(x));
   await diffuser(x);
