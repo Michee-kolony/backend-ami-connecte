@@ -859,3 +859,34 @@ test('enfant né hors plateforme (mère sans CPN ni accouchement ici) : enregist
   assert.equal(liste.corps.length, 2);
   assert.ok(liste.corps.every((x) => x.origine === 'Né hors plateforme'));
 });
+
+test('partogramme : tableau de la phase de latence (heures depuis l’arrivée, rupture, début du travail, affections, évacuation)', async () => {
+  const a = await admissionDirecte('sageFemme', {
+    nouvellePatiente: { nom: 'Mbuyi', prenom: 'Grace', ageDeclare: 24, email: 'grace.latence@essai.test' }, compte: { motDePasse: 'Bebe2026ok' },
+    admission: { admiseLe: ilYaH(5), debutTravail: ilYaH(7) },
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  const id = a.corps.id;
+  const ex = await appel('sageFemme', 'PUT', `/accouchements/${id}/examen-clinique`, {
+    examineLe: ilYaH(4.9), physique: { temperature: 37.2, pouls: 84, taSystolique: 120, taDiastolique: 70 },
+    obstetrical: { bcf: 140, contractions10min: 1, toucherVaginal: { dilatationCm: 2 }, pocheEaux: { etat: 'Rompue', rompueLe: ilYaH(6) } },
+  });
+  assert.equal(ex.status, 200, JSON.stringify(ex.corps));
+  await appel('sageFemme', 'POST', `/accouchements/${id}/surveillances`, { le: ilYaH(2.9), bcf: 138, dilatationCm: 3, saignement: '+', affection: 'Paludisme', traitements: 'Artésunate' });
+  await appel('sageFemme', 'POST', `/accouchements/${id}/surveillances`, { le: ilYaH(1), dilatationCm: 5 });
+  const ev = await appel('sageFemme', 'PUT', `/accouchements/${id}/evacuation`, { le: ilYaH(0.5), motif: 'Dystocie : référée à l’hôpital général' });
+  assert.equal(ev.status, 200, JSON.stringify(ev.corps));
+
+  const l = ev.corps.partogramme.latence;
+  assert.equal(l.phaseArrivee, 'Latence');
+  assert.equal(l.colonnes.length, 13, 'colonnes 0 à 12 h');
+  assert.deepEqual([l.colonnes[0].bcf, l.colonnes[0].dilatationCm, l.colonnes[0].pouls, l.colonnes[0].ruptureH, l.colonnes[0].debutTravailH], [140, 2, 84, 1.1, 2.1]);
+  assert.deepEqual([l.colonnes[2].bcf, l.colonnes[2].dilatationCm, l.colonnes[2].saignement], [138, 3, '+']);
+  assert.equal(l.colonnes[4].dilatationCm, null, 'la phase active (5 cm) n’est pas dans le tableau de latence');
+  assert.deepEqual(l.affections.map((x) => [x.affection, x.traitements]), [['Paludisme', 'Artésunate']]);
+  assert.equal(l.evacuation.motif, 'Dystocie : référée à l’hôpital général');
+
+  assert.equal((await appel('sageFemme', 'PUT', `/accouchements/${id}/evacuation`, { le: ilYaH(0.5) })).status, 400, 'motif obligatoire');
+  const retrait = await appel('sageFemme', 'PUT', `/accouchements/${id}/evacuation`, { le: '', motif: '' });
+  assert.equal(retrait.corps.partogramme.latence.evacuation, null);
+});

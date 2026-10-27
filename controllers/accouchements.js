@@ -103,13 +103,6 @@ function verifierAccouchee(a) {
   if (!a.accouchement) throw erreur(409, 'Enregistrez d’abord l’accouchement (module IV).');
 }
 
-/** Heure de rupture des membranes : examen d'entrée, sinon première surveillance « Rompues ». */
-function ruptureLe(a) {
-  return a.examenClinique?.obstetrical?.pocheEaux?.rompueLe
-    ?? [...a.surveillances].sort((x, y) => x.le - y.le).find((s) => s.membranes === 'Rompues')?.le
-    ?? null;
-}
-
 /** Planning de la surveillance post-partum, calculé depuis l'heure de l'accouchement. */
 function planningPostPartum(a, maintenant = new Date()) {
   if (!a.accouchement) return null;
@@ -144,7 +137,7 @@ async function vue(a) {
     Grossesse.findById(a.grossesseId),
     Enfant.find({ accouchementId: a._id }).sort({ rang: 1 }),
   ]);
-  const rupture = ruptureLe(a);
+  const rupture = partogramme.ruptureLe(a);
   const json = a.toJSON();
   // Tableau horaire : temps écoulé depuis l'arrivée, la rupture et le début du travail.
   json.surveillances = [...a.surveillances].sort((x, y) => x.le - y.le).map((s) => ({
@@ -443,6 +436,29 @@ exports.surveiller = async (req, res) => {
     alertes: ajoutees.map((x) => x.toJSON()),
     partogramme: partogramme.duDossier(a),
   });
+};
+
+/**
+ * Évacuation de la femme pendant le travail ou l'accouchement : heure et motif (pied du tableau
+ * de la phase de latence). Heure et motif vides : l'évacuation est retirée.
+ */
+exports.evacuer = async (req, res) => {
+  const a = await trouver(req.params.id);
+  verifierOuvert(a);
+  const le = pasDansLeFutur(instant(req.body?.le, 'Heure de l’évacuation'), 'L’évacuation');
+  const motif = texte(req.body?.motif, 1000);
+  if (!le && !motif) {
+    a.evacuation = undefined;
+  } else {
+    if (!le) throw erreur(400, 'Indiquez l’heure de l’évacuation.');
+    if (!motif) throw erreur(400, 'Expliquez pourquoi la femme est évacuée.');
+    if (le < new Date(a.admission.admiseLe.getTime() - 60000)) throw erreur(400, 'L’évacuation précède l’admission.');
+    a.evacuation = { le, motif, par: auteurDe(req.soignant) };
+  }
+  await valider(a);
+  await a.save();
+  await journaliser(req, { action: 'accouchement.evacuation', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { evacuee: Boolean(a.evacuation) } });
+  res.json(await vue(a));
 };
 
 exports.partogramme = async (req, res) => {

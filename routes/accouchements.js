@@ -22,6 +22,8 @@ router.put('/:id/examen-clinique', ctrl.examiner);
 router.post('/:id/surveillances', ctrl.surveiller);
 router.get('/:id/partogramme', ctrl.partogramme);
 router.post('/:id/alertes/:alerteId/acquitter', ctrl.acquitterAlerte);
+// Évacuation pendant le travail ou l'accouchement (heure et motif)
+router.put('/:id/evacuation', ctrl.evacuer);
 // Module 4 — Accouchement et délivrance
 router.put('/:id/accouchement', ctrl.accoucher);
 // Module 5 — Nouveau-né (dossier de l'enfant rattaché à la mère)

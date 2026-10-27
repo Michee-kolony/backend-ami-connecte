@@ -36,6 +36,7 @@ const ACTIONS = {
   'accouchement.modification': 'Admission (identité, anamnèse) modifiée',
   'accouchement.examen': 'Examen clinique d’entrée enregistré',
   'accouchement.surveillance': 'Surveillance du travail saisie',
+  'accouchement.evacuation': 'Évacuation pendant le travail renseignée',
   'accouchement.alerte': 'Alerte du partogramme déclenchée',
   'accouchement.alerte.acquittement': 'Alerte du partogramme prise en charge',
   'accouchement.accouchement': 'Accouchement et délivrance enregistrés',

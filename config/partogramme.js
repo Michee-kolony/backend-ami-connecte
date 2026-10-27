@@ -150,10 +150,85 @@ function mesures(a) {
   return { surveillances: liste, debutPhaseActive };
 }
 
-/** Partogramme d'un dossier d'accouchement (examen d'entrée compris). */
+/** Heure de rupture des membranes : examen d'entrée, sinon première surveillance « Rompues ». */
+function ruptureLe(a) {
+  return a.examenClinique?.obstetrical?.pocheEaux?.rompueLe
+    ?? [...a.surveillances].sort((x, y) => x.le - y.le).find((s) => s.membranes === 'Rompues')?.le
+    ?? null;
+}
+
+/** Phase du travail à l'arrivée, d'après la première dilatation connue (examen d'entrée en priorité). */
+function phaseArrivee(a) {
+  const o = a.examenClinique?.obstetrical;
+  const releve = [...(o?.releves ?? [])].sort((x, y) => x.le - y.le).find((r) => r.dilatationCm != null);
+  const cm = releve?.dilatationCm ?? o?.toucherVaginal?.dilatationCm
+    ?? [...a.surveillances].sort((x, y) => x.le - y.le).find((s) => s.dilatationCm != null)?.dilatationCm;
+  if (cm == null) return null;
+  return cm >= DILATATION_COMPLETE_CM ? 'Dilatation complète' : cm >= PHASE_ACTIVE_CM ? 'Active' : 'Latence';
+}
+
+/** Colonnes minimales du tableau de la phase de latence (0 à 12 h depuis l'arrivée), comme sur la feuille. */
+const COLONNES_LATENCE = 13;
+const uneDecimale = (h) => Math.round(h * 10) / 10;
+
+/**
+ * Tableau « Surveillance de la phase de latence (< 4 cm) » : une colonne par heure écoulée depuis
+ * l'arrivée (colonne 0 = première heure), avec l'examen d'entrée et les surveillances antérieures
+ * au début de la phase active. Dans une colonne, chaque ligne garde la dernière valeur de l'heure ;
+ * les temps depuis la rupture et le début du travail sont calculés à l'heure de cette dernière mesure.
+ */
+function tableauLatence(a) {
+  const arrivee = new Date(a.admission.admiseLe).getTime();
+  const m = mesures(a);
+  const fin = m.debutPhaseActive ? new Date(m.debutPhaseActive).getTime() : Infinity;
+  const ex = a.examenClinique;
+  const entrees = [...m.surveillances];
+  if (ex?.examineLe) {
+    const ph = ex.physique ?? {};
+    entrees.push({
+      le: ex.examineLe, temperature: ph.temperature, pouls: ph.pouls, taSystolique: ph.taSystolique,
+      taDiastolique: ph.taDiastolique, contractions10min: ex.obstetrical?.contractions10min,
+    });
+  }
+  const latentes = entrees
+    .filter((s) => new Date(s.le).getTime() < fin)
+    .sort((x, y) => x.le - y.le);
+  const numero = (s) => Math.max(0, Math.floor((new Date(s.le).getTime() - arrivee) / HEURE));
+  const nombre = Math.max(COLONNES_LATENCE, ...latentes.map((s) => numero(s) + 1));
+  const rupture = ruptureLe(a);
+  const debutTravail = a.admission.debutTravail;
+  const colonnes = Array.from({ length: nombre }, (_, i) => ({
+    heure: i, debut: new Date(arrivee + i * HEURE), mesureLe: null,
+    ruptureH: null, debutTravailH: null, saignement: null, contractions10min: null, dureeContractionsSec: null,
+    bcf: null, temperature: null, pouls: null, taSystolique: null, taDiastolique: null, diurese: null, dilatationCm: null,
+  }));
+  const champs = ['saignement', 'contractions10min', 'dureeContractionsSec', 'bcf', 'temperature', 'pouls', 'taSystolique', 'taDiastolique', 'diurese', 'dilatationCm'];
+  for (const s of latentes) {
+    const c = colonnes[numero(s)];
+    let mesure = false;
+    for (const cle of champs) if (s[cle] != null && s[cle] !== '') { c[cle] = s[cle]; mesure = true; }
+    if (!mesure) continue;
+    const le = new Date(s.le);
+    c.mesureLe = le;
+    c.ruptureH = rupture && le >= rupture ? uneDecimale((le - rupture) / HEURE) : null;
+    c.debutTravailH = debutTravail && le >= debutTravail ? uneDecimale((le - debutTravail) / HEURE) : null;
+  }
+  return {
+    phaseArrivee: phaseArrivee(a),
+    colonnes,
+    // Affections survenues pendant la phase de latence, avec leurs traitements.
+    affections: a.surveillances
+      .filter((s) => (s.affection || s.traitements) && new Date(s.le).getTime() < fin)
+      .sort((x, y) => x.le - y.le)
+      .map((s) => ({ id: String(s._id), le: s.le, affection: s.affection, traitements: s.traitements })),
+    evacuation: a.evacuation?.le ? { le: a.evacuation.le, motif: a.evacuation.motif, par: a.evacuation.par ?? null } : null,
+  };
+}
+
+/** Partogramme d'un dossier d'accouchement (examen d'entrée compris), avec le tableau de la phase de latence. */
 function duDossier(a) {
   const m = mesures(a);
-  return partogramme(m.surveillances, m.debutPhaseActive);
+  return { ...partogramme(m.surveillances, m.debutPhaseActive), latence: tableauLatence(a) };
 }
 
 /**
@@ -206,5 +281,6 @@ function alertesDe(entree, surveillances, debutPhaseActive, alertesExistantes = 
 
 module.exports = {
   BCF, PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM, VITESSE_CM_H, DECALAGE_ACTION_H, STAGNATION_H,
-  COLONNES_TABLEAU, zoneDilatation, bcfAnormal, partogramme, pointsDilatation, tableauHoraire, alertesDe, mesures, duDossier,
+  COLONNES_TABLEAU, COLONNES_LATENCE, zoneDilatation, bcfAnormal, partogramme, pointsDilatation, tableauHoraire, alertesDe, mesures, duDossier,
+  ruptureLe, phaseArrivee, tableauLatence,
 };

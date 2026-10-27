@@ -248,6 +248,11 @@ const dossierSchema = new mongoose.Schema({
   phaseActiveLe: instant,
   surveillances: { type: [surveillanceSchema], default: [] },
   alertes: { type: [alerteSchema], default: [] },
+  /** Évacuation pendant le travail ou l'accouchement : heure et motif. */
+  evacuation: {
+    type: new mongoose.Schema({ le: { type: Date, required: true }, motif: { type: String, required: true, trim: true }, par: { type: auteurSchema, required: true } }, sansId),
+    default: undefined,
+  },
   accouchement: { type: accouchementSchema, default: undefined },
   postPartum: { type: postPartumSchema, default: () => ({}) },
 
