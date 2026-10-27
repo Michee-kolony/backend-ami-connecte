@@ -43,6 +43,7 @@ const urgenceSchema = new mongoose.Schema({
       nom: { type: String, required: true },
       role: { type: String, required: true },
       telephone: { type: String, default: '' },
+      photo: { type: String, default: null },
     }, { _id: false }),
     default: undefined,
   },

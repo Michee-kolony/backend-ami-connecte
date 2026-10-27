@@ -84,7 +84,7 @@ async function vuesRegulation(liste) {
       ambulanceId: x.ambulance ?? undefined,
       chauffeurId: x.chauffeurId ? String(x.chauffeurId) : undefined,
       chauffeur: x.chauffeurNom || undefined,
-      infirmier: x.infirmier ? { id: x.infirmier.id, nom: x.infirmier.nom, role: x.infirmier.role } : null,
+      infirmier: x.infirmier ? { id: x.infirmier.id, nom: x.infirmier.nom, role: x.infirmier.role, photo: x.infirmier.photo ?? null } : null,
       prisEnChargePar: x.prisEnChargePar?.nom ?? null,
       evenements: evenements(x),
     };
@@ -117,8 +117,11 @@ async function vuePatiente(x) {
     id: x.numero, motif: libelleMotif(x.motif), motifCode: x.motif, gravite: x.gravite, etat: x.etat, statutCourse: x.statutCourse,
     creeLe: x.createdAt, lat: x.lat, lng: x.lng,
     ambulance: vueAmbulanceCourte(ambulance),
-    chauffeur: chauffeur ? { prenom: chauffeur.prenom, nom: chauffeur.nom, telephone: chauffeur.telephone, photo: chauffeur.photo } : null,
-    infirmier: x.infirmier ? { nom: x.infirmier.nom, role: x.infirmier.role } : null,
+    chauffeur: chauffeur ? {
+      prenom: chauffeur.prenom, nom: chauffeur.nom, postnom: chauffeur.postnom, matricule: chauffeur.matricule,
+      telephone: chauffeur.telephone, photo: chauffeur.photo,
+    } : null,
+    infirmier: x.infirmier ? { nom: x.infirmier.nom, role: x.infirmier.role, telephone: x.infirmier.telephone, photo: x.infirmier.photo ?? null } : null,
     destination: await destination(x),
     evenements: x.evenements.map((e) => ({ le: e.le, type: e.type })),
   };
@@ -321,7 +324,7 @@ exports.affecter = async (req, res) => {
     const s = mongoose.isValidObjectId(infirmierId) ? await Soignant.findById(infirmierId) : null;
     if (!s || s.statut !== 'Actif') throw erreur(400, 'Infirmier·ère introuvable ou suspendu·e.');
     if (!/^(Infirmier|Sage-femme)/.test(s.role)) throw erreur(400, 'Choisissez un·e infirmier·ère ou une sage-femme.');
-    infirmier = { id: s.id, nom: `${s.prenom} ${s.nom}`.trim(), role: s.role, telephone: s.telephone };
+    infirmier = { id: s.id, nom: `${s.prenom} ${s.nom}`.trim(), role: s.role, telephone: s.telephone, photo: s.photo ?? null };
   }
   const memeAmbulance = ambulance.urgence === x.numero;
   if (!memeAmbulance && ambulance.statut !== 'Disponible') {

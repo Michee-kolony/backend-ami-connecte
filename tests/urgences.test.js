@@ -164,7 +164,7 @@ test('urgence : alerte de la patiente → régulation (son) → chauffeur et amb
   assert.equal((await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01', infirmierId: idMedecin })).status, 400, 'un médecin n’est pas proposé comme infirmier');
   const envoi = await appel('infirmiere', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: 'AMB-01', infirmierId: idInfirmiere });
   assert.equal(envoi.status, 200, JSON.stringify(envoi.corps));
-  assert.deepEqual(envoi.corps.infirmier, { id: idInfirmiere, nom: 'Inès INF', role: 'Infirmier(ère)' });
+  assert.deepEqual(envoi.corps.infirmier, { id: idInfirmiere, nom: 'Inès INF', role: 'Infirmier(ère)', photo: null });
   assert.deepEqual([envoi.corps.ambulanceId, envoi.corps.chauffeur, envoi.corps.statutCourse], ['AMB-01', 'Bienvenu LEMA', 'Assignée']);
   const mission = await missionRecue;
   assert.deepEqual([mission.id, mission.patiente.prenom, mission.lat, mission.infirmier.nom], [numero, 'Marie', -4.3446, 'Inès INF']);
