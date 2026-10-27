@@ -37,6 +37,20 @@ const ACTIONS = {
   'accouchement.examen': 'Examen clinique d’entrée enregistré',
   'accouchement.surveillance': 'Surveillance du travail saisie',
   'accouchement.evacuation': 'Évacuation pendant le travail renseignée',
+  'urgence.alerte': 'Alerte de détresse déclenchée (application patiente)',
+  'urgence.annulation.patiente': 'Alerte de détresse annulée par la patiente',
+  'urgence.prise_en_charge': 'Urgence prise en charge',
+  'urgence.affectation': 'Chauffeur et ambulance envoyés',
+  'urgence.course': 'Statut de la course indiqué par le chauffeur',
+  'urgence.cloture': 'Urgence clôturée',
+  'urgence.annulation': 'Urgence annulée (fausse alerte)',
+  'flotte.ambulance.creation': 'Ambulance ajoutée à la flotte',
+  'flotte.ambulance.modification': 'Ambulance modifiée',
+  'flotte.chauffeur.creation': 'Compte chauffeur créé',
+  'flotte.chauffeur.modification': 'Compte chauffeur modifié',
+  'flotte.chauffeur.statut': 'Compte chauffeur suspendu ou réactivé',
+  'flotte.chauffeur.mot_de_passe': 'Mot de passe chauffeur réinitialisé',
+  'chauffeur.connexion': 'Connexion à l’application chauffeur',
   'accouchement.alerte': 'Alerte du partogramme déclenchée',
   'accouchement.alerte.acquittement': 'Alerte du partogramme prise en charge',
   'accouchement.accouchement': 'Accouchement et délivrance enregistrés',
@@ -65,6 +79,7 @@ async function journaliser(req, { action, patienteId = null, ressource = null, r
     await JournalAudit.create({
       acteur: req.soignant ? auteurDe(req.soignant)
         : req.patiente ? { id: req.patiente.id, nom: `${req.patiente.prenom} ${req.patiente.nom}`.trim(), role: 'Patiente', matricule: req.patiente.numero }
+        : req.chauffeur ? { id: req.chauffeur.id, nom: `${req.chauffeur.prenom} ${req.chauffeur.nom}`.trim(), role: 'Chauffeur', matricule: req.chauffeur.matricule }
         : undefined,
       action,
       resultat,

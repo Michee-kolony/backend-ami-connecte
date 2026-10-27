@@ -3,6 +3,8 @@ const express = require('express');
 const { authentifierPatiente } = require('../middleware/patiente');
 const ctrl = require('../controllers/espacePatiente');
 const discussions = require('../controllers/discussions');
+const urgences = require('../controllers/urgences');
+const messagesUrgence = require('../controllers/messagesUrgence');
 
 const router = express.Router();
 
@@ -28,6 +30,16 @@ router.get('/conseils', ctrl.conseils);
 router.post('/conseils/articles/:id/jaime', ctrl.aimerArticle);
 router.post('/conseils/articles/:id/commentaires', ctrl.commenterArticle);
 router.delete('/conseils/articles/:id/commentaires/:cid', ctrl.supprimerCommentaireArticle);
+
+// Urgences : alerte de détresse et suivi de l'ambulance envoyée.
+router.get('/urgences/motifs', urgences.motifs);
+router.get('/urgences/active', urgences.alerteActive);
+router.post('/urgences', urgences.declencher);
+router.put('/urgences/:numero/position', urgences.deplacerPatiente);
+router.post('/urgences/:numero/annulation', urgences.annulerParPatiente);
+router.get('/urgences/:numero/messages', messagesUrgence.lister);
+router.post('/urgences/:numero/messages', messagesUrgence.envoyer);
+router.get('/ambulances', urgences.ambulancesVisibles);
 
 // Messagerie avec les soignants (mêmes discussions chiffrées que l'espace administrateur).
 router.get('/soignants', discussions.annuairePatiente);

@@ -43,6 +43,11 @@ app.use('/api/journal', suivi.journal);
 app.use('/api/accouchements', require('./routes/accouchements'));
 app.use('/api/enfants', require('./routes/enfants'));
 
+// Urgences, flotte d'ambulances et application chauffeur
+app.use('/api/urgences', require('./routes/urgences'));
+app.use('/api/flotte', require('./routes/flotte'));
+app.use('/api/chauffeur', require('./routes/chauffeur'));
+
 // Espace patiente (application mobile)
 app.use('/api/espace-patiente', require('./routes/espacePatiente'));
 

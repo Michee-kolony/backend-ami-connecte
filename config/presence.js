@@ -4,11 +4,15 @@
 // L'application mobile des patientes se connecte aussi : le personnel reçoit les identifiants des
 // patientes en ligne (« presence:patientes »), les patientes ceux des soignants en ligne
 // (« presence:soignants ») — des identifiants seulement, les noms viennent de l'API.
+// L'application ami-connecte-chauffeur se connecte aussi : le personnel reçoit les identifiants
+// des chauffeurs en ligne (« presence:chauffeurs ») et leurs positions GPS (suiviAmbulances.js).
 const jwt = require('jsonwebtoken');
 const Soignant = require('../models/Soignant');
 const Patiente = require('../models/Patiente');
 const Etablissement = require('../models/Etablissement');
 const Discussion = require('../models/Discussion');
+const Chauffeur = require('../models/Chauffeur');
+const suiviAmbulances = require('./suiviAmbulances');
 
 const SALLE = 'personnel';
 const SALLE_PATIENTES = 'patientes';
@@ -17,6 +21,8 @@ const SALLE_PATIENTES = 'patientes';
 const connectes = new Map();
 /** id de la patiente → ses connexions (téléphone, navigateur…). */
 const patientesConnectees = new Map();
+/** id du chauffeur → ses connexions (application chauffeur). */
+const chauffeursConnectes = new Map();
 let io = null;
 
 function diffuser() {
@@ -26,6 +32,10 @@ function diffuser() {
 
 function diffuserPatientes() {
   io?.to(SALLE).emit('presence:patientes', [...patientesConnectees.keys()]);
+}
+
+function diffuserChauffeurs() {
+  io?.to(SALLE).emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
 }
 
 async function infosDe(soignant, etablissementId, connecteDepuis = new Date()) {
@@ -40,10 +50,16 @@ async function infosDe(soignant, etablissementId, connecteDepuis = new Date()) {
 function initialiser(serveur) {
   io = serveur;
 
-  // Même jeton JWT que l'API : personnel actif, ou patiente dont l'espace est activé.
+  // Même jeton JWT que l'API : personnel actif, patiente dont l'espace est activé ou chauffeur actif.
   io.use(async (socket, next) => {
     try {
       const { sub, etablissement, typ } = jwt.verify(String(socket.handshake.auth?.jeton || ''), process.env.JWT_SECRET);
+      if (typ === 'chauffeur') {
+        const chauffeur = await Chauffeur.findById(sub).select('statut');
+        if (!chauffeur || chauffeur.statut !== 'Actif') return next(new Error('Compte inactif ou introuvable.'));
+        socket.data.chauffeurId = chauffeur.id;
+        return next();
+      }
       if (typ === 'patiente') {
         const patiente = await Patiente.findById(sub).select('espaceEnLigne');
         if (!patiente || patiente.espaceEnLigne !== 'Activé') return next(new Error('Compte inactif ou introuvable.'));
@@ -62,6 +78,7 @@ function initialiser(serveur) {
 
   io.on('connection', async (socket) => {
     if (socket.data.patienteId) return connecterPatiente(socket);
+    if (socket.data.chauffeurId) return connecterChauffeur(socket);
     const { soignant, etablissementId } = socket.data;
     const id = soignant.id;
 
@@ -84,7 +101,31 @@ function initialiser(serveur) {
     connectes.set(id, c);
     diffuser();
     socket.emit('presence:patientes', [...patientesConnectees.keys()]);
+    socket.emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
   });
+}
+
+/** Chauffeur (application ami-connecte-chauffeur) : envoie sa position GPS chaque seconde. */
+function connecterChauffeur(socket) {
+  const id = socket.data.chauffeurId;
+  socket.on('position', (donnees, accuse) => {
+    suiviAmbulances.enregistrerPosition(id, donnees)
+      .then((m) => typeof accuse === 'function' && accuse({ ok: !!m }))
+      .catch(() => typeof accuse === 'function' && accuse({ ok: false }));
+  });
+  socket.on('disconnect', () => {
+    const s = chauffeursConnectes.get(id);
+    if (!s?.delete(socket.id)) return;
+    if (!s.size) {
+      chauffeursConnectes.delete(id);
+      diffuserChauffeurs();
+    }
+  });
+  socket.join(`chauffeur:${id}`);
+  const s = chauffeursConnectes.get(id) ?? new Set();
+  s.add(socket.id);
+  chauffeursConnectes.set(id, s);
+  diffuserChauffeurs();
 }
 
 /** Patiente (application mobile) : en ligne tant qu'il lui reste une connexion. */
@@ -126,6 +167,24 @@ function emettre(id, evenement, donnees) {
   io?.to([`soignant:${id}`, `patiente:${id}`]).emit(evenement, donnees);
 }
 
+/** Événement adressé à tout le personnel connecté (urgences, flotte). */
+function emettrePersonnel(evenement, donnees) {
+  io?.to(SALLE).emit(evenement, donnees);
+}
+
+function emettrePatiente(id, evenement, donnees) {
+  io?.to(`patiente:${id}`).emit(evenement, donnees);
+}
+
+function emettreChauffeur(id, evenement, donnees) {
+  io?.to(`chauffeur:${id}`).emit(evenement, donnees);
+}
+
+/** Ferme les connexions d'un chauffeur (compte suspendu ou supprimé). */
+function expulserChauffeur(id) {
+  io?.in(`chauffeur:${id}`).disconnectSockets(true);
+}
+
 /** Ferme toutes les connexions d'un soignant (compte suspendu ou supprimé). */
 function expulser(id) {
   io?.in(`soignant:${id}`).disconnectSockets(true);
@@ -139,4 +198,6 @@ async function actualiser(soignant) {
   diffuser();
 }
 
-module.exports = { initialiser, expulser, actualiser, emettre };
+module.exports = {
+  initialiser, expulser, actualiser, emettre, emettrePersonnel, emettrePatiente, emettreChauffeur, expulserChauffeur,
+};
