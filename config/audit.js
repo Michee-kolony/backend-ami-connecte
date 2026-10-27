@@ -75,6 +75,8 @@ const ACTIONS = {
  * (et sans y écrire de données de santé).
  */
 async function journaliser(req, { action, patienteId = null, ressource = null, resultat = 'autorisé', details } = {}) {
+  // Dossier copié sur l'appareil pour le travail hors connexion (préparation automatique de l'admin).
+  if (req.get?.('X-Preparation-Hors-Ligne') === 'oui') details = { ...details, copieHorsLigne: true };
   try {
     await JournalAudit.create({
       acteur: req.soignant ? auteurDe(req.soignant)
