@@ -7,6 +7,7 @@ const notifications = require('../config/notifications');
 const { trouverGrossesse } = require('./patientes');
 const cpn = require('../config/cpn');
 const { messageValidation } = require('../config/erreursFr');
+const { verifierVersion } = require('../config/conflits');
 
 const { TYPES_CONSULTATION, CHAMPS_CLINIQUES } = Consultation;
 const erreur = (status, message) => Object.assign(new Error(message), { status });
@@ -188,6 +189,7 @@ exports.modifier = async (req, res) => {
   const c = await trouver(req.params.id);
   if (c.statut !== 'Brouillon') throw erreur(409, 'Consultation finalisée ou annulée : ajoutez un addendum.');
   verifierAuteur(c, req);
+  verifierVersion(req, c, 'le brouillon de consultation');
   const dejaReferee = c.reference?.le ?? null;
   c.set(champsCliniques(req.body));
   horodaterReference(c, dejaReferee);

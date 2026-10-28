@@ -28,8 +28,10 @@ async function idempotence(req, res, next) {
   const json = res.json.bind(res);
   res.json = (corps) => {
     const code = res.statusCode;
+    // Réponse gardée telle qu'envoyée (sérialisée : `id` et non `_id` des documents Mongoose),
+    // pour que le rejeu renvoie exactement le même corps.
     const fin = code < 400
-      ? OperationTraitee.updateOne({ operationId }, { statut: 'terminée', codeHttp: code, corps })
+      ? OperationTraitee.updateOne({ operationId }, { statut: 'terminée', codeHttp: code, corps: corps === undefined ? null : JSON.parse(JSON.stringify(corps)) })
       : OperationTraitee.deleteOne({ operationId });
     fin.catch((err) => console.error('Opération hors ligne : enregistrement impossible :', err.message));
     return json(corps);

@@ -6,6 +6,7 @@ const RendezVous = require('../models/RendezVous');
 const { auteurDe } = require('../models/commun');
 const { ROLES_MATERNITE } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
+const { verifierVersion } = require('../config/conflits');
 const acc = require('../config/accouchement');
 const vaccination = require('../config/vaccination');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
@@ -328,6 +329,7 @@ exports.obtenir = async (req, res) => {
  */
 exports.modifier = async (req, res) => {
   const e = await trouverEnfant(req.params.id);
+  verifierVersion(req, e, 'le dossier de l’enfant');
   const d = req.body || {};
   for (const k of ['nom', 'postnom', 'prenom']) if (d[k] !== undefined) e[k] = texte(d[k], 120);
   if (d.sexe !== undefined) {

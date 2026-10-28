@@ -6,6 +6,7 @@ const Enfant = require('../models/Enfant');
 const JournalAudit = require('../models/JournalAudit');
 const { auteurDe } = require('../models/commun');
 const { journaliser, ACTIONS } = require('../config/audit');
+const { verifierVersion } = require('../config/conflits');
 const { trouverPatiente } = require('./patientes');
 const rappels = require('../config/rappels');
 
@@ -93,6 +94,7 @@ const ACTIONS_RDV = {
 exports.modifier = async (req, res) => {
   const rdv = mongoose.isValidObjectId(req.params.id) && await RendezVous.findById(req.params.id);
   if (!rdv) throw erreur(404, 'Rendez-vous introuvable.');
+  verifierVersion(req, rdv, 'le rendez-vous');
   const regle = ACTIONS_RDV[req.body?.action];
   if (!regle) throw erreur(400, 'Action inconnue.');
   if (!regle.depuis.includes(rdv.statut)) throw erreur(409, `Impossible : ce rendez-vous est « ${rdv.statut} ».`);

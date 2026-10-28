@@ -8,6 +8,7 @@ const RendezVous = require('../models/RendezVous');
 const Soignant = require('../models/Soignant');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
+const { verifierVersion } = require('../config/conflits');
 const acc = require('../config/accouchement');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
@@ -335,6 +336,7 @@ exports.obtenir = async (req, res) => {
 exports.modifierAdmission = async (req, res) => {
   const a = await trouver(req.params.id);
   verifierOuvert(a);
+  verifierVersion(req, a, 'le dossier d’accouchement');
   const saisie = lire(SPEC_ADMISSION, req.body);
   const champs = Object.keys(saisie);
   if (!champs.length) throw erreur(400, 'Aucun champ à modifier.');

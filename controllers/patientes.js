@@ -16,6 +16,7 @@ const { PROVINCES_RDC } = require('../config/referentiels');
 const cpn = require('../config/cpn');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
+const { verifierVersion } = require('../config/conflits');
 
 const DOSSIER_PHOTOS = 'patiente';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -318,7 +319,7 @@ exports.creer = async (req, res) => {
   if (grossesse.datation) await journaliser(req, { action: 'grossesse.datation', patienteId: patiente._id, ressource: { type: 'grossesse', id: grossesse.id }, details: { methode: grossesse.datation.methode } });
   if (rdv) await journaliser(req, { action: 'rdv.creation', patienteId: patiente._id, ressource: { type: 'rendezvous', id: rdv.id } });
   const consultation = premiereCpn ? await consultations.creerBrouillon(grossesse, premiereCpn, req) : null;
-  res.status(201).json({ id: patiente.id, numero: patiente.numero, consultationId: consultation?.id ?? null });
+  res.status(201).json({ id: patiente.id, numero: patiente.numero, grossesseId: grossesse.id, consultationId: consultation?.id ?? null });
 };
 
 /** Médecin de la première consultation : type « Première consultation prénatale », sinon la plus ancienne finalisée. */
@@ -387,6 +388,7 @@ exports.dossier = async (req, res) => {
 /** Mise à jour des informations administratives ; les champs modifiés (sans valeurs) sont journalisés. */
 exports.modifier = async (req, res) => {
   const patiente = await trouverPatiente(req.params.id);
+  verifierVersion(req, patiente, 'le dossier de la patiente');
   const champs = champsAdministratifs(req.body);
   if (req.body?.consentements) champs.consentements = consentementsDe(req.body.consentements, req.soignant);
   if (req.body?.statut !== undefined) {

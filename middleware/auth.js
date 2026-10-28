@@ -6,11 +6,15 @@ async function authentifier(req, res, next) {
   const [type, jeton] = (req.headers.authorization || '').split(' ');
   if (type !== 'Bearer' || !jeton) return res.status(401).json({ message: 'Authentification requise.' });
   try {
-    const { sub, etablissement, typ } = jwt.verify(jeton, process.env.JWT_SECRET);
+    const { sub, etablissement, typ, iat } = jwt.verify(jeton, process.env.JWT_SECRET);
     // Jeton de l'espace patiente : jamais accepté sur les routes du personnel.
     if (typ === 'patiente' || typ === 'chauffeur' || typ === 'reco') return res.status(403).json({ message: 'Accès réservé au personnel soignant.' });
     const soignant = await Soignant.findById(sub);
-    if (!soignant || soignant.statut !== 'Actif') return res.status(401).json({ message: 'Compte inactif ou introuvable.' });
+    if (!soignant || soignant.statut !== 'Actif') return res.status(401).json({ message: 'Compte inactif ou introuvable.', revoque: true });
+    // Sessions révoquées (appareil perdu) : l'application efface aussi les données de l'appareil.
+    if (soignant.sessionsRevoqueesLe && iat * 1000 < soignant.sessionsRevoqueesLe.getTime()) {
+      return res.status(401).json({ message: 'Session révoquée sur cet appareil. Reconnectez-vous.', revoque: true });
+    }
     req.soignant = soignant;
     /** Établissement choisi à la connexion (null pour le médecin chef sans établissement). */
     req.etablissementId = etablissement ?? null;

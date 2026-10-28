@@ -5,6 +5,7 @@ const Soignant = require('../models/Soignant');
 const Etablissement = require('../models/Etablissement');
 const { envoyerFichier, supprimerFichier, cleDepuisUrl } = require('../config/r2');
 const presence = require('../config/presence');
+const { journaliser } = require('../config/audit');
 const { messageValidation } = require('../config/erreursFr');
 
 const DOSSIER_PHOTOS = 'soignant';
@@ -174,6 +175,20 @@ exports.basculerStatut = async (req, res) => {
   // Un compte suspendu quitte aussitôt la liste des soignants en ligne.
   if (soignant.statut === 'Suspendu') presence.expulser(soignant.id);
   res.json(soignant);
+};
+
+/**
+ * Appareil perdu ou volé : toutes les sessions ouvertes sont refusées dès maintenant ; chaque
+ * appareil qui se reconnecte efface ses données gardées hors connexion (dossiers et saisies).
+ */
+exports.revoquerSessions = async (req, res) => {
+  const soignant = await Soignant.findById(req.params.id);
+  if (!soignant) return res.status(404).json({ message: 'Soignant introuvable.' });
+  soignant.sessionsRevoqueesLe = new Date(Math.floor(Date.now() / 1000) * 1000);
+  await soignant.save();
+  presence.expulser(soignant.id);
+  await journaliser(req, { action: 'soignant.revocation', ressource: { type: 'soignant', id: soignant.matricule } });
+  res.json({ revoqueesLe: soignant.sessionsRevoqueesLe });
 };
 
 /** Suppression définitive du compte et de sa photo dans R2. */

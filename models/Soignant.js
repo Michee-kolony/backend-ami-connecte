@@ -51,6 +51,11 @@ const soignantSchema = new mongoose.Schema({
   role: { type: String, enum: ROLES, required: true },
   statut: { type: String, enum: ['Actif', 'Suspendu'], default: 'Actif' },
   derniereConnexion: { type: Date, default: null },
+  /**
+   * Appareil perdu ou volé : tout jeton émis avant cette date est refusé, et l'application efface
+   * les données gardées sur l'appareil à sa prochaine connexion au serveur (mode hors connexion).
+   */
+  sessionsRevoqueesLe: { type: Date, default: null },
   doitChangerMotDePasse: { type: Boolean, default: true },
   creePar: { type: mongoose.Schema.Types.ObjectId, ref: 'Soignant' },
   // Traçabilité : identité de l'auteur figée à l'ajout, conservée même si son compte est supprimé.

@@ -68,6 +68,7 @@ const ACTIONS = {
   'enfant.suivi': 'Visite de suivi de l’enfant',
   'espace.connexion': 'Connexion à l’espace patiente',
   'espace.lecture': 'Consultation de l’espace patiente',
+  'soignant.revocation': 'Sessions d’un soignant révoquées (appareil perdu ou volé)',
   'reco.creation': 'Compte RECO créé',
   'reco.modification': 'Compte RECO modifié',
   'reco.statut': 'Compte RECO suspendu ou réactivé',
@@ -100,6 +101,9 @@ const ACTIONS = {
 async function journaliser(req, { action, patienteId = null, ressource = null, resultat = 'autorisé', details } = {}) {
   // Dossier copié sur l'appareil pour le travail hors connexion (préparation automatique de l'admin).
   if (req.get?.('X-Preparation-Hors-Ligne') === 'oui') details = { ...details, copieHorsLigne: true };
+  // Saisie faite hors connexion puis synchronisée : appareil et identifiant d'opération (jamais de contenu clinique).
+  const operationId = req.get?.('X-Operation-Id');
+  if (operationId) details = { ...details, operationId, appareil: req.get('X-Appareil') || null, saisieLe: req.get('X-Saisie-Le') || null };
   try {
     await JournalAudit.create({
       acteur: req.soignant ? auteurDe(req.soignant)
