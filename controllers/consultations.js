@@ -155,6 +155,28 @@ exports.creer = async (req, res) => {
   res.status(201).json(c);
 };
 
+/**
+ * Première CPN saisie avec l'enregistrement de la patiente (mesures préventives, laboratoire,
+ * référence) : lue et contrôlée avant toute création, puis enregistrée en brouillon dans la même
+ * requête. Indispensable hors connexion : la saisie arrive complète, sans attendre le numéro du dossier.
+ */
+exports.champsPremiereCpn = (d) => champsCliniques({
+  type: 'Première consultation prénatale', date: d?.date,
+  mesuresPreventives: d?.mesuresPreventives, laboratoire: d?.laboratoire, reference: d?.reference,
+});
+
+exports.creerBrouillon = async (grossesse, champs, req) => {
+  const c = new Consultation({
+    ...champs, date: champs.date ?? new Date(), patienteId: grossesse.patienteId, grossesseId: grossesse._id,
+    etablissementId: req.etablissementId, auteur: auteurDe(req.soignant),
+  });
+  horodaterReference(c);
+  await valider(c);
+  await c.save();
+  await journaliser(req, { action: 'consultation.creation', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id }, details: { type: c.type } });
+  return c;
+};
+
 exports.obtenir = async (req, res) => {
   const c = await trouver(req.params.id);
   await journaliser(req, { action: 'consultation.lecture', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id } });

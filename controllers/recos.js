@@ -159,7 +159,7 @@ exports.reinitialiserMotDePasse = async (req, res) => {
 };
 
 /**
- * Suppression définitive du compte (responsables de structure seulement). Refusée tant que le
+ * Suppression définitive du compte (droits dans config/relance.js). Refusée tant que le
  * RECO a des tâches ouvertes : elles doivent d'abord être réattribuées, pour qu'aucune personne
  * ne reste sans suivi. Les tâches traitées gardent leur historique (auteurs figés à l'action).
  */

@@ -23,11 +23,10 @@ Rien ne se déclenche tant que ces éléments ne sont pas saisis et validés dan
 | Rôle | Ce qu'il voit et fait |
 |---|---|
 | RECO (jeton `typ: reco`, espace `/reco`) | Ses tâches seulement ; contact, visite, orientation, refus / report, demande d'appui, urgence, signalement. Pas de domaine clinique (CPN, vaccination…) : un motif neutre. Téléphone visible seulement si un canal téléphonique est consenti. |
-| Superviseur communautaire (infirmier·ère ou sage-femme titulaire / superviseur·e) | Tâches nominatives de sa structure : attribution, réattribution (motif obligatoire), escalade, clôture motivée, réouverture, contrôle qualité, arbitrage des conflits, comptes RECO, tableau de bord. |
-| Responsable de structure / zone (médecin chef de service, médecin directeur) | Comme le superviseur, plus le **paramétrage** (parcours et règles, versions, validation). Sans structure choisie à la connexion : toutes les structures. |
-| Prestataire (autres soignants) | Seulement les personnes **orientées** vers sa structure, pour confirmer la prestation. Pas de tableau de bord. |
+| **Tout le personnel soignant** (médecins, sages-femmes, infirmier·ères, quel que soit le grade) | Tout le module, choix du projet : tableau de bord, tâches nominatives de sa structure (toutes les structures sans établissement choisi à la connexion), attribution, escalade, clôture, contrôle, confirmation des prestations, alertes, comptes RECO (ajout, modification, suspension, suppression) et paramétrage. |
 
-Un jeton RECO est refusé sur les routes du personnel, et inversement. Les refus sont journalisés.
+Les rôles sont dans `config/relance.js` (`ROLES_SUPERVISION`, `ROLES_RESPONSABLE`, `ROLES_PARAMETRAGE`) : remplacer `ROLES` par une liste
+de rôles suffit pour restreindre de nouveau. Un jeton RECO, patiente ou chauffeur est refusé sur les routes du personnel.
 
 ## Données (MongoDB)
 

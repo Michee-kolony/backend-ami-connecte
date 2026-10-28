@@ -287,6 +287,12 @@ exports.creer = async (req, res) => {
     if (Number.isNaN(rdv.date.getTime())) throw erreur(400, 'Date de rendez-vous invalide.');
   }
 
+  // Première CPN saisie avec le dossier : contrôlée maintenant, enregistrée après la patiente.
+  // (chargé ici : controllers/consultations dépend de ce fichier)
+  const consultations = require('./consultations');
+  const premiereCpn = d.premiereConsultation && typeof d.premiereConsultation === 'object'
+    ? consultations.champsPremiereCpn(d.premiereConsultation) : null;
+
   try {
     await Promise.all([patiente.validate(), grossesse.validate(), rdv?.validate()]);
   } catch (err) {
@@ -311,7 +317,8 @@ exports.creer = async (req, res) => {
   await journaliser(req, { action: 'patiente.creation', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
   if (grossesse.datation) await journaliser(req, { action: 'grossesse.datation', patienteId: patiente._id, ressource: { type: 'grossesse', id: grossesse.id }, details: { methode: grossesse.datation.methode } });
   if (rdv) await journaliser(req, { action: 'rdv.creation', patienteId: patiente._id, ressource: { type: 'rendezvous', id: rdv.id } });
-  res.status(201).json({ id: patiente.id, numero: patiente.numero });
+  const consultation = premiereCpn ? await consultations.creerBrouillon(grossesse, premiereCpn, req) : null;
+  res.status(201).json({ id: patiente.id, numero: patiente.numero, consultationId: consultation?.id ?? null });
 };
 
 /** Médecin de la première consultation : type « Première consultation prénatale », sinon la plus ancienne finalisée. */

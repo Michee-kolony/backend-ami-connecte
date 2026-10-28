@@ -736,3 +736,54 @@ test('échographie : rubriques de la fiche, fœtus multiples, compte rendu PDF p
   assert.equal((await appel('chef', 'DELETE', `/patientes/${r.corps.numero}`, { confirmation: r.corps.numero })).status, 204);
   assert.ok(cles.every((c) => r2Appels.supprimes.includes(c)));
 });
+
+test('hors connexion : enregistrement CPN avec la 1re consultation, renvoyé deux fois → un seul dossier', async () => {
+  const donnees = {
+    patiente: {
+      nom: 'Hors', prenom: 'Ligne', dateNaissance: '1996-05-02', telephone: '+243 81 777 0001', email: 'horsligne@essai.test',
+      adresse: { province: 'Kinshasa', commune: 'Lemba', quartier: 'Salongo' },
+    },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYa(84), ddrFiabilite: 'Fiable' } },
+    compte: { motDePasse: 'Grossesse2026' },
+    confirmerMalgreDoublons: true,
+    // Saisie faite sans réseau il y a 3 heures : la consultation garde l'heure réelle.
+    premiereConsultation: {
+      date: new Date(Date.now() - 3 * 3600000).toISOString(),
+      mesuresPreventives: { vat1: { reponse: true } }, laboratoire: { hb: '11,2' },
+    },
+  };
+  const envoyer = async () => {
+    const f = new FormData();
+    f.append('donnees', JSON.stringify(donnees));
+    f.append('photo', new Blob([PNG], { type: 'image/png' }), 'photo.png');
+    const r = await fetch(`${api}/patientes`, { method: 'POST', headers: { Authorization: `Bearer ${jetons.medecinA}`, 'X-Operation-Id': 'op-essai-cpn-hors-ligne-1' }, body: f });
+    return { status: r.status, corps: await r.json() };
+  };
+  const a = await envoyer();
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  assert.ok(a.corps.consultationId, '1re CPN créée dans la même requête');
+  const b = await envoyer(); // réseau coupé pendant la réponse : la synchronisation renvoie la même saisie
+  assert.equal(b.status, 201);
+  assert.equal(b.corps.numero, a.corps.numero, 'réponse rejouée, pas de second dossier');
+
+  const Patiente = require('../models/Patiente');
+  const Consultation = require('../models/Consultation');
+  assert.equal(await Patiente.countDocuments({ email: 'horsligne@essai.test' }), 1);
+  const consultations = await Consultation.find({ patienteId: a.corps.id });
+  assert.equal(consultations.length, 1);
+  assert.equal(consultations[0].statut, 'Brouillon');
+  assert.equal(consultations[0].type, 'Première consultation prénatale');
+  assert.ok(Date.now() - consultations[0].date.getTime() > 2.9 * 3600000, 'heure réelle de la saisie');
+  assert.equal(consultations[0].laboratoire.hb, '11,2');
+
+  // Consultation invalide : rien n'est créé (ni patiente ni consultation).
+  const invalide = structuredClone(donnees);
+  invalide.patiente.email = 'invalide@essai.test';
+  invalide.premiereConsultation.date = new Date(Date.now() + 86400000).toISOString();
+  const f = new FormData();
+  f.append('donnees', JSON.stringify(invalide));
+  f.append('photo', new Blob([PNG], { type: 'image/png' }), 'photo.png');
+  const r = await fetch(`${api}/patientes`, { method: 'POST', headers: { Authorization: `Bearer ${jetons.medecinA}` }, body: f });
+  assert.equal(r.status, 400);
+  assert.equal(await Patiente.countDocuments({ email: 'invalide@essai.test' }), 0);
+});

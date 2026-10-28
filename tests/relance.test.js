@@ -121,9 +121,10 @@ after(async () => {
   await serveurMongo?.stop();
 });
 
-test('Comptes RECO : création par le superviseur, refusée aux prestataires', async () => {
-  const refus = await formulaireReco('infirmiere', 'POST', '/relance/recos', { prenom: 'Paul', nom: 'Refus', sexe: 'M', telephone: '0', zones: ['Salongo'] });
-  assert.equal(refus.status, 403);
+test('Comptes RECO : tout le personnel soignant peut en ajouter', async () => {
+  // Une infirmière (sans grade de supervision) ajoute un RECO d'un autre secteur.
+  const parInfirmiere = await formulaireReco('infirmiere', 'POST', '/relance/recos', { prenom: 'Paul', nom: 'Secteur', sexe: 'M', telephone: '0', zones: ['Matete'] });
+  assert.equal(parInfirmiere.status, 201, JSON.stringify(parInfirmiere.corps));
 
   const jean = { prenom: 'Jean', nom: 'Kabeya', sexe: 'M', telephone: '+243 82 000 1111', zones: ['Salongo', 'Kemi'], superviseurId: ids.superviseur };
   const sansPhoto = await formulaireReco('superviseur', 'POST', '/relance/recos', jean, { photo: false });
@@ -180,7 +181,8 @@ test('Paramétrage : aucune relance tant que la règle et le parcours ne sont pa
   assert.ok(p.corps.parcours.every((x) => x.statut === 'À valider'));
   assert.ok(p.corps.regles.every((x) => x.statut === 'Inactive'));
 
-  assert.equal((await appel('superviseur', 'PUT', '/relance/parametrage/parcours/RAC', { definition: 'x' })).status, 403);
+  // Un jeton RECO n'ouvre jamais le paramétrage (réservé au personnel soignant).
+  assert.equal((await appel('reco', 'PUT', '/relance/parametrage/parcours/RAC', { definition: 'x' })).status, 403);
 
   // Règle rattachée à un parcours non validé : activation refusée.
   await appel('chef', 'PUT', '/relance/parametrage/regles/CPN_RDV_MANQUE', { parcoursCode: 'RAC' });
@@ -252,11 +254,12 @@ test('Visibilité : RECO, prestataire et autre structure ne voient que ce qui le
 
   assert.equal((await appel('reco2', 'GET', '/reco/taches')).corps.taches.length, 0);
   assert.equal((await appel('reco2', 'POST', `/reco/taches/${numero}/actions`, { operationId: operationId(), type: 'accepter' })).status, 404);
-  // Prestataire : la tâche n'est pas encore orientée vers sa structure.
-  assert.equal((await appel('infirmiere', 'GET', '/relance/taches')).corps.total, 0);
-  assert.equal((await appel('infirmiere', 'GET', `/relance/taches/${numero}`)).status, 404);
+  // Tout le personnel soignant de la structure voit les tâches et le tableau de bord.
+  assert.equal((await appel('infirmiere', 'GET', '/relance/taches')).corps.total, 1);
+  assert.equal((await appel('infirmiere', 'GET', `/relance/taches/${numero}`)).status, 200);
+  assert.equal((await appel('infirmiere', 'GET', '/relance/tableau-de-bord')).status, 200);
+  // Une autre structure ne voit pas les tâches de celle-ci.
   assert.equal((await appel('superviseurB', 'GET', '/relance/taches')).corps.total, 0);
-  assert.equal((await appel('infirmiere', 'GET', '/relance/tableau-de-bord')).status, 403);
 });
 
 test('Actions du RECO : canal non consenti refusé, tentatives tracées, opération rejouée sans doublon', async () => {
@@ -298,7 +301,7 @@ test('Hors connexion : synchronisation ordonnée, sans doublon ; l’orientation
   const statuts = d.corps.historique.map((h) => h.nouveauStatut);
   for (const s2 of ['Nouvelle', 'Attribuée', 'En cours', 'Contact établi', 'Orientée']) assert.ok(statuts.includes(s2), `historique : ${s2}`);
 
-  // Le prestataire voit maintenant la personne orientée vers sa structure.
+  // Le soignant de la structure voit la personne orientée.
   const p = await appel('infirmiere', 'GET', '/relance/taches');
   assert.equal(p.corps.total, 1);
 
@@ -421,14 +424,13 @@ test('Révocation : un téléphone perdu ne peut plus accéder aux tâches', asy
   assert.equal((await appel(c.corps.jeton, 'GET', '/reco/moi')).status, 401);
 });
 
-test('Suppression d’un RECO : réservée aux responsables, refusée avec des tâches ouvertes', async () => {
-  // Le superviseur ne peut que suspendre.
-  assert.equal((await appel('superviseur', 'DELETE', `/relance/recos/${ids.reco2}`)).status, 403);
+test('Suppression d’un RECO : tout soignant, refusée avec des tâches ouvertes', async () => {
+  assert.equal((await appel('reco', 'DELETE', `/relance/recos/${ids.reco2}`)).status, 403, 'jamais par un RECO');
   // Le premier RECO a encore des tâches ouvertes (vaccination, accouchement…).
   const refus = await appel('chef', 'DELETE', `/relance/recos/${ids.reco}`);
   assert.equal(refus.status, 409);
   assert.match(refus.corps.message, /réattribuez/);
-  const ok = await appel('chef', 'DELETE', `/relance/recos/${ids.reco2}`);
+  const ok = await appel('infirmiere', 'DELETE', `/relance/recos/${ids.reco2}`);
   assert.equal(ok.status, 200, JSON.stringify(ok.corps));
   assert.equal((await appel('chef', 'GET', '/relance/recos')).corps.some((x) => x.id === ids.reco2), false);
   // Le téléphone du RECO supprimé n'a plus accès.

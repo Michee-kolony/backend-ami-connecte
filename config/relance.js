@@ -60,18 +60,16 @@ const ACTIONS_RECO = ['accepter', 'tentative', 'visite_planifiee', 'visite_reali
 const COMMENTAIRE_MAX = 280;
 
 /**
- * Rôles du personnel (section 3). Le superviseur communautaire attribue, réattribue, clôture
- * exceptionnellement et contrôle ; le responsable de structure / zone consulte et valide les
- * rapports ; le paramétrage (parcours, règles) est réservé aux responsables qui le valident.
- * Les autres soignants sont des prestataires : ils ne voient que les personnes orientées vers
- * leur structure, pour confirmer la prestation.
+ * Rôles du personnel (section 3). Choix du projet : TOUT le personnel soignant (médecins,
+ * sages-femmes, infirmier·ères, quel que soit leur grade) a accès à toute la relance
+ * communautaire : tableau de bord, tâches nominatives de sa structure, supervision, comptes RECO
+ * (ajout, modification, suspension, suppression) et paramétrage. Les RECO, les patientes et les
+ * chauffeurs n'y ont pas accès (jetons refusés sur ces routes). Pour restreindre plus tard,
+ * il suffit de remplacer ROLES par une liste de rôles dans les constantes ci-dessous.
  */
-const ROLES_SUPERVISION = [
-  'Infirmier(ère) titulaire', 'Infirmier(ère) superviseur(e)', 'Sage-femme titulaire', 'Sage-femme superviseur(e)',
-  'Médecin chef de service', 'Médecin directeur',
-];
-const ROLES_RESPONSABLE = ['Médecin chef de service', 'Médecin directeur'];
-const ROLES_PARAMETRAGE = ['Médecin chef de service', 'Médecin directeur'];
+const ROLES_SUPERVISION = ROLES;
+const ROLES_RESPONSABLE = ROLES;
+const ROLES_PARAMETRAGE = ROLES;
 /** Confirmation d'une prestation dans le dossier de soins : tout soignant (prestataire). */
 const ROLES_PRESTATAIRE = ROLES;
 
