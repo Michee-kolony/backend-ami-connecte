@@ -8,7 +8,7 @@ async function authentifier(req, res, next) {
   try {
     const { sub, etablissement, typ } = jwt.verify(jeton, process.env.JWT_SECRET);
     // Jeton de l'espace patiente : jamais accepté sur les routes du personnel.
-    if (typ === 'patiente' || typ === 'chauffeur') return res.status(403).json({ message: 'Accès réservé au personnel soignant.' });
+    if (typ === 'patiente' || typ === 'chauffeur' || typ === 'reco') return res.status(403).json({ message: 'Accès réservé au personnel soignant.' });
     const soignant = await Soignant.findById(sub);
     if (!soignant || soignant.statut !== 'Actif') return res.status(401).json({ message: 'Compte inactif ou introuvable.' });
     req.soignant = soignant;

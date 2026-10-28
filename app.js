@@ -53,6 +53,10 @@ app.use('/api/urgences', require('./routes/urgences'));
 app.use('/api/flotte', require('./routes/flotte'));
 app.use('/api/chauffeur', require('./routes/chauffeur'));
 
+// Relance communautaire : personnel (supervision, paramétrage) et application RECO
+app.use('/api/relance', require('./routes/relance'));
+app.use('/api/reco', require('./routes/reco'));
+
 // Espace patiente (application mobile)
 app.use('/api/espace-patiente', require('./routes/espacePatiente'));
 

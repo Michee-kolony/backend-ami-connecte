@@ -4,6 +4,7 @@ const app = require('./app');
 const presence = require('./config/presence');
 const notifications = require('./config/notifications');
 const rappels = require('./config/rappels');
+const moteurRelance = require('./config/moteurRelance');
 
 const PORT = process.env.PORT || 3000;
 
@@ -23,4 +24,6 @@ server.listen(PORT, () => {
   // Notifications push : vérifie la clé Firebase au démarrage, puis rappels de la veille.
   notifications.client();
   rappels.demarrer();
+  // Relance communautaire : détection, confirmation des prestations et alertes (règles validées seulement).
+  moteurRelance.demarrer();
 });

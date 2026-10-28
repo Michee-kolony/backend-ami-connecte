@@ -68,6 +68,28 @@ const ACTIONS = {
   'enfant.suivi': 'Visite de suivi de l’enfant',
   'espace.connexion': 'Connexion à l’espace patiente',
   'espace.lecture': 'Consultation de l’espace patiente',
+  'reco.creation': 'Compte RECO créé',
+  'reco.modification': 'Compte RECO modifié',
+  'reco.statut': 'Compte RECO suspendu ou réactivé',
+  'reco.mot_de_passe': 'Mot de passe RECO réinitialisé',
+  'reco.revocation': 'Sessions du RECO révoquées (téléphone perdu ou compromis)',
+  'reco.connexion': 'Connexion à l’application RECO',
+  'reco.synchronisation': 'Synchronisation de l’application RECO',
+  'relance.signalement': 'Situation signalée par un RECO',
+  'relance.tache.lecture': 'Tâche de relance consultée',
+  'relance.tache.action': 'Action du RECO sur une tâche de relance',
+  'relance.tache.attribution': 'Tâche de relance attribuée ou réattribuée',
+  'relance.tache.confirmation': 'Prestation confirmée par la structure (relance)',
+  'relance.tache.cloture': 'Tâche de relance clôturée',
+  'relance.tache.reouverture': 'Tâche de relance rouverte',
+  'relance.tache.escalade': 'Tâche de relance escaladée',
+  'relance.tache.controle': 'Contrôle qualité d’une tâche de relance',
+  'relance.tache.identification': 'Personne signalée rattachée à un dossier',
+  'relance.conflit': 'Conflit de synchronisation arbitré',
+  'relance.alerte.accuse': 'Alerte de relance lue (accusé de réception)',
+  'relance.detection': 'Détection des relances lancée manuellement',
+  'relance.parametrage': 'Paramétrage de la relance modifié',
+  'relance.tableau_de_bord': 'Tableau de bord de la relance consulté',
 };
 
 /**
@@ -82,6 +104,7 @@ async function journaliser(req, { action, patienteId = null, ressource = null, r
       acteur: req.soignant ? auteurDe(req.soignant)
         : req.patiente ? { id: req.patiente.id, nom: `${req.patiente.prenom} ${req.patiente.nom}`.trim(), role: 'Patiente', matricule: req.patiente.numero }
         : req.chauffeur ? { id: req.chauffeur.id, nom: `${req.chauffeur.prenom} ${req.chauffeur.nom}`.trim(), role: 'Chauffeur', matricule: req.chauffeur.matricule }
+        : req.reco ? req.reco.auteur()
         : undefined,
       action,
       resultat,

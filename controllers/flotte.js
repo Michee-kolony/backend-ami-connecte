@@ -313,3 +313,4 @@ exports.carteService = async (req, res) => {
 };
 
 module.exports.motDePasseValide = motDePasseValide;
+module.exports.genererMotDePasse = genererMotDePasse;
