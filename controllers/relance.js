@@ -63,7 +63,7 @@ async function contexte(taches) {
   const [patientes, enfants, recos] = await Promise.all([
     Patiente.find({ _id: { $in: ids('patienteId') } }).select('numero prenom nom postnom telephone adresse'),
     Enfant.find({ _id: { $in: ids('enfantId') } }).select('numero prenom nom sexe dateNaissance'),
-    Reco.find({ _id: { $in: ids('recoId') } }).select('matricule prenom nom telephone statut'),
+    Reco.find({ _id: { $in: ids('recoId') } }).select('matricule prenom nom telephone statut photo'),
   ]);
   const etabIds = [...new Set(taches.flatMap((t) => [t.etablissementId, t.orientation?.etablissementId]).filter((id) => mongoose.isValidObjectId(id)))];
   const structures = await Etablissement.find({ _id: { $in: etabIds } }).select('nom');
@@ -86,7 +86,7 @@ function vueListe(t, ctx, maintenant = new Date()) {
         quartier: p?.adresse?.quartier ?? '', telephone: telephoneMasque(p?.telephone),
       },
     etablissementId: t.etablissementId, structure: ctx.structures.get(t.etablissementId)?.nom ?? '', aireSante: t.aireSante, zone: t.zone,
-    reco: reco ? { id: reco.id, matricule: reco.matricule, nom: `${reco.prenom} ${reco.nom}`, statut: reco.statut } : null,
+    reco: reco ? { id: reco.id, matricule: reco.matricule, nom: `${reco.prenom} ${reco.nom}`, statut: reco.statut, photo: reco.photo } : null,
     echeance: t.echeance, enRetard: t.enRetard(maintenant), dateEvenement: t.dateEvenement,
     tentativesEchouees: t.tentativesEchouees, conflitsEnAttente: t.conflits.filter((c) => !c.resolu).length,
     orientation: t.orientation ? { le: t.orientation.le, structure: t.orientation.structure, priorite: t.orientation.priorite } : null,

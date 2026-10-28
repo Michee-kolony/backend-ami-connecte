@@ -9,9 +9,10 @@ const Etablissement = require('../models/Etablissement');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const moteur = require('../config/moteurRelance');
-const { motDePasseValide, genererMotDePasse } = require('./flotte');
+const { envoyerFichier, supprimerFichier } = require('../config/r2');
+const { motDePasseValide, genererMotDePasse, donneesDe } = require('./flotte');
 const { exigerSupervision, filtreTerritoire } = require('./relance');
-const { erreur, texte, objet, valider } = require('./saisie');
+const { erreur, texte, valider } = require('./saisie');
 
 async function trouverReco(req, id) {
   const reco = mongoose.isValidObjectId(id) ? await Reco.findOne({ _id: id, ...filtreTerritoire(req) }) : null;
@@ -66,9 +67,14 @@ exports.prochainMatricule = async (req, res) => {
   res.json({ matricule: await Reco.prochainMatricule() });
 };
 
+/**
+ * Création du compte : formulaire multipart, données JSON dans « donnees », photo de profil
+ * (obligatoire : le RECO est reconnu par les familles et le superviseur) dans « photo ».
+ */
 exports.creer = async (req, res) => {
   await exigerSupervision(req);
-  const d = objet(req.body);
+  if (!req.file) throw erreur(400, 'La photo de profil du RECO est obligatoire.');
+  const d = donneesDe(req);
   const champs = await lireChamps(req, d, { creation: true });
   // Mot de passe choisi (règle de l'espace administrateur), sinon temporaire généré.
   const motDePasse = d.motDePasse ? String(d.motDePasse) : genererMotDePasse();
@@ -80,6 +86,9 @@ exports.creer = async (req, res) => {
     ...champs, matricule, motDePasse: await bcrypt.hash(motDePasse, 12), doitChangerMotDePasse: true, creePar: auteurDe(req.soignant),
   });
   await valider(reco);
+  const { cle, url } = await envoyerFichier(req.file, 'recos');
+  reco.photo = url;
+  reco.photoCle = cle;
   await reco.save();
   await journaliser(req, { action: 'reco.creation', ressource: { type: 'reco', id: reco.matricule } });
   const [vue] = await vues([reco]);
@@ -90,10 +99,19 @@ exports.creer = async (req, res) => {
 exports.modifier = async (req, res) => {
   await exigerSupervision(req);
   const reco = await trouverReco(req, req.params.id);
-  Object.assign(reco, await lireChamps(req, objet(req.body), { creation: false }), { modifiePar: auteurDe(req.soignant) });
+  const d = donneesDe(req);
+  Object.assign(reco, await lireChamps(req, d, { creation: false }), { modifiePar: auteurDe(req.soignant) });
   await valider(reco);
+  // Photo remplacée : l'ancienne est supprimée de R2 une fois la nouvelle enregistrée.
+  const anciennePhoto = req.file ? reco.photoCle : null;
+  if (req.file) {
+    const { cle, url } = await envoyerFichier(req.file, 'recos');
+    reco.photo = url;
+    reco.photoCle = cle;
+  }
   await reco.save();
-  await journaliser(req, { action: 'reco.modification', ressource: { type: 'reco', id: reco.matricule } });
+  if (anciennePhoto) supprimerFichier(anciennePhoto).catch(() => {});
+  await journaliser(req, { action: 'reco.modification', ressource: { type: 'reco', id: reco.matricule }, details: { champs: Object.keys(d), photo: !!req.file } });
   const [vue] = await vues([reco]);
   res.json(vue);
 };

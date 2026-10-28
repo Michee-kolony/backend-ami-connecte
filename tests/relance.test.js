@@ -27,6 +27,16 @@ async function appel(qui, methode, chemin, corps) {
   return { status: r.status, corps: texte ? JSON.parse(texte) : null };
 }
 
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+/** Compte RECO : formulaire multipart (données JSON + photo de profil). */
+async function formulaireReco(qui, methode, chemin, donnees, { photo = true } = {}) {
+  const f = new FormData();
+  f.append('donnees', JSON.stringify(donnees));
+  if (photo) f.append('photo', new Blob([PNG], { type: 'image/png' }), 'reco.png');
+  const r = await fetch(`${api}${chemin}`, { method: methode, headers: { Authorization: `Bearer ${jetons[qui]}` }, body: f });
+  return { status: r.status, corps: await r.json() };
+}
+
 const ilYA = (jours) => new Date(Date.now() - jours * JOUR);
 let compteur = 0;
 const operationId = () => `op-essai-${Date.now()}-${(compteur += 1)}`;
@@ -35,6 +45,14 @@ before(async () => {
   serveurMongo = await MongoMemoryServer.create();
   process.env.MONGODB_URI = serveurMongo.getUri('ami_connecte_essai_relance');
   process.env.JWT_SECRET = 'secret-de-test-uniquement';
+  // Photos : aucun envoi réel vers R2.
+  const r2 = require('../config/r2');
+  let n = 0;
+  r2.envoyerFichier = async (fichier, dossier) => {
+    n += 1;
+    return { cle: `${dossier}/essai-${n}.png`, url: `https://public.invalid/${dossier}/essai-${n}.png` };
+  };
+  r2.supprimerFichier = async () => {};
   const app = require('../app');
   moteur = require('../config/moteurRelance');
   mongoose = require('mongoose');
@@ -104,22 +122,31 @@ after(async () => {
 });
 
 test('Comptes RECO : création par le superviseur, refusée aux prestataires', async () => {
-  const refus = await appel('infirmiere', 'POST', '/relance/recos', { prenom: 'Paul', nom: 'Refus', sexe: 'M', telephone: '0', zones: ['Salongo'] });
+  const refus = await formulaireReco('infirmiere', 'POST', '/relance/recos', { prenom: 'Paul', nom: 'Refus', sexe: 'M', telephone: '0', zones: ['Salongo'] });
   assert.equal(refus.status, 403);
 
-  const a = await appel('superviseur', 'POST', '/relance/recos', {
-    prenom: 'Jean', nom: 'Kabeya', sexe: 'M', telephone: '+243 82 000 1111', zones: ['Salongo', 'Kemi'], superviseurId: ids.superviseur,
-  });
+  const jean = { prenom: 'Jean', nom: 'Kabeya', sexe: 'M', telephone: '+243 82 000 1111', zones: ['Salongo', 'Kemi'], superviseurId: ids.superviseur };
+  const sansPhoto = await formulaireReco('superviseur', 'POST', '/relance/recos', jean, { photo: false });
+  assert.equal(sansPhoto.status, 400);
+  assert.match(sansPhoto.corps.message, /photo/);
+  const a = await formulaireReco('superviseur', 'POST', '/relance/recos', jean);
   assert.equal(a.status, 201, JSON.stringify(a.corps));
+  assert.match(a.corps.reco.photo, /^https:\/\/public\.invalid\/recos\//);
+  assert.equal(a.corps.reco.photoCle, undefined, 'clé R2 jamais renvoyée');
   assert.equal(a.corps.reco.matricule, 'RECO-0001');
   assert.equal(a.corps.reco.etablissementId, ids.csA);
   assert.ok(a.corps.motDePasse, 'mot de passe temporaire renvoyé une fois');
   ids.reco = a.corps.reco.id;
   ids.motDePasseReco = a.corps.motDePasse;
 
-  const b = await appel('superviseur', 'POST', '/relance/recos', { prenom: 'Anne', nom: 'Mwamba', sexe: 'F', telephone: '0', zones: ['Livulu'], motDePasse: 'Relais@2026x' });
+  const b = await formulaireReco('superviseur', 'POST', '/relance/recos', { prenom: 'Anne', nom: 'Mwamba', sexe: 'F', telephone: '0', zones: ['Livulu'], motDePasse: 'Relais@2026x' });
   assert.equal(b.status, 201);
   ids.reco2 = b.corps.reco.id;
+  // Photo remplacée à la modification ; sans nouvelle photo, elle est conservée.
+  const m = await formulaireReco('superviseur', 'PATCH', `/relance/recos/${ids.reco2}`, { telephone: '+243 99 000 0000' }, { photo: false });
+  assert.equal(m.corps.photo, b.corps.reco.photo);
+  const m2 = await formulaireReco('superviseur', 'PATCH', `/relance/recos/${ids.reco2}`, {}, { photo: true });
+  assert.notEqual(m2.corps.photo, b.corps.reco.photo);
 
   // Un superviseur d'une autre structure ne voit pas ces RECO.
   assert.equal((await appel('superviseurB', 'GET', '/relance/recos')).corps.length, 0);
@@ -127,6 +154,7 @@ test('Comptes RECO : création par le superviseur, refusée aux prestataires', a
   const c = await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0001', motDePasse: ids.motDePasseReco });
   assert.equal(c.status, 200);
   assert.equal(c.corps.reco.doitChangerMotDePasse, true);
+  assert.ok(c.corps.reco.photo, 'photo affichée dans l’application RECO');
   jetons.reco = c.corps.jeton;
   jetons.reco2 = (await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0002', motDePasse: 'Relais@2026x' })).corps.jeton;
 

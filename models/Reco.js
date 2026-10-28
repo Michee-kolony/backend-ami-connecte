@@ -16,6 +16,9 @@ const recoSchema = new mongoose.Schema({
   postnom: { type: String, default: '', trim: true, uppercase: true },
   sexe: { type: String, enum: ['F', 'M'], required: true },
   telephone: { type: String, required: true, trim: true },
+  /** Photo de profil (URL publique, comme celles du personnel et des chauffeurs) et sa clé R2. */
+  photo: { type: String, default: null },
+  photoCle: { type: String, default: null },
   /** Structure de rattachement (centre de santé) et aire de santé. */
   etablissementId: { type: String, required: true, index: true },
   aireSante: { type: String, default: '', trim: true },
@@ -42,6 +45,7 @@ const recoSchema = new mongoose.Schema({
       delete ret._id;
       delete ret.__v;
       delete ret.motDePasse;
+      delete ret.photoCle;
       delete ret.zonesNormalisees;
       return ret;
     },

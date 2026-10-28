@@ -2,6 +2,7 @@
 // tableau de bord. Les droits fins (supervision, paramétrage) sont vérifiés dans les contrôleurs.
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
+const { televerserPhoto } = require('../middleware/upload');
 const taches = require('../controllers/relance');
 const recos = require('../controllers/recos');
 const parametrage = require('../controllers/parametrageRelance');
@@ -30,8 +31,9 @@ router.post('/alertes/:id/accuser', taches.accuserAlerte);
 
 router.get('/recos', recos.lister);
 router.get('/recos/prochain-matricule', recos.prochainMatricule);
-router.post('/recos', recos.creer);
-router.patch('/recos/:id', recos.modifier);
+// Formulaire multipart : données JSON dans « donnees », photo de profil dans « photo ».
+router.post('/recos', televerserPhoto, recos.creer);
+router.patch('/recos/:id', televerserPhoto, recos.modifier);
 router.patch('/recos/:id/statut', recos.changerStatut);
 router.post('/recos/:id/mot-de-passe', recos.reinitialiserMotDePasse);
 router.post('/recos/:id/revoquer-sessions', recos.revoquerSessions);

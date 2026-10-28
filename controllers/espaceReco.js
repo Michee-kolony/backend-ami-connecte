@@ -24,7 +24,7 @@ const MAX_OPERATIONS = 200;
 
 function profil(reco, etablissement) {
   return {
-    id: reco.id, matricule: reco.matricule, prenom: reco.prenom, nom: reco.nom, postnom: reco.postnom, telephone: reco.telephone,
+    id: reco.id, matricule: reco.matricule, prenom: reco.prenom, nom: reco.nom, postnom: reco.postnom, telephone: reco.telephone, photo: reco.photo,
     aireSante: reco.aireSante, zones: reco.zones, doitChangerMotDePasse: reco.doitChangerMotDePasse,
     structure: etablissement ? { id: etablissement.id, nom: etablissement.nom, telephone: etablissement.telephone } : null,
     derniereSynchronisation: reco.derniereSynchronisation,
