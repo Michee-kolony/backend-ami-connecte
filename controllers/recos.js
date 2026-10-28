@@ -5,9 +5,11 @@ const mongoose = require('mongoose');
 const Reco = require('../models/Reco');
 const Soignant = require('../models/Soignant');
 const TacheRelance = require('../models/TacheRelance');
+const AlerteRelance = require('../models/AlerteRelance');
 const Etablissement = require('../models/Etablissement');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
+const { ROLES_RESPONSABLE } = require('../config/relance');
 const moteur = require('../config/moteurRelance');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide, genererMotDePasse, donneesDe } = require('./flotte');
@@ -157,4 +159,28 @@ exports.reinitialiserMotDePasse = async (req, res) => {
   await reco.save();
   await journaliser(req, { action: 'reco.mot_de_passe', ressource: { type: 'reco', id: reco.matricule } });
   res.json({ matricule: reco.matricule, motDePasse });
+};
+
+/**
+ * Suppression définitive du compte (responsables de structure seulement). Refusée tant que le
+ * RECO a des tâches ouvertes : elles doivent d'abord être réattribuées, pour qu'aucune personne
+ * ne reste sans suivi. Les tâches traitées gardent leur historique (auteurs figés à l'action).
+ */
+exports.supprimer = async (req, res) => {
+  if (!ROLES_RESPONSABLE.includes(req.soignant.role)) {
+    await journaliser(req, { action: 'acces.refuse', resultat: 'refusé', ressource: { type: 'reco', id: req.params.id }, details: { role: req.soignant.role } });
+    throw erreur(403, 'La suppression d’un RECO est réservée au médecin chef de service et au médecin directeur. Vous pouvez le suspendre.');
+  }
+  const reco = await trouverReco(req, req.params.id);
+  const ouvertes = await TacheRelance.countDocuments({ recoId: reco._id, ouverte: true });
+  if (ouvertes) throw erreur(409, `${reco.prenom} ${reco.nom} a encore ${ouvertes} tâche(s) ouverte(s) : réattribuez-les avant de supprimer le compte.`);
+  await Reco.deleteOne({ _id: reco._id });
+  // Ses alertes ne concernaient que lui : fermées (conservées pour l'historique).
+  await AlerteRelance.updateMany({ destinataire: 'reco', recoId: reco._id, ouverte: true }, { ouverte: false, accuseLe: new Date(), accusePar: auteurDe(req.soignant) });
+  if (reco.photoCle) supprimerFichier(reco.photoCle).catch(() => {});
+  await journaliser(req, {
+    action: 'reco.suppression', ressource: { type: 'reco', id: reco.matricule },
+    details: { nom: `${reco.prenom} ${reco.nom}`, etablissementId: reco.etablissementId },
+  });
+  res.json({ id: reco.id, matricule: reco.matricule, supprime: true });
 };

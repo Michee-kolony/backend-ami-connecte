@@ -414,10 +414,25 @@ test('Révocation : un téléphone perdu ne peut plus accéder aux tâches', asy
   assert.equal((await appel(c.corps.jeton, 'GET', '/reco/moi')).status, 401);
 });
 
+test('Suppression d’un RECO : réservée aux responsables, refusée avec des tâches ouvertes', async () => {
+  // Le superviseur ne peut que suspendre.
+  assert.equal((await appel('superviseur', 'DELETE', `/relance/recos/${ids.reco2}`)).status, 403);
+  // RECO-0001 a encore des tâches ouvertes (vaccination, accouchement…).
+  const refus = await appel('chef', 'DELETE', `/relance/recos/${ids.reco}`);
+  assert.equal(refus.status, 409);
+  assert.match(refus.corps.message, /réattribuez/);
+  const ok = await appel('chef', 'DELETE', `/relance/recos/${ids.reco2}`);
+  assert.equal(ok.status, 200, JSON.stringify(ok.corps));
+  assert.equal((await appel('chef', 'GET', '/relance/recos')).corps.some((x) => x.id === ids.reco2), false);
+  // Le téléphone du RECO supprimé n'a plus accès.
+  const c = await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0002', motDePasse: 'Relais@2026x' });
+  assert.equal(c.status, 401);
+});
+
 test('Journal d’audit : actions de relance tracées, sans contenu clinique', async () => {
   const JournalAudit = require('../models/JournalAudit');
   const actions = new Set((await JournalAudit.find({ action: /^(relance|reco)\./ })).map((j) => j.action));
-  for (const a of ['reco.creation', 'reco.connexion', 'relance.parametrage', 'relance.tache.action', 'reco.synchronisation', 'relance.tache.cloture', 'relance.signalement', 'reco.revocation']) {
+  for (const a of ['reco.creation', 'reco.connexion', 'relance.parametrage', 'relance.tache.action', 'reco.synchronisation', 'relance.tache.cloture', 'relance.signalement', 'reco.revocation', 'reco.suppression']) {
     assert.ok(actions.has(a), a);
   }
 });

@@ -71,6 +71,7 @@ const ACTIONS = {
   'reco.creation': 'Compte RECO créé',
   'reco.modification': 'Compte RECO modifié',
   'reco.statut': 'Compte RECO suspendu ou réactivé',
+  'reco.suppression': 'Compte RECO supprimé définitivement',
   'reco.mot_de_passe': 'Mot de passe RECO réinitialisé',
   'reco.revocation': 'Sessions du RECO révoquées (téléphone perdu ou compromis)',
   'reco.connexion': 'Connexion à l’application RECO',

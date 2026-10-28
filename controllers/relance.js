@@ -71,6 +71,14 @@ async function contexte(taches) {
   return { patientes: carte(patientes), enfants: carte(enfants), recos: carte(recos), structures: carte(structures) };
 }
 
+/** RECO dont le compte a été supprimé : nom retrouvé dans l'historique de la tâche. */
+function recoSupprime(t) {
+  const id = String(t.recoId);
+  const trace = [...t.historique, ...t.actions].reverse().find((h) => h.par?.id === id);
+  const matricule = [...t.historique].reverse().find((h) => h.details?.reco && h.details.ancienReco !== id)?.details.reco ?? trace?.par.matricule ?? '';
+  return { id, matricule, nom: trace?.par.nom ?? 'RECO supprimé', statut: 'Supprimé', photo: null };
+}
+
 function vueListe(t, ctx, maintenant = new Date()) {
   const p = t.patienteId ? ctx.patientes.get(String(t.patienteId)) : null;
   const e = t.enfantId ? ctx.enfants.get(String(t.enfantId)) : null;
@@ -86,7 +94,8 @@ function vueListe(t, ctx, maintenant = new Date()) {
         quartier: p?.adresse?.quartier ?? '', telephone: telephoneMasque(p?.telephone),
       },
     etablissementId: t.etablissementId, structure: ctx.structures.get(t.etablissementId)?.nom ?? '', aireSante: t.aireSante, zone: t.zone,
-    reco: reco ? { id: reco.id, matricule: reco.matricule, nom: `${reco.prenom} ${reco.nom}`, statut: reco.statut, photo: reco.photo } : null,
+    reco: reco ? { id: reco.id, matricule: reco.matricule, nom: `${reco.prenom} ${reco.nom}`, statut: reco.statut, photo: reco.photo }
+      : t.recoId ? recoSupprime(t) : null,
     echeance: t.echeance, enRetard: t.enRetard(maintenant), dateEvenement: t.dateEvenement,
     tentativesEchouees: t.tentativesEchouees, conflitsEnAttente: t.conflits.filter((c) => !c.resolu).length,
     orientation: t.orientation ? { le: t.orientation.le, structure: t.orientation.structure, priorite: t.orientation.priorite } : null,

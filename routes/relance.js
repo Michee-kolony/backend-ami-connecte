@@ -37,6 +37,7 @@ router.patch('/recos/:id', televerserPhoto, recos.modifier);
 router.patch('/recos/:id/statut', recos.changerStatut);
 router.post('/recos/:id/mot-de-passe', recos.reinitialiserMotDePasse);
 router.post('/recos/:id/revoquer-sessions', recos.revoquerSessions);
+router.delete('/recos/:id', recos.supprimer);
 
 router.get('/parametrage', parametrage.lire);
 router.put('/parametrage/parcours/:code', parametrage.modifierParcours);
