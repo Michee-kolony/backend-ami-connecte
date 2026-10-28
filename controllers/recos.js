@@ -78,7 +78,10 @@ exports.creer = async (req, res) => {
   const motDePasse = d.motDePasse ? String(d.motDePasse) : genererMotDePasse();
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe trop faible (10 caractères, majuscules, minuscules, chiffre et caractère spécial).');
   const reco = new Reco({
-    ...champs, matricule: 'RECO-000000', motDePasse: await bcrypt.hash(motDePasse, 12), doitChangerMotDePasse: true, creePar: auteurDe(req.soignant),
+    ...champs, matricule: 'RECO-000000', motDePasse: await bcrypt.hash(motDePasse, 12),
+    // Mot de passe temporaire généré : toujours à changer ; choisi par l'admin : selon son choix.
+    doitChangerMotDePasse: !d.motDePasse || (d.doitChangerMotDePasse !== false && d.doitChangerMotDePasse !== 'false'),
+    creePar: auteurDe(req.soignant),
   });
   await valider(reco);
   const { cle, url } = await envoyerFichier(req.file, 'recos');

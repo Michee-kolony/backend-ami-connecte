@@ -140,8 +140,12 @@ test('Comptes RECO : création par le superviseur, refusée aux prestataires', a
   ids.reco = a.corps.reco.id;
   ids.motDePasseReco = a.corps.motDePasse;
 
-  const b = await formulaireReco('superviseur', 'POST', '/relance/recos', { prenom: 'Anne', nom: 'Mwamba', sexe: 'F', telephone: '0', zones: ['Livulu'], motDePasse: 'Relais@2026x' });
+  const b = await formulaireReco('superviseur', 'POST', '/relance/recos', { prenom: 'Anne', nom: 'Mwamba', sexe: 'F', telephone: '0', zones: ['Livulu'], motDePasse: 'Relais@2026x', doitChangerMotDePasse: false });
   assert.equal(b.status, 201);
+  assert.equal(b.corps.motDePasse, null, 'mot de passe choisi par l’admin : jamais renvoyé');
+  assert.equal(b.corps.reco.doitChangerMotDePasse, false);
+  const faible = await formulaireReco('superviseur', 'POST', '/relance/recos', { prenom: 'X', nom: 'Y', sexe: 'F', telephone: '0', motDePasse: 'faible' });
+  assert.equal(faible.status, 400);
   ids.reco2 = b.corps.reco.id;
   ids.matricule2 = b.corps.reco.matricule;
   assert.notEqual(ids.matricule2, ids.matricule, 'matricules uniques');
