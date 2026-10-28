@@ -6,7 +6,7 @@ const normaliserZone = (z) => String(z || '').normalize('NFD').replace(/[̀-ͯ]/
 
 /**
  * Relais communautaire (RECO) : compte de l'application RECO (espace /reco d'ami-sante).
- * Identifiant de connexion : le matricule (RECO-0001) ; mot de passe haché (bcrypt).
+ * Identifiant de connexion : le matricule, attribué au hasard par le serveur (RECO-731065) ; mot de passe haché (bcrypt).
  * Le RECO ne voit que les tâches qui lui sont attribuées, dans son secteur.
  */
 const recoSchema = new mongoose.Schema({
@@ -56,13 +56,6 @@ recoSchema.pre('validate', function () {
   this.zones = [...new Set((this.zones || []).map((z) => String(z).trim()).filter(Boolean))];
   this.zonesNormalisees = this.zones.map(normaliserZone);
 });
-
-/** RECO-0001, RECO-0002… */
-recoSchema.statics.prochainMatricule = async function () {
-  const dernier = await this.findOne({ matricule: /^RECO-\d+$/ }).sort({ matricule: -1 }).select('matricule');
-  const n = dernier ? parseInt(dernier.matricule.slice(5), 10) || 0 : 0;
-  return `RECO-${String(n + 1).padStart(4, '0')}`;
-};
 
 /** Auteur figé d'une action du RECO (historique des tâches). */
 recoSchema.methods.auteur = function () {

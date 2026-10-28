@@ -99,7 +99,7 @@ after(async () => {
 let chauffeur;
 let motDePasseChauffeur = 'Volant@2026x';
 
-test('flotte : ambulances et compte chauffeur (photo et mot de passe obligatoires, matricule CHF-0001)', async () => {
+test('flotte : ambulances et compte chauffeur (photo et mot de passe obligatoires, matricule aléatoire attribué par le serveur)', async () => {
   const a1 = await appel('medecin', 'POST', '/flotte/ambulances', { immatriculation: 'gr-4521-kn', modele: 'Toyota Land Cruiser', type: 'Type B — soins d’urgence', annee: 2022 });
   assert.equal(a1.status, 201, JSON.stringify(a1.corps));
   assert.deepEqual([a1.corps.code, a1.corps.immatriculation, a1.corps.statut], ['AMB-01', 'GR-4521-KN', 'Disponible']);
@@ -109,10 +109,12 @@ test('flotte : ambulances et compte chauffeur (photo et mot de passe obligatoire
 
   assert.equal((await creerChauffeur('medecin', { prenom: 'Bienvenu', nom: 'Lema', telephone: '+243 81 556 2201', motDePasse: motDePasseChauffeur }, { photo: false })).status, 400, 'photo obligatoire');
   assert.equal((await creerChauffeur('medecin', { prenom: 'Bienvenu', nom: 'Lema', telephone: '+243 81', motDePasse: 'faible' })).status, 400);
-  const c = await creerChauffeur('medecin', { prenom: 'Bienvenu', nom: 'Lema', postnom: 'Ndongala', telephone: '+243 81 556 2201', permis: 'kin-c-1', motDePasse: motDePasseChauffeur, ambulance: 'AMB-01' });
+  // Un matricule envoyé par le formulaire est ignoré : c'est le serveur qui l'attribue.
+  const c = await creerChauffeur('medecin', { prenom: 'Bienvenu', nom: 'Lema', postnom: 'Ndongala', telephone: '+243 81 556 2201', permis: 'kin-c-1', motDePasse: motDePasseChauffeur, ambulance: 'AMB-01', matricule: 'CHF-0001' });
   assert.equal(c.status, 201, JSON.stringify(c.corps));
   chauffeur = c.corps;
-  assert.deepEqual([chauffeur.matricule, chauffeur.nom, chauffeur.photo, chauffeur.ambulance.code, chauffeur.disponibilite], ['CHF-0001', 'LEMA', 'https://public.invalid/chauffeurs/essai.png', 'AMB-01', 'Disponible']);
+  assert.match(chauffeur.matricule, /^CHF-[1-9]\d{5}$/);
+  assert.deepEqual([chauffeur.nom, chauffeur.photo, chauffeur.ambulance.code, chauffeur.disponibilite], ['LEMA', 'https://public.invalid/chauffeurs/essai.png', 'AMB-01', 'Disponible']);
   assert.equal(chauffeur.motDePasse, undefined);
 
   const carte = await appel('medecin', 'GET', `/flotte/chauffeurs/${chauffeur.id}/carte-service`);
@@ -121,8 +123,8 @@ test('flotte : ambulances et compte chauffeur (photo et mot de passe obligatoire
 });
 
 test('application chauffeur : connexion par matricule, jeton refusé ailleurs', async () => {
-  assert.equal((await appel(null, 'POST', '/chauffeur/connexion', { matricule: 'CHF-0001', motDePasse: 'faux' })).status, 401);
-  const r = await appel(null, 'POST', '/chauffeur/connexion', { matricule: 'chf-0001', motDePasse: motDePasseChauffeur });
+  assert.equal((await appel(null, 'POST', '/chauffeur/connexion', { matricule: chauffeur.matricule, motDePasse: 'faux' })).status, 401);
+  const r = await appel(null, 'POST', '/chauffeur/connexion', { matricule: chauffeur.matricule.toLowerCase(), motDePasse: motDePasseChauffeur });
   assert.equal(r.status, 200, JSON.stringify(r.corps));
   jetons.chauffeur = r.corps.jeton;
   assert.deepEqual([r.corps.chauffeur.ambulance.code, r.corps.chauffeur.doitChangerMotDePasse], ['AMB-01', true]);

@@ -15,7 +15,6 @@ router.post('/ambulances', gestion, ctrl.creerAmbulance);
 router.patch('/ambulances/:code', gestion, ctrl.modifierAmbulance);
 
 router.get('/chauffeurs', ctrl.listerChauffeurs);
-router.get('/chauffeurs/prochain-matricule', ctrl.prochainMatricule);
 router.get('/chauffeurs/:id', ctrl.obtenirChauffeur);
 // Formulaire multipart : données JSON dans « donnees », photo de profil dans « photo ».
 router.post('/chauffeurs', gestion, televerserPhoto, ctrl.creerChauffeur);

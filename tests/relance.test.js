@@ -133,7 +133,8 @@ test('Comptes RECO : création par le superviseur, refusée aux prestataires', a
   assert.equal(a.status, 201, JSON.stringify(a.corps));
   assert.match(a.corps.reco.photo, /^https:\/\/public\.invalid\/recos\//);
   assert.equal(a.corps.reco.photoCle, undefined, 'clé R2 jamais renvoyée');
-  assert.equal(a.corps.reco.matricule, 'RECO-0001');
+  assert.match(a.corps.reco.matricule, /^RECO-[1-9]\d{5}$/);
+  ids.matricule = a.corps.reco.matricule;
   assert.equal(a.corps.reco.etablissementId, ids.csA);
   assert.ok(a.corps.motDePasse, 'mot de passe temporaire renvoyé une fois');
   ids.reco = a.corps.reco.id;
@@ -142,6 +143,8 @@ test('Comptes RECO : création par le superviseur, refusée aux prestataires', a
   const b = await formulaireReco('superviseur', 'POST', '/relance/recos', { prenom: 'Anne', nom: 'Mwamba', sexe: 'F', telephone: '0', zones: ['Livulu'], motDePasse: 'Relais@2026x' });
   assert.equal(b.status, 201);
   ids.reco2 = b.corps.reco.id;
+  ids.matricule2 = b.corps.reco.matricule;
+  assert.notEqual(ids.matricule2, ids.matricule, 'matricules uniques');
   // Photo remplacée à la modification ; sans nouvelle photo, elle est conservée.
   const m = await formulaireReco('superviseur', 'PATCH', `/relance/recos/${ids.reco2}`, { telephone: '+243 99 000 0000' }, { photo: false });
   assert.equal(m.corps.photo, b.corps.reco.photo);
@@ -151,12 +154,12 @@ test('Comptes RECO : création par le superviseur, refusée aux prestataires', a
   // Un superviseur d'une autre structure ne voit pas ces RECO.
   assert.equal((await appel('superviseurB', 'GET', '/relance/recos')).corps.length, 0);
 
-  const c = await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0001', motDePasse: ids.motDePasseReco });
+  const c = await appel(null, 'POST', '/reco/connexion', { matricule: ids.matricule, motDePasse: ids.motDePasseReco });
   assert.equal(c.status, 200);
   assert.equal(c.corps.reco.doitChangerMotDePasse, true);
   assert.ok(c.corps.reco.photo, 'photo affichée dans l’application RECO');
   jetons.reco = c.corps.jeton;
-  jetons.reco2 = (await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0002', motDePasse: 'Relais@2026x' })).corps.jeton;
+  jetons.reco2 = (await appel(null, 'POST', '/reco/connexion', { matricule: ids.matricule2, motDePasse: 'Relais@2026x' })).corps.jeton;
 
   // Le jeton RECO n'ouvre pas les routes du personnel, et inversement.
   assert.equal((await appel('reco', 'GET', '/patientes')).status, 403);
@@ -216,7 +219,7 @@ test('Détection : un rendez-vous manqué génère une seule tâche active, attr
   assert.equal(t.statut, 'Attribuée');
   assert.equal(t.parcoursCode, 'RAC');
   assert.equal(t.domaine, 'CPN');
-  assert.equal(t.reco.matricule, 'RECO-0001');
+  assert.equal(t.reco.matricule, ids.matricule);
   assert.equal(t.motifsLies, 1);
   assert.equal(t.motif, 'Rendez-vous de consultation prénatale manqué');
   const echeance = new Date(t.echeance).getTime() - new Date(t.creeLe).getTime();
@@ -346,7 +349,7 @@ test('Retard, échecs répétés et escalade : alertes au superviseur, clôture 
   await moteur.tourner();
   const liste = await appel('superviseur', 'GET', '/relance/taches?statut=ouvertes');
   const t = liste.corps.taches[0];
-  assert.equal(t.reco.matricule, 'RECO-0001');
+  assert.equal(t.reco.matricule, ids.matricule);
   // Patiente sans consentement téléphonique : seule la visite à domicile est proposée.
   const vue = (await appel('reco', 'GET', '/reco/taches')).corps.taches.find((x) => x.numero === t.numero);
   assert.deepEqual(vue.canauxAutorises, ['Visite à domicile']);
@@ -406,7 +409,7 @@ test('Révocation : un téléphone perdu ne peut plus accéder aux tâches', asy
   assert.equal((await appel('reco2', 'GET', '/reco/moi')).status, 401);
   // Nouvelle connexion possible ensuite (même seconde exclue).
   await new Promise((r) => setTimeout(r, 1100));
-  const c = await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0002', motDePasse: 'Relais@2026x' });
+  const c = await appel(null, 'POST', '/reco/connexion', { matricule: ids.matricule2, motDePasse: 'Relais@2026x' });
   assert.equal((await appel(c.corps.jeton, 'GET', '/reco/moi')).status, 200);
 
   const sus = await appel('superviseur', 'PATCH', `/relance/recos/${ids.reco2}/statut`, { statut: 'Suspendu' });
@@ -417,7 +420,7 @@ test('Révocation : un téléphone perdu ne peut plus accéder aux tâches', asy
 test('Suppression d’un RECO : réservée aux responsables, refusée avec des tâches ouvertes', async () => {
   // Le superviseur ne peut que suspendre.
   assert.equal((await appel('superviseur', 'DELETE', `/relance/recos/${ids.reco2}`)).status, 403);
-  // RECO-0001 a encore des tâches ouvertes (vaccination, accouchement…).
+  // Le premier RECO a encore des tâches ouvertes (vaccination, accouchement…).
   const refus = await appel('chef', 'DELETE', `/relance/recos/${ids.reco}`);
   assert.equal(refus.status, 409);
   assert.match(refus.corps.message, /réattribuez/);
@@ -425,7 +428,7 @@ test('Suppression d’un RECO : réservée aux responsables, refusée avec des t
   assert.equal(ok.status, 200, JSON.stringify(ok.corps));
   assert.equal((await appel('chef', 'GET', '/relance/recos')).corps.some((x) => x.id === ids.reco2), false);
   // Le téléphone du RECO supprimé n'a plus accès.
-  const c = await appel(null, 'POST', '/reco/connexion', { matricule: 'RECO-0002', motDePasse: 'Relais@2026x' });
+  const c = await appel(null, 'POST', '/reco/connexion', { matricule: ids.matricule2, motDePasse: 'Relais@2026x' });
   assert.equal(c.status, 401);
 });
 

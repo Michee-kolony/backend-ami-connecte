@@ -7,7 +7,7 @@ const QRCode = require('qrcode');
 const Ambulance = require('../models/Ambulance');
 const Chauffeur = require('../models/Chauffeur');
 const Urgence = require('../models/Urgence');
-const { auteurDe } = require('../models/commun');
+const { auteurDe, enregistrerAvecMatricule } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const presence = require('../config/presence');
 const suiviAmbulances = require('../config/suiviAmbulances');
@@ -181,10 +181,6 @@ exports.obtenirChauffeur = async (req, res) => {
 };
 
 /** Matricule attribué au prochain chauffeur (proposé dans le formulaire). */
-exports.prochainMatricule = async (req, res) => {
-  res.json({ matricule: await Chauffeur.prochainMatricule() });
-};
-
 const CHAMPS_CHAUFFEUR = (d) => ({
   ...(d.prenom !== undefined && { prenom: texte(d.prenom, 80) }),
   ...(d.nom !== undefined && { nom: texte(d.nom, 80) }),
@@ -195,8 +191,8 @@ const CHAMPS_CHAUFFEUR = (d) => ({
 });
 
 /**
- * Création du compte : nom complet, photo de profil (obligatoire), matricule (proposé, ou saisi)
- * et mot de passe. Le chauffeur peut être placé directement sur une ambulance disponible.
+ * Création du compte : nom complet, photo de profil (obligatoire) et mot de passe. Le matricule
+ * (identifiant de connexion) est attribué au hasard par le serveur, jamais saisi. Le chauffeur peut être placé directement sur une ambulance disponible.
  */
 exports.creerChauffeur = async (req, res) => {
   if (!req.file) throw erreur(400, 'La photo de profil du chauffeur est obligatoire.');
@@ -206,14 +202,10 @@ exports.creerChauffeur = async (req, res) => {
   const motDePasse = String(d.motDePasse || '');
   if (!motDePasseValide(motDePasse)) throw erreur(400, MESSAGE_MOT_DE_PASSE);
 
-  let matricule = texte(d.matricule, 20).toUpperCase();
-  if (matricule && !/^[A-Z0-9][A-Z0-9-]{2,19}$/.test(matricule)) throw erreur(400, 'Matricule invalide (lettres, chiffres et tirets).');
-  if (matricule && await Chauffeur.exists({ matricule })) throw erreur(409, 'Ce matricule est déjà attribué.');
-  matricule ||= await Chauffeur.prochainMatricule();
   if (champs.permis && await Chauffeur.exists({ permis: champs.permis })) throw erreur(409, 'Ce numéro de permis est déjà enregistré.');
 
   const c = new Chauffeur({
-    ...champs, matricule, motDePasse: await bcrypt.hash(motDePasse, 12),
+    ...champs, matricule: 'CHF-000000', motDePasse: await bcrypt.hash(motDePasse, 12),
     doitChangerMotDePasse: d.doitChangerMotDePasse !== false && d.doitChangerMotDePasse !== 'false',
     creePar: auteurDe(req.soignant),
   });
@@ -224,7 +216,7 @@ exports.creerChauffeur = async (req, res) => {
   const { cle, url } = await envoyerFichier(req.file, 'chauffeurs');
   c.photo = url;
   c.photoCle = cle;
-  await c.save();
+  await enregistrerAvecMatricule(c, 'CHF');
   if (ambulance) {
     await attribuerChauffeur(ambulance, c.id);
     await ambulance.save();

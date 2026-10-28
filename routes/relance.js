@@ -30,7 +30,6 @@ router.get('/alertes', taches.alertes);
 router.post('/alertes/:id/accuser', taches.accuserAlerte);
 
 router.get('/recos', recos.lister);
-router.get('/recos/prochain-matricule', recos.prochainMatricule);
 // Formulaire multipart : données JSON dans « donnees », photo de profil dans « photo ».
 router.post('/recos', televerserPhoto, recos.creer);
 router.patch('/recos/:id', televerserPhoto, recos.modifier);

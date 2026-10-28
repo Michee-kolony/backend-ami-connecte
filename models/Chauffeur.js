@@ -4,7 +4,7 @@ const { STATUTS_CHAUFFEUR } = require('../config/urgences');
 
 /**
  * Chauffeur d'ambulance : compte de l'application ami-connecte-chauffeur.
- * Identifiant de connexion : le matricule (CHF-0001) ; mot de passe haché (bcrypt).
+ * Identifiant de connexion : le matricule, attribué au hasard par le serveur (CHF-482913) ; mot de passe haché (bcrypt).
  */
 const chauffeurSchema = new mongoose.Schema({
   matricule: { type: String, required: true, unique: true },
@@ -39,13 +39,6 @@ const chauffeurSchema = new mongoose.Schema({
     },
   },
 });
-
-/** CHF-0001, CHF-0002… */
-chauffeurSchema.statics.prochainMatricule = async function () {
-  const dernier = await this.findOne({ matricule: /^CHF-\d+$/ }).sort({ matricule: -1 }).select('matricule');
-  const n = dernier ? parseInt(dernier.matricule.slice(4), 10) || 0 : 0;
-  return `CHF-${String(n + 1).padStart(4, '0')}`;
-};
 
 chauffeurSchema.methods.nomComplet = function () {
   return [this.prenom, this.nom, this.postnom].filter(Boolean).join(' ');

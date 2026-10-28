@@ -7,7 +7,7 @@ const Soignant = require('../models/Soignant');
 const TacheRelance = require('../models/TacheRelance');
 const AlerteRelance = require('../models/AlerteRelance');
 const Etablissement = require('../models/Etablissement');
-const { auteurDe } = require('../models/commun');
+const { auteurDe, enregistrerAvecMatricule } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const { ROLES_RESPONSABLE } = require('../config/relance');
 const moteur = require('../config/moteurRelance');
@@ -65,10 +65,6 @@ exports.lister = async (req, res) => {
   res.json(await vues(liste));
 };
 
-exports.prochainMatricule = async (req, res) => {
-  res.json({ matricule: await Reco.prochainMatricule() });
-};
-
 /**
  * Création du compte : formulaire multipart, données JSON dans « donnees », photo de profil
  * (obligatoire : le RECO est reconnu par les familles et le superviseur) dans « photo ».
@@ -81,17 +77,15 @@ exports.creer = async (req, res) => {
   // Mot de passe choisi (règle de l'espace administrateur), sinon temporaire généré.
   const motDePasse = d.motDePasse ? String(d.motDePasse) : genererMotDePasse();
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe trop faible (10 caractères, majuscules, minuscules, chiffre et caractère spécial).');
-  const matricule = texte(d.matricule, 20).toUpperCase() || await Reco.prochainMatricule();
-  if (!/^RECO-\d{4,}$/.test(matricule)) throw erreur(400, 'Matricule invalide (RECO-0001).');
-  if (await Reco.exists({ matricule })) throw erreur(409, 'Ce matricule est déjà utilisé.');
   const reco = new Reco({
-    ...champs, matricule, motDePasse: await bcrypt.hash(motDePasse, 12), doitChangerMotDePasse: true, creePar: auteurDe(req.soignant),
+    ...champs, matricule: 'RECO-000000', motDePasse: await bcrypt.hash(motDePasse, 12), doitChangerMotDePasse: true, creePar: auteurDe(req.soignant),
   });
   await valider(reco);
   const { cle, url } = await envoyerFichier(req.file, 'recos');
   reco.photo = url;
   reco.photoCle = cle;
-  await reco.save();
+  // Matricule (identifiant de connexion) attribué au hasard par le serveur, jamais saisi.
+  await enregistrerAvecMatricule(reco, 'RECO');
   await journaliser(req, { action: 'reco.creation', ressource: { type: 'reco', id: reco.matricule } });
   const [vue] = await vues([reco]);
   // Le mot de passe n'est renvoyé qu'une fois, pour être remis au RECO en personne.
