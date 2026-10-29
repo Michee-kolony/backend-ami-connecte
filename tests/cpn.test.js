@@ -571,6 +571,32 @@ test('tableau de bord : indicateurs calculés sur les données réelles, risque 
   assert.ok(!JSON.stringify(inf.corps).includes('antecedents'));
 });
 
+test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur nul, période et filtres', async () => {
+  const Patiente = require('../models/Patiente');
+  const r = await appel('medecinA', 'GET', '/statistiques/synthese?periode=mois');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  const s = r.corps;
+  assert.equal(s.periode.code, 'mois');
+  assert.ok(s.versionRegles);
+  assert.equal(s.prioritaires.length, 6);
+  for (const indic of [...s.prioritaires, ...Object.values(s.modules).flat()]) {
+    assert.ok(indic.code && indic.libelle && indic.formule && indic.source, indic.code);
+    // Section 14 : jamais 0 % quand le dénominateur est nul.
+    if (indic.unite === '%' && !indic.denominateur) assert.equal(indic.valeur, null, indic.code);
+  }
+  const nouveaux = s.modules.dossier.find((x) => x.code === 'DOS_NOUVEAUX');
+  assert.equal(nouveaux.valeur, await Patiente.countDocuments(), 'tous les dossiers d’essai datent de ce mois');
+  assert.equal(s.modules.vaccination.find((x) => x.code === 'VAC_ZERO_DOSE').aValider, true, 'définition PEV à valider');
+  assert.equal(s.continuum[0].etape, 'Grossesses enregistrées');
+  assert.ok(s.continuum.every((e, i) => i === 0 || e.n <= s.continuum[i - 1].n), 'entonnoir décroissant');
+  assert.equal(s.tendance.mois.length, 6);
+
+  const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');
+  assert.equal(kwilu.status, 200);
+  assert.ok(kwilu.corps.modules.dossier[0].valeur <= nouveaux.valeur);
+  assert.equal((await appel('medecinA', 'GET', '/statistiques/synthese?periode=perso&du=2026-05-10&au=2026-05-01')).status, 400);
+});
+
 test('fiche CPN : identité et antécédents cochés, examen, mesures préventives, laboratoire et référence horodatée', async () => {
   const ref = await appel('medecinA', 'GET', '/referentiels/cpn');
   assert.equal(ref.status, 200);
