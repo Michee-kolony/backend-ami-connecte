@@ -4,7 +4,7 @@ const { auteurDe } = require('../models/commun');
 const { ROLES_GESTION } = require('../models/Soignant');
 const { journaliser } = require('../config/audit');
 const notifications = require('../config/notifications');
-const { envoyerFichier, supprimerFichier } = require('../config/r2');
+const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const Soignant = require('../models/Soignant');
 const { messageValidation } = require('../config/erreursFr');
 
@@ -63,13 +63,22 @@ function trouverCommentaire(article, id) {
   return c;
 }
 
-/** Vue d'un article pour le soignant connecté (j'aime, droits de suppression et de réponse). */
-function vue(a, req) {
+/** Photos (URL signées) des médecins auteurs des articles, par identifiant. */
+async function photosAuteurs(articles) {
+  const ids = [...new Set(articles.map((a) => a.auteur.id))].filter((id) => mongoose.isValidObjectId(id));
+  const soignants = await Soignant.find({ _id: { $in: ids } }).select('+photoCle photo');
+  return new Map(await Promise.all(soignants.map(async (s) => [s.id, (await urlSignee(s.photoCle)) ?? s.photo ?? null])));
+}
+
+/** Vue d'un article pour le soignant connecté (photo de l'auteur, j'aime, droits de suppression et de réponse). */
+async function vue(a, req, photos) {
   const moi = req.soignant.id;
   const chef = estChef(req);
   const json = a.toJSON();
+  photos ??= await photosAuteurs([a]);
   return {
     ...json,
+    auteur: { ...json.auteur, photoUrl: photos.get(a.auteur.id) ?? null },
     statut: a.statut ?? 'Approuvé',
     jaimes: undefined,
     nbJaimes: a.jaimes.length,
@@ -100,11 +109,12 @@ exports.lister = async (req, res) => {
     Article.find(filtre).sort({ createdAt: -1 }).skip((page - 1) * parPage).limit(parPage),
     estChef(req) ? Article.countDocuments({ statut: 'En attente' }) : null,
   ]);
-  res.json({ total, page, parPage, enAttente, articles: articles.map((a) => vue(a, req)) });
+  const photos = await photosAuteurs(articles);
+  res.json({ total, page, parPage, enAttente, articles: await Promise.all(articles.map((a) => vue(a, req, photos))) });
 };
 
 exports.obtenir = async (req, res) => {
-  res.json(vue(await trouver(req.params.id, req), req));
+  res.json(await vue(await trouver(req.params.id, req), req));
 };
 
 /** Publication multipart : titre, contenu, cible + champ « medias » (4 photos max ou 1 vidéo). */
@@ -146,7 +156,7 @@ exports.creer = async (req, res) => {
   }
   await journaliser(req, { action: 'article.publication', ressource: { type: 'article', id: article.id }, details: { statut: article.statut } });
   if (!article.enAttente) annoncer(article).catch(() => {});
-  res.status(201).json(vue(article, req));
+  res.status(201).json(await vue(article, req));
 };
 
 /** Médecin chef : rend public un article en attente. */
@@ -159,7 +169,7 @@ exports.approuver = async (req, res) => {
   await article.save();
   await journaliser(req, { action: 'article.approbation', ressource: { type: 'article', id: article.id }, details: { auteur: article.auteur.id } });
   annoncer(article).catch(() => {});
-  res.json(vue(article, req));
+  res.json(await vue(article, req));
 };
 
 /** Texte de l'article : modifiable par son auteur seulement. */
@@ -177,7 +187,7 @@ exports.modifier = async (req, res) => {
   await article.save().catch((err) => {
     throw erreur(400, messageValidation(err));
   });
-  res.json(vue(article, req));
+  res.json(await vue(article, req));
 };
 
 /** Médecin chef seulement : l'article et ses photos / sa vidéo (bucket R2) sont supprimés. */
@@ -200,7 +210,7 @@ exports.aimer = async (req, res) => {
   exigerApprouve(article);
   const filtre = { _id: article._id };
   await Article.updateOne(filtre, article.jaimes.includes(moi) ? { $pull: { jaimes: moi } } : { $addToSet: { jaimes: moi } });
-  res.json(vue(await trouver(req.params.id, req), req));
+  res.json(await vue(await trouver(req.params.id, req), req));
 };
 
 exports.commenter = async (req, res) => {
@@ -210,7 +220,7 @@ exports.commenter = async (req, res) => {
   exigerApprouve(article);
   article.commentaires.push({ auteur: auteurDe(req.soignant), texte: t, le: new Date() });
   await article.save();
-  res.status(201).json(vue(article, req));
+  res.status(201).json(await vue(article, req));
 };
 
 exports.supprimerCommentaire = async (req, res) => {
@@ -220,7 +230,7 @@ exports.supprimerCommentaire = async (req, res) => {
   c.deleteOne();
   await article.save();
   await journaliser(req, { action: 'article.commentaire.suppression', ressource: { type: 'article', id: article.id }, details: { auteur: c.auteur.id } });
-  res.json(vue(article, req));
+  res.json(await vue(article, req));
 };
 
 /** Seul le médecin auteur de l'article répond aux commentaires. */
@@ -232,7 +242,7 @@ exports.repondre = async (req, res) => {
   if (article.auteur.id !== req.soignant.id) throw erreur(403, 'Seul le médecin auteur de l’article peut répondre aux commentaires.');
   trouverCommentaire(article, req.params.cid).reponses.push({ auteur: auteurDe(req.soignant), texte: t, le: new Date() });
   await article.save();
-  res.status(201).json(vue(article, req));
+  res.status(201).json(await vue(article, req));
 };
 
 exports.supprimerReponse = async (req, res) => {
@@ -244,5 +254,5 @@ exports.supprimerReponse = async (req, res) => {
   r.deleteOne();
   await article.save();
   await journaliser(req, { action: 'article.commentaire.suppression', ressource: { type: 'article', id: article.id }, details: { auteur: r.auteur.id, reponse: true } });
-  res.json(vue(article, req));
+  res.json(await vue(article, req));
 };
