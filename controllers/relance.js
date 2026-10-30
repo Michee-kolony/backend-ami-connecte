@@ -17,6 +17,7 @@ const { journaliser } = require('../config/audit');
 const moteur = require('../config/moteurRelance');
 const r = require('../config/relance');
 const { erreur, texte, objet } = require('./saisie');
+const { verifierAccesPatiente } = require('./patientes');
 
 /** Échéance d'une tâche rouverte. */
 const REPRISE_JOURS = 3;
@@ -302,6 +303,7 @@ exports.identifier = async (req, res) => {
   const enfant = mongoose.isValidObjectId(d.enfantId) ? await Enfant.findById(d.enfantId) : null;
   const patiente = enfant ? await Patiente.findById(enfant.mereId) : mongoose.isValidObjectId(d.patienteId) ? await Patiente.findById(d.patienteId) : null;
   if (!patiente) throw erreur(400, 'Dossier introuvable.');
+  await verifierAccesPatiente(req, patiente._id);
   const par = auteurDe(req.soignant);
   const personneType = enfant ? 'Enfant' : 'Patiente';
   const cle = `${t.parcoursCode ?? 'SIGNALEMENT'}:${personneType}:${(enfant ?? patiente).id}`;

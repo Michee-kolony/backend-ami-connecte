@@ -15,7 +15,7 @@ const partogramme = require('../config/partogramme');
 const presence = require('../config/presence');
 const { envoyerFichier, urlSignee, supprimerFichier } = require('../config/r2');
 const { jourKinshasa } = require('../config/vaccination');
-const { trouverPatiente, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
+const { trouverPatiente, verifierAccesPatiente, idsPatientes, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
 const { verifierDoublon } = require('./rendezVous');
 const enfants = require('./enfants');
 const suiviPrenatal = require('./suiviPrenatal');
@@ -89,10 +89,11 @@ const SPEC_MESURES = {
   nouveauNe: Object.fromEntries(acc.MESURES_SORTIE_NOUVEAU_NE.map(({ code }) => [code, B])),
 };
 
-async function trouver(id) {
+async function trouver(req, id) {
   const a = /^AC-ACC-\d+$/.test(id) ? await Accouchement.findOne({ numero: id })
     : mongoose.isValidObjectId(id) ? await Accouchement.findById(id) : null;
   if (!a) throw erreur(404, 'Dossier d’accouchement introuvable.');
+  await verifierAccesPatiente(req, a.patienteId);
   return a;
 }
 
@@ -188,10 +189,10 @@ function resume(a, patiente, photoUrl = null) {
 
 /** Salle de travail : dossiers ouverts (ou d'un statut / d'une patiente donnés). */
 exports.lister = async (req, res) => {
-  const filtre = {};
+  const filtre = { patienteId: { $in: await idsPatientes(req) } };
   if (acc.STATUTS_ACCOUCHEMENT.includes(req.query.statut)) filtre.statut = req.query.statut;
   else if (req.query.statut !== 'Tous') filtre.statut = { $ne: 'Clôturé' };
-  if (req.query.patienteId) filtre.patienteId = (await trouverPatiente(String(req.query.patienteId)))._id;
+  if (req.query.patienteId) filtre.patienteId = (await trouverPatiente(req, String(req.query.patienteId)))._id;
   const dossiers = await Accouchement.find(filtre).sort({ 'admission.admiseLe': -1 }).limit(200);
   const patientes = await Patiente.find({ _id: { $in: dossiers.map((a) => a.patienteId) } }).select('numero nom postnom prenom photoCle');
   const parId = new Map(patientes.map((p) => [p.id, p]));
@@ -202,7 +203,7 @@ exports.lister = async (req, res) => {
 
 /** Alertes non prises en charge des dossiers ouverts (écran de la salle de travail, médecins). */
 exports.alertes = async (req, res) => {
-  const dossiers = await Accouchement.find({ statut: { $ne: 'Clôturé' }, alertes: { $elemMatch: { acquitteeLe: null } } });
+  const dossiers = await Accouchement.find({ patienteId: { $in: await idsPatientes(req) }, statut: { $ne: 'Clôturé' }, alertes: { $elemMatch: { acquitteeLe: null } } });
   const patientes = await Patiente.find({ _id: { $in: dossiers.map((a) => a.patienteId) } }).select('numero nom prenom');
   const parId = new Map(patientes.map((p) => [p.id, p]));
   const liste = dossiers.flatMap((a) => {
@@ -223,6 +224,7 @@ exports.alertes = async (req, res) => {
  * 409 si des dossiers possiblement identiques existent et que le soignant n'a pas confirmé.
  */
 async function patienteAdmissionDirecte(req, res, corps) {
+  if (!req.etablissementId) throw erreur(403, 'Connectez-vous à un établissement pour enregistrer une patiente.');
   const d = objet(corps.nouvellePatiente);
   const champs = champsAdministratifs({
     nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
@@ -254,7 +256,7 @@ async function patienteAdmissionDirecte(req, res, corps) {
   return new Patiente({
     ...champs,
     ageDeclareLe: champs.ageDeclare != null ? new Date().toISOString().slice(0, 10) : null,
-    etablissementId: req.etablissementId ?? null,
+    etablissementId: req.etablissementId,
     enregistreeVia: 'Admission directe',
     motDePasse: await bcrypt.hash(motDePasse, 12),
     espaceEnLigne: 'Activé',
@@ -280,7 +282,7 @@ exports.admettre = async (req, res) => {
     }
   }
   const directe = !corps.patienteId && corps.nouvellePatiente;
-  const p = directe ? await patienteAdmissionDirecte(req, res, corps) : await trouverPatiente(String(corps.patienteId || ''));
+  const p = directe ? await patienteAdmissionDirecte(req, res, corps) : await trouverPatiente(req, String(corps.patienteId || ''));
   if (!p) return;
   const auteur = auteurDe(req.soignant);
   let g = p.isNew ? null : await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 });
@@ -327,14 +329,14 @@ exports.admettre = async (req, res) => {
 };
 
 exports.obtenir = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   await journaliser(req, { action: 'accouchement.lecture', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
   res.json(await vue(a));
 };
 
 /** Correction de l'identité ou de l'anamnèse (champs modifiés journalisés, sans valeurs). */
 exports.modifierAdmission = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierVersion(req, a, 'le dossier d’accouchement');
   const saisie = lire(SPEC_ADMISSION, req.body);
@@ -349,7 +351,7 @@ exports.modifierAdmission = async (req, res) => {
 
 /** Module 2 — Examen clinique d'entrée (enregistré ou remplacé ; l'examinateur est le soignant connecté). */
 exports.examiner = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const examineLe = pasDansLeFutur(instant(req.body?.examineLe, 'Heure de l’examen') ?? new Date(), 'L’examen');
   const examen = lire(SPEC_EXAMEN, req.body);
@@ -387,7 +389,7 @@ async function medecinsANotifier(etablissementId) {
  * Après l'accouchement, saisie rétroactive seulement (mesure prise avant la naissance, sans alerte).
  */
 exports.surveiller = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const retroactive = Boolean(a.accouchement);
   if (retroactive && !req.body?.le) throw erreur(400, 'Accouchement enregistré : indiquez l’heure à laquelle la mesure a été prise (avant la naissance).');
@@ -445,7 +447,7 @@ exports.surveiller = async (req, res) => {
  * de la phase de latence). Heure et motif vides : l'évacuation est retirée.
  */
 exports.evacuer = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const le = pasDansLeFutur(instant(req.body?.le, 'Heure de l’évacuation'), 'L’évacuation');
   const motif = texte(req.body?.motif, 1000);
@@ -464,13 +466,13 @@ exports.evacuer = async (req, res) => {
 };
 
 exports.partogramme = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   res.json(partogramme.duDossier(a));
 };
 
 /** Alerte prise en charge : le soignant et l'heure sont conservés. */
 exports.acquitterAlerte = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   const alerte = a.alertes.id(req.params.alerteId);
   if (!alerte) throw erreur(404, 'Alerte introuvable.');
   if (alerte.acquitteeLe) throw erreur(409, 'Cette alerte est déjà prise en charge.');
@@ -510,7 +512,7 @@ async function synchroniserGrossesse(a, req) {
  * Les nouveau-nés peuvent être transmis en même temps (`nouveauNes`) ou ajoutés ensuite.
  */
 exports.accoucher = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const saisie = lire(SPEC_ACCOUCHEMENT, req.body);
   const donnees = fusionner(a.accouchement?.toObject() ?? {}, saisie);
@@ -542,7 +544,7 @@ exports.accoucher = async (req, res) => {
  * JSON reste accepté pour un mort-né, dont la photo est facultative.
  */
 exports.ajouterNouveauNe = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierAccouchee(a);
   let d = req.body;
@@ -560,7 +562,7 @@ exports.ajouterNouveauNe = async (req, res) => {
 
 /** Module 6 — Surveillance post-partum d'un créneau (mère et nouveau-nés). */
 exports.surveillerPostPartum = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierAccouchee(a);
   const creneau = req.body?.creneau;
@@ -586,7 +588,7 @@ exports.surveillerPostPartum = async (req, res) => {
 
 /** Traitement prévu ou administré (mère ou nouveau-né). */
 exports.ajouterTraitement = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierAccouchee(a);
   const d = req.body || {};
@@ -615,7 +617,7 @@ exports.ajouterTraitement = async (req, res) => {
 
 /** Traitement prévu → administré (heure et soignant conservés). */
 exports.administrerTraitement = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const t = a.postPartum.traitements.id(req.params.traitementId);
   if (!t) throw erreur(404, 'Traitement introuvable.');
@@ -633,7 +635,7 @@ exports.administrerTraitement = async (req, res) => {
  * (CPoN) est créé — ou déplacé — dans l'agenda de la mère.
  */
 exports.sortir = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierAccouchee(a);
   const d = req.body || {};
@@ -689,7 +691,7 @@ exports.sortir = async (req, res) => {
  * vaccinal des enfants (à la date de sortie) et leur séance suivante est programmée.
  */
 exports.cloturer = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   const nouveauNes = await Enfant.find({ accouchementId: a._id }).sort({ rang: 1 });
   const manquants = manquantsCloture(a, nouveauNes);
@@ -728,7 +730,7 @@ exports.cloturer = async (req, res) => {
  * est rouverte. Le journal d'audit, lui, est conservé (ajout seul), sans donnée clinique.
  */
 exports.supprimer = async (req, res) => {
-  const a = await trouver(req.params.id);
+  const a = await trouver(req, req.params.id);
   if (texte(req.body?.confirmation, 30) !== a.numero) {
     throw erreur(400, `Saisissez le numéro du dossier (${a.numero}) pour confirmer la suppression.`);
   }

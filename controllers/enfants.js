@@ -11,7 +11,7 @@ const acc = require('../config/accouchement');
 const vaccination = require('../config/vaccination');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const { verifierDoublon } = require('./rendezVous');
-const { trouverPatiente, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
+const { trouverPatiente, verifierAccesPatiente, idsPatientes, champsAdministratifs, chercherDoublons, motDePasseValide } = require('./patientes');
 const { erreur, texte, nombre, instant, jour, objet, T, N, B, lire, fusionner, valider, pasDansLeFutur } = require('./saisie');
 
 const { STATUTS_ACTIFS, CANAUX_RAPPEL } = RendezVous;
@@ -41,10 +41,12 @@ const SPEC_SUIVI = {
   developpement: T(1000), observations: T(2000),
 };
 
-async function trouverEnfant(id) {
+/** Dossier de l'enfant : accessible selon l'établissement du dossier de sa mère. */
+async function trouverEnfant(req, id) {
   const e = /^AC-ENF-\d+$/.test(id) ? await Enfant.findOne({ numero: id })
     : mongoose.isValidObjectId(id) ? await Enfant.findById(id) : null;
   if (!e) throw erreur(404, 'Dossier de l’enfant introuvable.');
+  await verifierAccesPatiente(req, e.mereId);
   return e;
 }
 exports.trouverEnfant = trouverEnfant;
@@ -141,6 +143,7 @@ exports.creerNaissance = creerNaissance;
  * Renvoie null après avoir répondu 409 si elle semble déjà enregistrée et que le soignant n'a pas confirmé.
  */
 async function nouvelleMere(req, res, corps) {
+  if (!req.etablissementId) throw erreur(403, 'Connectez-vous à un établissement pour enregistrer une patiente.');
   const d = objet(corps.nouvelleMere);
   const champs = champsAdministratifs({
     nom: d.nom, postnom: d.postnom, prenom: d.prenom, dateNaissance: d.dateNaissance, ageDeclare: d.ageDeclare,
@@ -172,7 +175,7 @@ async function nouvelleMere(req, res, corps) {
   return new Patiente({
     ...champs,
     ageDeclareLe: champs.ageDeclare != null ? new Date().toISOString().slice(0, 10) : null,
-    etablissementId: req.etablissementId ?? null,
+    etablissementId: req.etablissementId,
     enregistreeVia: 'Enregistrement enfant',
     statut: 'Suivi postnatal',
     motDePasse: await bcrypt.hash(motDePasse, 12),
@@ -213,7 +216,7 @@ exports.enregistrer = async (req, res) => {
   if (anterieures.length > vaccination.CODES.length) throw erreur(400, 'Trop de doses antérieures.');
 
   let mere;
-  if (corps.mereId) mere = await trouverPatiente(String(corps.mereId));
+  if (corps.mereId) mere = await trouverPatiente(req, String(corps.mereId));
   else if (corps.nouvelleMere) {
     mere = await nouvelleMere(req, res, corps);
     if (!mere) return; // 409 déjà envoyée (dossiers possiblement identiques)
@@ -279,7 +282,7 @@ exports.vue = vue;
 
 /** Recherche : identifiant, nom, prénom, ou enfants d'une mère ; `retard=true` : vaccins en retard. */
 exports.rechercher = async (req, res) => {
-  const filtre = {};
+  const filtre = { mereId: { $in: await idsPatientes(req) } };
   const q = texte(req.query.q, 100);
   if (q) {
     const mots = q.split(/\s+/).filter(Boolean).slice(0, 4).map((m) => new RegExp(echapperRegex(m), 'i'));
@@ -287,6 +290,7 @@ exports.rechercher = async (req, res) => {
   }
   if (req.query.mereId) {
     if (!mongoose.isValidObjectId(req.query.mereId)) throw erreur(400, 'Identifiant de la mère invalide.');
+    await verifierAccesPatiente(req, req.query.mereId);
     filtre.mereId = req.query.mereId;
   }
   let enfants = (await Enfant.find(filtre).sort({ neLe: -1 }).limit(500)).map((e) => ({ ...resume(e), photoCle: e.photoCle }));
@@ -306,7 +310,7 @@ exports.rechercher = async (req, res) => {
  */
 exports.changerPhoto = async (req, res) => {
   if (!ROLES_MATERNITE.includes(req.soignant.role)) throw erreur(403, 'Réservé aux médecins et aux sages-femmes.');
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   if (!req.file) throw erreur(400, 'Choisissez une photo.');
   const ancienne = e.photoCle;
   e.photoCle = (await envoyerFichier(req.file, DOSSIER_PHOTOS)).cle;
@@ -318,7 +322,7 @@ exports.changerPhoto = async (req, res) => {
 };
 
 exports.obtenir = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   await journaliser(req, { action: 'enfant.lecture', patienteId: e.mereId, ressource: { type: 'enfant', id: e.numero } });
   res.json(await vue(e));
 };
@@ -328,7 +332,7 @@ exports.obtenir = async (req, res) => {
  * Les champs modifiés, sans leurs valeurs, sont journalisés.
  */
 exports.modifier = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   verifierVersion(req, e, 'le dossier de l’enfant');
   const d = req.body || {};
   for (const k of ['nom', 'postnom', 'prenom']) if (d[k] !== undefined) e[k] = texte(d[k], 120);
@@ -390,7 +394,7 @@ function ajouterDoses(e, saisies, auteur, { etablissementId = null, reportee = f
  * passe « Effectué » et la séance suivante du calendrier est programmée.
  */
 exports.vacciner = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   if (!e.estSuivi()) throw erreur(409, 'Cet enfant n’est pas (ou plus) suivi : aucune vaccination ne peut être enregistrée.');
   const saisies = Array.isArray(req.body?.doses) ? req.body.doses : [req.body || {}];
   if (!saisies.length || saisies.length > 10) throw erreur(400, 'Indiquez entre 1 et 10 doses.');
@@ -419,7 +423,7 @@ exports.marquerSeancesEffectuees = marquerSeancesEffectuees;
 
 /** Dose saisie par erreur : annulée avec motif (la saisie reste visible), le calendrier est recalculé. */
 exports.annulerVaccination = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   const v = e.vaccinations.id(req.params.vaccinationId);
   if (!v) throw erreur(404, 'Administration introuvable.');
   if (v.annulation) throw erreur(409, 'Cette administration est déjà annulée.');
@@ -433,7 +437,7 @@ exports.annulerVaccination = async (req, res) => {
 
 /** Visite de suivi : croissance (poids, taille, PC, PB), alimentation et développement. */
 exports.ajouterSuivi = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   const champs = lire(SPEC_SUIVI, req.body);
   if (![champs.poidsG, champs.tailleCm, champs.perimetreCranienCm, champs.perimetreBrachialCm, champs.temperature].some((x) => x != null)
       && !champs.observations && !champs.developpement) {
@@ -449,13 +453,13 @@ exports.ajouterSuivi = async (req, res) => {
 };
 
 exports.listerRendezVous = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   res.json(await RendezVous.find({ enfantId: e._id }).sort({ date: -1 }));
 };
 
 /** Rendez-vous de l'enfant (vaccination de rattrapage, suivi) : visible dans l'espace de sa mère. */
 exports.creerRendezVous = async (req, res) => {
-  const e = await trouverEnfant(req.params.id);
+  const e = await trouverEnfant(req, req.params.id);
   const date = instant(req.body?.date, 'Date et heure du rendez-vous');
   if (!date) throw erreur(400, 'Date et heure du rendez-vous invalides.');
   await verifierDoublon(e.mereId, date, null, e._id);
@@ -474,7 +478,7 @@ exports.creerRendezVous = async (req, res) => {
 
 /** Avant une action sur un rendez-vous de l'enfant (confirmer, reporter…) : il doit bien être le sien. */
 exports.verifierRendezVousEnfant = async (req, res, next) => {
-  const e = await trouverEnfant(req.params.enfantId);
+  const e = await trouverEnfant(req, req.params.enfantId);
   if (!mongoose.isValidObjectId(req.params.id) || !(await RendezVous.exists({ _id: req.params.id, enfantId: e._id }))) {
     throw erreur(404, 'Rendez-vous introuvable pour cet enfant.');
   }

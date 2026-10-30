@@ -99,6 +99,11 @@ before(async () => {
     // Établissement choisi à la connexion : utilisé par défaut à l'enregistrement.
     jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role, etablissement: etablissements.connexion.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
   }
+  // Cloisonnement : même médecin connecté à un autre établissement ; médecin chef sans établissement.
+  comptes.medecinAutre = comptes.medecinA;
+  jetons.medecinAutre = jwt.sign({ sub: comptes.medecinA.id, role: 'Médecin', etablissement: etablissements.autre.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  comptes.chefSansEtablissement = comptes.chef;
+  jetons.chefSansEtablissement = jwt.sign({ sub: comptes.chef.id, role: 'Médecin chef de service', etablissement: null }, process.env.JWT_SECRET, { expiresIn: '10m' });
 
   http = app.listen(0);
   await new Promise((r) => http.once('listening', r));
@@ -187,21 +192,15 @@ test('formulaire du tableau de bord : grossesse non datée, valeurs nulles, sans
   assert.equal(corrigee.corps.historiqueDatation[0].valideePar.id, comptes.medecinA.id, 'ancienne valeur et son auteur conservés');
 });
 
-test('établissement sanitaire : choisi dans le formulaire parmi les actifs, sinon celui de la connexion', async () => {
-  const choisi = await creer('medecinA', {
-    patiente: { nom: 'Etab', prenom: 'Choisi', ageDeclare: 24, adresse: { province: 'Kwilu' } },
-    etablissementId: etablissements.autre.id,
-  });
-  assert.equal(choisi.status, 201, JSON.stringify(choisi.corps));
-  const d = await appel('medecinA', 'GET', `/patientes/${choisi.corps.numero}`);
-  assert.equal(d.corps.patiente.etablissementId, etablissements.autre.id);
-  assert.equal(d.corps.etablissement.nom, 'Maternité choisie');
+test('établissement sanitaire : toujours celui de la connexion, jamais un autre choisi dans le formulaire', async () => {
   const parDefaut = await appel('medecinA', 'GET', `/patientes/${dossier.numero}`);
   assert.equal(parDefaut.corps.patiente.etablissementId, etablissements.connexion.id);
-  for (const etablissementId of [etablissements.suspendu.id, '64b000000000000000000000', 'ET-001']) {
+  for (const etablissementId of [etablissements.autre.id, etablissements.suspendu.id, '64b000000000000000000000', 'ET-001']) {
     const r = await creer('medecinA', { patiente: { nom: 'Etab', prenom: 'Refus', ageDeclare: 24, adresse: { province: 'Kinshasa' } }, etablissementId });
-    assert.equal(r.status, 400, etablissementId);
+    assert.equal(r.status, 403, etablissementId);
   }
+  const sansEtablissement = await creer('chefSansEtablissement', { patiente: { nom: 'Etab', prenom: 'Sans', ageDeclare: 24, adresse: { province: 'Kinshasa' } } });
+  assert.equal(sansEtablissement.status, 403);
 });
 
 test('datation : règle de Naegele (mois 1 à 3 : + 9 ; mois 4 à 12 : − 3 et année + 1 ; jour + 7)', () => {
@@ -280,6 +279,35 @@ test('AC-06 : le médecin A fait la première consultation, le médecin B la sui
   assert.deepEqual(d.corps.consultations.map((c) => c.auteur.id).sort(), [comptes.medecinA.id, comptes.medecinB.id].sort());
   const premierRdv = d.corps.rendezVous.find((r) => r.motif === 'Première CPN');
   assert.equal(premierRdv.statut, 'Effectué', 'le rendez-vous du jour est marqué honoré');
+});
+
+test('cloisonnement : un soignant d’un autre établissement n’accède ni au dossier ni à ce qui s’y rattache', async () => {
+  // Contrôle : le médecin de l'établissement de la patiente y accède.
+  assert.equal((await appel('medecinA', 'GET', `/patientes/${dossier.numero}`)).status, 200);
+  for (const qui of ['medecinAutre', 'chefSansEtablissement']) {
+    for (const [methode, chemin] of [
+      ['GET', `/patientes/${dossier.numero}`],
+      ['GET', `/patientes/${dossier.id}/suivi`],
+      ['GET', `/patientes/${dossier.id}/journal`],
+      ['GET', `/patientes/${dossier.id}/carte`],
+      ['GET', `/patientes/${dossier.id}/rendez-vous`],
+      ['PATCH', `/patientes/${dossier.id}`],
+      ['GET', `/grossesses/${grossesseId}/consultations`],
+      ['GET', `/grossesses/${grossesseId}/echographies`],
+      ['GET', `/consultations/${consultationA.id}`],
+    ]) {
+      const r = await appel(qui, methode, chemin, methode === 'PATCH' ? { telephone: '000' } : undefined);
+      assert.equal(r.status, 403, `${qui} ${methode} ${chemin}`);
+    }
+    const recherche = await appel(qui, 'GET', `/patientes?q=${dossier.numero}`);
+    assert.equal(recherche.status, 200);
+    assert.equal(recherche.corps.total, 0, `${qui} : dossier absent de la recherche`);
+    const agenda = await appel(qui, 'GET', '/rendez-vous');
+    assert.ok(!agenda.corps.some((r) => r.patiente?.numero === dossier.numero), `${qui} : rendez-vous absents de l'agenda`);
+  }
+  // Refus journalisé, avec l'établissement de connexion du soignant.
+  const refus = await JournalAudit.findOne({ action: 'acces.refuse', patienteId: dossier.id, 'details.etablissementId': etablissements.autre.id });
+  assert.ok(refus, 'refus journalisé');
 });
 
 test('une seconde « première consultation » finalisée est refusée', async () => {

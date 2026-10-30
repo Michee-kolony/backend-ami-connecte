@@ -9,6 +9,7 @@ const { ROLES_MEDECIN } = require('../models/Soignant');
 const { PROVINCES_RDC } = require('../config/referentiels');
 const { urlSignee } = require('../config/r2');
 const vaccination = require('../config/vaccination');
+const { filtrePatientes, idsPatientes } = require('./patientes');
 
 const JOUR = 86400000;
 const FUSEAU_MS = 60 * 60000; // Africa/Kinshasa : UTC+1, sans heure d'été
@@ -50,12 +51,14 @@ exports.patientes = async (req, res) => {
   const SEMAINES = 8;
   const premiereSemaine = new Date(lundi(maintenant).getTime() - (SEMAINES - 1) * 7 * JOUR);
 
+  // Patientes de l'établissement de connexion seulement (cloisonnement, voir controllers/patientes.js).
+  const ids = await idsPatientes(req);
   const [patientes, enCours, rdvs, recentes] = await Promise.all([
-    Patiente.find().select('adresse.province telephone dateNaissance createdAt statut').lean(),
-    Grossesse.find({ statut: 'En cours' }).select('patienteId datation facteursRisque'),
-    RendezVous.find({ date: { $gte: new Date(aujourdhui.getTime() - 30 * JOUR), $lt: new Date(aujourdhui.getTime() + 8 * JOUR) } })
+    Patiente.find(filtrePatientes(req)).select('adresse.province telephone dateNaissance createdAt statut').lean(),
+    Grossesse.find({ statut: 'En cours', patienteId: { $in: ids } }).select('patienteId datation facteursRisque'),
+    RendezVous.find({ patienteId: { $in: ids }, date: { $gte: new Date(aujourdhui.getTime() - 30 * JOUR), $lt: new Date(aujourdhui.getTime() + 8 * JOUR) } })
       .select('patienteId date motif statut').sort({ date: 1 }).lean(),
-    Patiente.find().sort({ createdAt: -1 }).limit(5),
+    Patiente.find(filtrePatientes(req)).sort({ createdAt: -1 }).limit(5),
   ]);
 
   // --- Totaux -----------------------------------------------------------------------
@@ -120,7 +123,7 @@ exports.patientes = async (req, res) => {
   const grossesseDe = new Map(enCours.map((g) => [String(g.patienteId), g]));
   const photos = await Promise.all(recentes.map((p) => urlSignee(p.photoCle)));
   // Sans horizon : les prochains rendez-vous peuvent tomber au-delà de la fenêtre des compteurs.
-  const prochains = await RendezVous.find({ statut: { $in: ACTIFS }, date: { $gte: aujourdhui } })
+  const prochains = await RendezVous.find({ patienteId: { $in: ids }, statut: { $in: ACTIFS }, date: { $gte: aujourdhui } })
     .select('patienteId date motif statut').sort({ date: 1 }).limit(5).lean();
   const identites = await Patiente.find({ _id: { $in: prochains.map((r) => r.patienteId) } }).select('numero nom prenom postnom').lean();
   const identiteDe = new Map(identites.map((p) => [String(p._id), p]));
@@ -176,7 +179,7 @@ exports.enfants = async (req, res) => {
   const jour = vaccination.jourKinshasa();
   const mois = jour.slice(0, 7);
   const moisPrecedent = vaccination.jourKinshasa(debutMois(-1)).slice(0, 7);
-  const enfants = await Enfant.find().select('numero nom postnom prenom sexe neLe dateNaissance etatNaissance statut vaccinations mereId');
+  const enfants = await Enfant.find({ mereId: { $in: await idsPatientes(req) } }).select('numero nom postnom prenom sexe neLe dateNaissance etatNaissance statut vaccinations mereId');
 
   const suivis = enfants.filter((e) => e.estSuivi());
   const carnets = new Map(suivis.map((e) => [e.id, e.carnet(jour)]));

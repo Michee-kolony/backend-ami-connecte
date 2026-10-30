@@ -202,7 +202,7 @@ function envoyerPdf(res, patiente, pdf) {
 
 /** GET /api/patientes/:id/carte — PDF de la carte (médecins) ; chaque génération est journalisée. */
 exports.carte = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   const s = req.soignant;
   const origine = origineSite(req);
   await domaine.memoriser(origine);

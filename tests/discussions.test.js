@@ -75,7 +75,7 @@ before(async () => {
     suspendu: { prenom: 'Sam', nom: 'SUSPENDU', role: 'Médecin', matricule: 'MED-9203', statut: 'Suspendu' },
   })) {
     comptes[cle] = await Soignant.create({ ...commun, ...d, email: `${cle}@essai.test` });
-    jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role, etablissement: 'ET-TEST' }, process.env.JWT_SECRET, { expiresIn: '10m' });
   }
 });
 
@@ -181,8 +181,8 @@ test('patiente ↔ soignant : choix du soignant, messages en temps réel, prése
   const Patiente = require('../models/Patiente');
   const jwt = require('jsonwebtoken');
   const auteur = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
-  const patiente = await Patiente.create({ numero: 'AC-PAT-990001', nom: 'Kabila', prenom: 'Esther', espaceEnLigne: 'Activé', creePar: auteur });
-  const inactive = await Patiente.create({ numero: 'AC-PAT-990002', nom: 'Sans', prenom: 'Espace', creePar: auteur });
+  const patiente = await Patiente.create({ numero: 'AC-PAT-990001', nom: 'Kabila', prenom: 'Esther', espaceEnLigne: 'Activé', etablissementId: 'ET-TEST', creePar: auteur });
+  const inactive = await Patiente.create({ numero: 'AC-PAT-990002', nom: 'Sans', prenom: 'Espace', etablissementId: 'ET-TEST', creePar: auteur });
   jetons.patiente = jwt.sign({ sub: patiente.id, typ: 'patiente' }, process.env.JWT_SECRET, { expiresIn: '10m' });
   jetons.inactive = jwt.sign({ sub: inactive.id, typ: 'patiente' }, process.env.JWT_SECRET, { expiresIn: '10m' });
 
@@ -249,6 +249,10 @@ test('patiente ↔ soignant : choix du soignant, messages en temps réel, prése
   assert.equal(parNumero.corps.id, id, 'une seule discussion par paire');
   assert.equal((await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-990002' })).status, 409, 'application non activée');
   assert.equal((await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-000000' })).status, 404);
+  // Cloisonnement : une patiente d'un autre établissement n'est ni trouvée ni joignable.
+  await Patiente.create({ numero: 'AC-PAT-990003', nom: 'Kabila', prenom: 'Ailleurs', espaceEnLigne: 'Activé', etablissementId: 'ET-AUTRE', creePar: auteur });
+  assert.ok(!(await appel('infirmiere', 'GET', '/discussions/patientes?q=kabila')).corps.some((x) => x.matricule === 'AC-PAT-990003'));
+  assert.equal((await appel('medecin', 'POST', '/discussions', { patienteId: 'AC-PAT-990003' })).status, 404);
   const premier = await appel('infirmiere', 'POST', '/discussions', { patienteId: patiente.id });
   assert.equal(premier.status, 201);
   await appel('infirmiere', 'POST', `/discussions/${premier.corps.id}/messages`, { texte: 'Bonjour Esther, ici l’infirmière Inès.' });

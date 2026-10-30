@@ -45,14 +45,44 @@ const choix = (v, valeurs) => (valeurs.includes(v) ? v : '');
 /** Cases cochées : seules les valeurs du référentiel sont retenues, sans doublon. */
 const cases = (v, valeurs) => (Array.isArray(v) ? [...new Set(v.filter((x) => valeurs.includes(x)))] : []);
 
-/** Patiente par identifiant AC-PAT-… ou identifiant MongoDB. */
-async function trouverPatiente(id) {
+/**
+ * Cloisonnement entre établissements : un soignant n'accède au dossier d'une patiente (et à tout
+ * ce qui s'y rattache : grossesses, consultations, échographies, rendez-vous, accouchements,
+ * enfants) que si l'établissement choisi à sa connexion est celui de la patiente. Sans
+ * établissement de connexion, aucun dossier n'est accessible. Chaque refus est journalisé.
+ */
+async function verifierEtablissement(req, patiente) {
+  if (req.etablissementId && patiente.etablissementId === req.etablissementId) return patiente;
+  await journaliser(req, {
+    action: 'acces.refuse', resultat: 'refusé', patienteId: patiente._id,
+    ressource: { type: 'patiente', id: patiente.numero }, details: { etablissementId: req.etablissementId ?? null },
+  });
+  throw erreur(403, 'Ce dossier est suivi dans un autre établissement : accès refusé.');
+}
+
+/** Même contrôle pour un document rattaché à une patiente (grossesse, consultation, accouchement…). */
+async function verifierAccesPatiente(req, patienteId) {
+  const p = await Patiente.findById(patienteId).select('numero etablissementId');
+  if (!p) throw erreur(404, 'Dossier patiente introuvable.');
+  await verifierEtablissement(req, p);
+}
+
+/** Filtre des listes : patientes de l'établissement de connexion (aucune sans établissement). */
+function filtrePatientes(req) {
+  return req.etablissementId ? { etablissementId: req.etablissementId } : { _id: { $in: [] } };
+}
+
+/** Identifiants des patientes de l'établissement de connexion (filtre des autres collections). */
+const idsPatientes = (req) => Patiente.distinct('_id', filtrePatientes(req));
+
+/** Patiente par identifiant AC-PAT-… ou identifiant MongoDB, accessible au soignant connecté. */
+async function trouverPatiente(req, id) {
   const p = /^AC-PAT-\d+$/.test(id) ? await Patiente.findOne({ numero: id })
     : mongoose.isValidObjectId(id) ? await Patiente.findById(id) : null;
   if (!p) throw erreur(404, 'Dossier patiente introuvable.');
-  return p;
+  return verifierEtablissement(req, p);
 }
-exports.trouverPatiente = trouverPatiente;
+Object.assign(exports, { trouverPatiente, verifierAccesPatiente, filtrePatientes, idsPatientes });
 
 /** Champs administratifs acceptés depuis le formulaire (liste blanche). */
 function champsAdministratifs(d = {}) {
@@ -145,7 +175,7 @@ exports.rechercher = async (req, res) => {
   const q = texte(req.query.q, 100);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const parPage = Math.min(PAR_PAGE_MAX, Math.max(1, parseInt(req.query.parPage, 10) || 20));
-  const filtre = {};
+  const filtre = filtrePatientes(req);
   if (req.query.statut && Patiente.STATUTS_PATIENTE.includes(req.query.statut)) filtre.statut = req.query.statut;
   if (req.query.province && PROVINCES_RDC.includes(req.query.province)) filtre['adresse.province'] = req.query.province;
   if (q) {
@@ -246,9 +276,12 @@ exports.creer = async (req, res) => {
     });
   }
 
-  // Établissement de prise en charge : choisi dans le formulaire (actif), sinon celui de la connexion.
-  const etablissementId = d.etablissementId ? String(d.etablissementId) : req.etablissementId;
-  if (!etablissementId) throw erreur(400, 'Choisissez l’établissement sanitaire de prise en charge.');
+  // Établissement de prise en charge : celui de la connexion (cloisonnement, voir verifierEtablissement).
+  const etablissementId = req.etablissementId;
+  if (!etablissementId) throw erreur(403, 'Connectez-vous à un établissement pour enregistrer une patiente.');
+  if (d.etablissementId && String(d.etablissementId) !== etablissementId) {
+    throw erreur(403, 'Vous ne pouvez enregistrer une patiente que dans l’établissement choisi à votre connexion.');
+  }
   const [etablissement] = await Etablissement.actifsParIds([etablissementId]);
   if (!etablissement) throw erreur(400, 'Établissement sanitaire inexistant ou suspendu.');
 
@@ -347,7 +380,7 @@ function mesuresRealisees(consultations) {
 
 /** Dossier complet : chaque ouverture est journalisée (distincte d'une consultation réalisée). */
 exports.dossier = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   const [grossesses, consultations, rendezVous, echographies, accouchements, enfants] = await Promise.all([
     Grossesse.find({ patienteId: patiente._id }).sort({ numero: -1 }),
     Consultation.find({ patienteId: patiente._id }).sort({ date: -1 }),
@@ -387,7 +420,7 @@ exports.dossier = async (req, res) => {
 
 /** Mise à jour des informations administratives ; les champs modifiés (sans valeurs) sont journalisés. */
 exports.modifier = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   verifierVersion(req, patiente, 'le dossier de la patiente');
   const champs = champsAdministratifs(req.body);
   if (req.body?.consentements) champs.consentements = consentementsDe(req.body.consentements, req.soignant);
@@ -419,7 +452,7 @@ exports.modifier = async (req, res) => {
 
 /** Nouvelle grossesse (la précédente doit être terminée). */
 exports.nouvelleGrossesse = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   if (await Grossesse.exists({ patienteId: patiente._id, statut: 'En cours' })) {
     throw erreur(409, 'Une grossesse est déjà en cours pour cette patiente : enregistrez d’abord son issue (accouchement, fausse couche…).');
   }
@@ -438,16 +471,17 @@ exports.nouvelleGrossesse = async (req, res) => {
   res.status(201).json(grossesse);
 };
 
-async function trouverGrossesse(id) {
+async function trouverGrossesse(req, id) {
   const g = mongoose.isValidObjectId(id) && await Grossesse.findById(id);
   if (!g) throw erreur(404, 'Grossesse introuvable.');
+  await verifierAccesPatiente(req, g.patienteId);
   return g;
 }
 exports.trouverGrossesse = trouverGrossesse;
 
 /** Nouvelle datation validée : l'ancienne est conservée dans l'historique. */
 exports.dater = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   if (g.statut !== 'En cours') throw erreur(400, 'Cette grossesse est terminée.');
   const nouvelle = datationDepuis(req.body, req.soignant);
   if (!nouvelle) throw erreur(400, 'Méthode de datation requise.');
@@ -463,7 +497,7 @@ exports.dater = async (req, res) => {
 
 /** Facteurs de risque et grossesse multiple (relevés par le médecin). */
 exports.modifierGrossesse = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   if (req.body?.facteursRisque !== undefined) g.facteursRisque = listeTextes(req.body.facteursRisque);
   if (req.body?.grossesseMultiple !== undefined) g.grossesseMultiple = booleen(req.body.grossesseMultiple);
   await g.save();
@@ -473,7 +507,7 @@ exports.modifierGrossesse = async (req, res) => {
 
 /** Issue de grossesse (accouchement…) : la grossesse est close, le dossier passe en suivi postnatal. */
 exports.issue = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   if (g.statut !== 'En cours') throw erreur(400, 'L’issue de cette grossesse est déjà enregistrée.');
   const d = req.body || {};
   if (!Grossesse.ISSUES.includes(d.issue)) throw erreur(400, 'Issue de grossesse requise.');
@@ -497,7 +531,7 @@ exports.issue = async (req, res) => {
 
 /** Historique d'audit du dossier (ouvertures, actes, refus), du plus récent au plus ancien. */
 exports.journal = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   const entrees = await JournalAudit.find({ patienteId: patiente._id }).sort({ le: -1 }).limit(300);
   res.json(entrees.map((e) => ({ ...e.toJSON(), libelle: ACTIONS[e.action] ?? e.action })));
 };
@@ -508,7 +542,7 @@ exports.journal = async (req, res) => {
  * conservé (ajout seul) avec une entrée de suppression, sans donnée clinique.
  */
 exports.supprimer = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   if (texte(req.body?.confirmation, 30) !== patiente.numero) {
     throw erreur(400, `Saisissez le numéro du dossier (${patiente.numero}) pour confirmer la suppression.`);
   }
@@ -542,7 +576,7 @@ exports.supprimer = async (req, res) => {
  * ni antécédents, ni facteurs de risque, ni consultations, ni datation détaillée, ni journal.
  */
 exports.suivi = async (req, res) => {
-  const patiente = await trouverPatiente(req.params.id);
+  const patiente = await trouverPatiente(req, req.params.id);
   const [grossesse, rendezVous, visites, photoUrl, enfants] = await Promise.all([
     Grossesse.findOne({ patienteId: patiente._id, statut: 'En cours' }).sort({ numero: -1 }),
     RendezVous.find({ patienteId: patiente._id }).sort({ date: -1 }),

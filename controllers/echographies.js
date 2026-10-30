@@ -52,7 +52,7 @@ function champs(d = {}) {
 
 /** GET /api/grossesses/:id/echographies — de la plus récente à la plus ancienne. */
 exports.lister = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   const liste = await Echographie.find({ grossesseId: g._id }).sort({ date: -1, createdAt: -1 });
   res.json(await Promise.all(liste.map((e) => e.vue())));
 };
@@ -62,7 +62,7 @@ exports.lister = async (req, res) => {
  * (compte rendu PDF ou images, 6 au plus). Les fichiers sont retirés de R2 si l'enregistrement échoue.
  */
 exports.creer = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   let d;
   try {
     d = typeof req.body?.donnees === 'string' ? JSON.parse(req.body.donnees) : req.body || {};

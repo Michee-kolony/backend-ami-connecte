@@ -4,7 +4,7 @@ const RendezVous = require('../models/RendezVous');
 const { auteurDe } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const notifications = require('../config/notifications');
-const { trouverGrossesse } = require('./patientes');
+const { trouverGrossesse, verifierAccesPatiente } = require('./patientes');
 const cpn = require('../config/cpn');
 const { messageValidation } = require('../config/erreursFr');
 const { verifierVersion } = require('../config/conflits');
@@ -98,9 +98,10 @@ function champsCliniques(d = {}) {
   return c;
 }
 
-async function trouver(id) {
+async function trouver(req, id) {
   const c = mongoose.isValidObjectId(id) && await Consultation.findById(id);
   if (!c) throw erreur(404, 'Consultation introuvable.');
+  await verifierAccesPatiente(req, c.patienteId);
   return c;
 }
 
@@ -121,13 +122,13 @@ function valider(c) {
 }
 
 exports.lister = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   res.json(await Consultation.find({ grossesseId: g._id }).sort({ date: -1 }));
 };
 
 /** Nouvelle consultation : l'auteur est le médecin authentifié (jamais un identifiant envoyé par le client). */
 exports.creer = async (req, res) => {
-  const g = await trouverGrossesse(req.params.id);
+  const g = await trouverGrossesse(req, req.params.id);
   const champs = champsCliniques(req.body);
   if (!champs.type) throw erreur(400, 'Type de consultation requis.');
   if (champs.type === 'Première consultation prénatale'
@@ -179,14 +180,14 @@ exports.creerBrouillon = async (grossesse, champs, req) => {
 };
 
 exports.obtenir = async (req, res) => {
-  const c = await trouver(req.params.id);
+  const c = await trouver(req, req.params.id);
   await journaliser(req, { action: 'consultation.lecture', patienteId: c.patienteId, ressource: { type: 'consultation', id: c.id } });
   res.json(c);
 };
 
 /** Brouillon uniquement : une consultation finalisée n'est jamais modifiée silencieusement. */
 exports.modifier = async (req, res) => {
-  const c = await trouver(req.params.id);
+  const c = await trouver(req, req.params.id);
   if (c.statut !== 'Brouillon') throw erreur(409, 'Consultation finalisée ou annulée : ajoutez un addendum.');
   verifierAuteur(c, req);
   verifierVersion(req, c, 'le brouillon de consultation');
@@ -204,7 +205,7 @@ exports.modifier = async (req, res) => {
 async function finaliser(c, req, res) {
   if (c.statut !== 'Brouillon') throw erreur(409, 'Cette consultation n’est plus un brouillon.');
   verifierAuteur(c, req);
-  const g = await trouverGrossesse(String(c.grossesseId));
+  const g = await trouverGrossesse(req, String(c.grossesseId));
   const auteur = auteurDe(req.soignant);
   c.agJours = g.agJoursLe(c.date);
   c.statut = 'Finalisée';
@@ -248,11 +249,11 @@ async function finaliser(c, req, res) {
   res.json(c);
 }
 
-exports.finaliser = async (req, res) => finaliser(await trouver(req.params.id), req, res);
+exports.finaliser = async (req, res) => finaliser(await trouver(req, req.params.id), req, res);
 
 /** Correction d'une consultation finalisée : addendum signé, la note initiale reste intacte. */
 exports.ajouterAddendum = async (req, res) => {
-  const c = await trouver(req.params.id);
+  const c = await trouver(req, req.params.id);
   if (c.statut !== 'Finalisée') throw erreur(409, 'Un addendum ne s’ajoute qu’à une consultation finalisée.');
   const t = texte(req.body?.texte);
   const motif = texte(req.body?.motif, 300);
@@ -265,7 +266,7 @@ exports.ajouterAddendum = async (req, res) => {
 
 /** Annulation avec motif (la consultation reste visible dans l'historique, jamais supprimée). */
 exports.annuler = async (req, res) => {
-  const c = await trouver(req.params.id);
+  const c = await trouver(req, req.params.id);
   if (c.statut === 'Annulée') throw erreur(409, 'Cette consultation est déjà annulée.');
   verifierAuteur(c, req);
   const motif = texte(req.body?.motif, 300);

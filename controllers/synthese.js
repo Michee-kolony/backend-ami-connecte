@@ -24,6 +24,7 @@ const { VERSION_REGLES, PARAMETRES, PERIODES, CATALOGUE, DONNEES_MANQUANTES } = 
 const { filtreTerritoire } = require('./relance');
 const { calculer } = require('./indicateursRelance');
 const { erreur, texte, jour } = require('./saisie');
+const { filtrePatientes, idsPatientes } = require('./patientes');
 
 const JOUR = 86400000;
 const TYPES_CPN = ['Première consultation prénatale', 'Suivi prénatal'];
@@ -91,20 +92,23 @@ exports.synthese = async (req, res) => {
   const il6Mois = new Date(Date.UTC(+auj.slice(0, 4), +auj.slice(5, 7) - 6, 1) - 60 * 60000);
   const depuisRdv = new Date(Math.min(periode.debut, il6Mois));
 
+  // Patientes de l'établissement de connexion seulement (cloisonnement, voir controllers/patientes.js).
+  const ids = await idsPatientes(req);
+  const dePatiente = { patienteId: { $in: ids } };
   const [patientesToutes, grossesses, consultations, rdvs, echographies, accouchements, enfantsTous, tachesToutes, alertes, urgences] = await Promise.all([
-    Patiente.find().select('numero nom prenom postnom telephone telephoneChiffres dateNaissance ageDeclare adresse consentements createdAt statut').lean(),
-    Grossesse.find().select('patienteId statut createdAt').lean(),
-    Consultation.find({ statut: 'Finalisée' })
+    Patiente.find(filtrePatientes(req)).select('numero nom prenom postnom telephone telephoneChiffres dateNaissance ageDeclare adresse consentements createdAt statut').lean(),
+    Grossesse.find(dePatiente).select('patienteId statut createdAt').lean(),
+    Consultation.find({ ...dePatiente, statut: 'Finalisée' })
       .select('patienteId grossesseId type date constantes.poidsKg constantes.taSystolique constantes.taDiastolique prochainRdv.date reference.motifs').lean(),
-    RendezVous.find({ enfantId: null, $or: [{ date: { $gte: depuisRdv } }, { statut: { $in: RendezVous.STATUTS_ACTIFS } }] })
+    RendezVous.find({ ...dePatiente, enfantId: null, $or: [{ date: { $gte: depuisRdv } }, { statut: { $in: RendezVous.STATUTS_ACTIFS } }] })
       .select('patienteId date motif statut rappelPushLe rappelJourPushLe').lean(),
-    Echographie.find({ date: { $gte: periode.du, $lte: periode.au } }).select('patienteId date').lean(),
-    Accouchement.find().select('numero patienteId grossesseId statut accouchement.heure accouchement.accoucheur accouchement.nombreEnfants evacuation.le alertes createdAt').lean(),
-    Enfant.find().select('numero nom prenom postnom sexe neLe dateNaissance etatNaissance statut vaccinations mereId accouchementId grossesseId origine naissance createdAt'),
+    Echographie.find({ ...dePatiente, date: { $gte: periode.du, $lte: periode.au } }).select('patienteId date').lean(),
+    Accouchement.find(dePatiente).select('numero patienteId grossesseId statut accouchement.heure accouchement.accoucheur accouchement.nombreEnfants evacuation.le alertes createdAt').lean(),
+    Enfant.find({ mereId: { $in: ids } }).select('numero nom prenom postnom sexe neLe dateNaissance etatNaissance statut vaccinations mereId accouchementId grossesseId origine naissance createdAt'),
     TacheRelance.find(filtreTerritoire(req))
       .select('numero statut statutLe ouverte priorite domaine parcoursCode personneType patienteId enfantId recoId aireSante echeance attribueeLe contactEtabliLe visites actions.type actions.le orientation confirmation resolution conflits createdAt declaree.nom').lean(),
     AlerteRelance.find(filtreTerritoire(req)).lean(),
-    Urgence.find({ etat: { $in: URGENCES_ACTIVES } }).select('numero patienteId motif gravite etat createdAt prisEnChargePar').lean(),
+    Urgence.find({ ...dePatiente, etat: { $in: URGENCES_ACTIVES } }).select('numero patienteId motif gravite etat createdAt prisEnChargePar').lean(),
   ]);
 
   // --- Filtre géographique (province, aire de santé de résidence) -------------------------

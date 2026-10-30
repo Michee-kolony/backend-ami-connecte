@@ -7,7 +7,7 @@ const JournalAudit = require('../models/JournalAudit');
 const { auteurDe } = require('../models/commun');
 const { journaliser, ACTIONS } = require('../config/audit');
 const { verifierVersion } = require('../config/conflits');
-const { trouverPatiente } = require('./patientes');
+const { trouverPatiente, verifierAccesPatiente, idsPatientes } = require('./patientes');
 const rappels = require('../config/rappels');
 
 const { STATUTS_ACTIFS, CANAUX_RAPPEL } = RendezVous;
@@ -39,7 +39,7 @@ exports.verifierDoublon = verifierDoublon;
 exports.agenda = async (req, res) => {
   const du = req.query.du ? dateValide(req.query.du) : new Date(Date.now() - 30 * 86400000);
   const au = req.query.au ? dateValide(req.query.au) : new Date(Date.now() + 90 * 86400000);
-  const filtre = { date: { $gte: du, $lte: au } };
+  const filtre = { date: { $gte: du, $lte: au }, patienteId: { $in: await idsPatientes(req) } };
   if (req.query.statut && RendezVous.STATUTS_RDV.includes(req.query.statut)) filtre.statut = req.query.statut;
   const rdvs = await RendezVous.find(filtre).sort({ date: 1 }).limit(500);
   const [patientes, enfants] = await Promise.all([
@@ -60,12 +60,12 @@ exports.agenda = async (req, res) => {
 };
 
 exports.lister = async (req, res) => {
-  const p = await trouverPatiente(req.params.id);
+  const p = await trouverPatiente(req, req.params.id);
   res.json(await RendezVous.find({ patienteId: p._id }).sort({ date: -1 }));
 };
 
 exports.creer = async (req, res) => {
-  const p = await trouverPatiente(req.params.id);
+  const p = await trouverPatiente(req, req.params.id);
   const date = dateValide(req.body?.date);
   await verifierDoublon(p._id, date);
   const grossesse = await Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).select('_id');
@@ -94,6 +94,7 @@ const ACTIONS_RDV = {
 exports.modifier = async (req, res) => {
   const rdv = mongoose.isValidObjectId(req.params.id) && await RendezVous.findById(req.params.id);
   if (!rdv) throw erreur(404, 'Rendez-vous introuvable.');
+  await verifierAccesPatiente(req, rdv.patienteId);
   verifierVersion(req, rdv, 'le rendez-vous');
   const regle = ACTIONS_RDV[req.body?.action];
   if (!regle) throw erreur(400, 'Action inconnue.');

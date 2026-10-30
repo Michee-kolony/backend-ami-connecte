@@ -11,6 +11,7 @@ const { urlSignee } = require('../config/r2');
 const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const presence = require('../config/presence');
 const notifications = require('../config/notifications');
+const { filtrePatientes } = require('./patientes');
 
 const TAILLE_MAX = 2000;
 const PAR_PAGE = 50;
@@ -183,13 +184,14 @@ async function trouverPatiente(idOuNumero) {
   const v = String(idOuNumero || '').trim();
   if (!v) return null;
   return Patiente.findOne(mongoose.isValidObjectId(v) ? { _id: v } : { numero: v.toUpperCase() })
-    .select('prenom nom numero photoCle espaceEnLigne');
+    .select('prenom nom numero photoCle espaceEnLigne etablissementId');
 }
 
 /** Le soignant écrit le premier à une patiente dont l'application est activée. */
 async function ouvrirAvecPatiente(req, res) {
   const p = await trouverPatiente(req.body.patienteId);
-  if (!p) throw erreur(404, 'Patiente introuvable.');
+  // Cloisonnement : seules les patientes de l'établissement de connexion (voir controllers/patientes.js).
+  if (!p || !req.etablissementId || p.etablissementId !== req.etablissementId) throw erreur(404, 'Patiente introuvable.');
   if (p.espaceEnLigne !== 'Activé') throw erreur(409, 'Cette patiente n’a pas encore activé son application : elle ne peut pas recevoir de message.');
   const moi = req.soignant._id;
   const cle = Discussion.cleDe(moi, p._id);
@@ -208,7 +210,7 @@ async function ouvrirAvecPatiente(req, res) {
 /** Patientes joignables par l'application (espace activé), par nom, prénom ou numéro. */
 exports.patientes = async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 60);
-  const filtre = { espaceEnLigne: 'Activé' };
+  const filtre = { ...filtrePatientes(req), espaceEnLigne: 'Activé' };
   if (q) {
     const motif = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     filtre.$or = [{ nom: motif }, { prenom: motif }, { numero: motif }];
