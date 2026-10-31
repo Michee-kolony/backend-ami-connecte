@@ -82,7 +82,7 @@ async function alerter(type, { recoId = null, etablissementId = null, taches = [
     if (err.code !== 11000) throw err;
     alerte = await AlerteRelance.findOneAndUpdate(filtre, { ...maj, $inc: { occurrences: 1 } }, { returnDocument: 'after' });
   }
-  if (destinataire !== 'reco') presence.emettrePersonnel('relance:alerte', { type, etablissementId, taches });
+  if (destinataire !== 'reco') presence.emettreEtablissement(etablissementId, 'relance:alerte', { type, etablissementId, taches });
   return alerte;
 }
 

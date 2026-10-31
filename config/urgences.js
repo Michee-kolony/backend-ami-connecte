@@ -38,7 +38,19 @@ const INTERVALLE_POSITION_MS = 800;
 /** Intervalle d'enregistrement de la position en base (la diffusion, elle, suit chaque seconde). */
 const INTERVALLE_SAUVEGARDE_MS = 5000;
 
+/**
+ * Cloisonnement de la régulation : le personnel ne voit et ne traite que les urgences de son
+ * établissement de connexion (celui de la patiente). Une urgence sans établissement (patiente
+ * non rattachée) reste visible de toute la régulation, pour ne jamais rester sans réponse.
+ */
+const urgenceVisible = (x, etablissementId) => !x.etablissementId || (!!etablissementId && x.etablissementId === etablissementId);
+const filtreRegulation = (etablissementId) => ({ etablissementId: { $in: etablissementId ? [etablissementId, null] : [null] } });
+
+/** Flotte (ambulances, chauffeurs) de l'établissement de connexion ; aucune sans établissement. */
+const filtreFlotte = (etablissementId) => (etablissementId ? { etablissementId } : { _id: { $in: [] } });
+
 module.exports = {
+  urgenceVisible, filtreRegulation, filtreFlotte,
   MOTIFS, GRAVITES, ETATS, ETATS_ACTIFS, STATUTS_COURSE, TYPES_EVENEMENT,
   STATUTS_AMBULANCE, TYPES_AMBULANCE, STATUTS_CHAUFFEUR, INTERVALLE_POSITION_MS, INTERVALLE_SAUVEGARDE_MS,
 };

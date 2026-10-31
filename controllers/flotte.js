@@ -47,19 +47,26 @@ function donneesDe(req) {
   return objet(req.body);
 }
 
-async function trouverAmbulance(code) {
-  const a = await Ambulance.findOne({ code: String(code) });
+// Cloisonnement : chaque établissement ne voit et ne gère que ses ambulances et ses chauffeurs.
+async function trouverAmbulance(req, code) {
+  const a = await Ambulance.findOne({ code: String(code), ...u.filtreFlotte(req.etablissementId) });
   if (!a) throw erreur(404, 'Ambulance introuvable.');
   return a;
 }
 
-async function trouverChauffeur(id) {
-  const c = mongoose.isValidObjectId(id) ? await Chauffeur.findById(id) : null;
+async function trouverChauffeur(req, id) {
+  const c = mongoose.isValidObjectId(id) ? await Chauffeur.findOne({ _id: id, ...u.filtreFlotte(req.etablissementId) }) : null;
   if (!c) throw erreur(404, 'Chauffeur introuvable.');
   return c;
 }
 
-const diffuserAmbulance = (a) => presence.emettrePersonnel('flotte:ambulance', a.toJSON());
+/** Ajout à la flotte : rattaché à l'établissement de connexion, obligatoire. */
+function etablissementDeConnexion(req) {
+  if (!req.etablissementId) throw erreur(403, 'Connectez-vous à un établissement pour gérer sa flotte.');
+  return req.etablissementId;
+}
+
+const diffuserAmbulance = (a) => presence.emettreEtablissement(a.etablissementId, 'flotte:ambulance', a.toJSON());
 
 /** Chauffeurs avec leur ambulance, leur occupation (mission en cours) et leurs missions du mois. */
 async function vuesChauffeurs(liste) {
@@ -94,7 +101,7 @@ async function vuesChauffeurs(liste) {
 // --- Ambulances ---------------------------------------------------------------------
 
 exports.listerAmbulances = async (req, res) => {
-  const liste = await Ambulance.find().sort({ code: 1 });
+  const liste = await Ambulance.find(u.filtreFlotte(req.etablissementId)).sort({ code: 1 });
   res.json(liste.map((a) => a.toJSON()));
 };
 
@@ -110,14 +117,14 @@ const CHAMPS_AMBULANCE = (d) => ({
 });
 
 /** Le chauffeur passe sur cette ambulance : retiré de la précédente (sauf si elle est en mission). */
-async function attribuerChauffeur(ambulance, chauffeurId) {
+async function attribuerChauffeur(req, ambulance, chauffeurId) {
   if (ambulance.statut === 'En mission') throw erreur(409, `${ambulance.code} est en mission : changez de chauffeur à la fin de la course.`);
   if (!chauffeurId) {
     suiviAmbulances.invalider(ambulance.chauffeurId);
     ambulance.chauffeurId = null;
     return null;
   }
-  const chauffeur = await trouverChauffeur(chauffeurId);
+  const chauffeur = await trouverChauffeur(req, chauffeurId);
   if (chauffeur.statut !== 'Actif') throw erreur(409, 'Ce chauffeur est suspendu.');
   const precedente = await Ambulance.findOne({ chauffeurId: chauffeur._id, code: { $ne: ambulance.code } });
   if (precedente?.statut === 'En mission') throw erreur(409, `${chauffeur.prenom} ${chauffeur.nom} conduit ${precedente.code}, actuellement en mission.`);
@@ -137,8 +144,8 @@ exports.creerAmbulance = async (req, res) => {
   const champs = CHAMPS_AMBULANCE(d);
   if (!champs.immatriculation || !champs.modele || !champs.type) throw erreur(400, 'Immatriculation, modèle et type sont obligatoires.');
   if (await Ambulance.exists({ immatriculation: champs.immatriculation })) throw erreur(409, 'Cette immatriculation est déjà enregistrée.');
-  const a = new Ambulance({ ...champs, code: await Ambulance.prochainCode(), creePar: auteurDe(req.soignant) });
-  if (d.chauffeurId) await attribuerChauffeur(a, String(d.chauffeurId));
+  const a = new Ambulance({ ...champs, code: await Ambulance.prochainCode(), etablissementId: etablissementDeConnexion(req), creePar: auteurDe(req.soignant) });
+  if (d.chauffeurId) await attribuerChauffeur(req, a, String(d.chauffeurId));
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'flotte.ambulance.creation', ressource: { type: 'ambulance', id: a.code } });
@@ -148,7 +155,7 @@ exports.creerAmbulance = async (req, res) => {
 
 /** Modification : caractéristiques, statut (Disponible, Maintenance, Hors service) et chauffeur attitré. */
 exports.modifierAmbulance = async (req, res) => {
-  const a = await trouverAmbulance(req.params.code);
+  const a = await trouverAmbulance(req, req.params.code);
   const d = objet(req.body);
   const champs = CHAMPS_AMBULANCE(d);
   if (champs.immatriculation && champs.immatriculation !== a.immatriculation
@@ -161,7 +168,7 @@ exports.modifierAmbulance = async (req, res) => {
     if (a.statut === 'En mission') throw erreur(409, `${a.code} est en mission : statut modifiable à la fin de la course.`);
     a.statut = d.statut;
   }
-  if (d.chauffeurId !== undefined) await attribuerChauffeur(a, d.chauffeurId ? String(d.chauffeurId) : null);
+  if (d.chauffeurId !== undefined) await attribuerChauffeur(req, a, d.chauffeurId ? String(d.chauffeurId) : null);
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'flotte.ambulance.modification', ressource: { type: 'ambulance', id: a.code }, details: { champs: Object.keys(d) } });
@@ -172,12 +179,12 @@ exports.modifierAmbulance = async (req, res) => {
 // --- Chauffeurs ---------------------------------------------------------------------
 
 exports.listerChauffeurs = async (req, res) => {
-  const liste = await Chauffeur.find().sort({ createdAt: -1 });
+  const liste = await Chauffeur.find(u.filtreFlotte(req.etablissementId)).sort({ createdAt: -1 });
   res.json(await vuesChauffeurs(liste));
 };
 
 exports.obtenirChauffeur = async (req, res) => {
-  res.json((await vuesChauffeurs([await trouverChauffeur(req.params.id)]))[0]);
+  res.json((await vuesChauffeurs([await trouverChauffeur(req, req.params.id)]))[0]);
 };
 
 /** Matricule attribué au prochain chauffeur (proposé dans le formulaire). */
@@ -205,12 +212,12 @@ exports.creerChauffeur = async (req, res) => {
   if (champs.permis && await Chauffeur.exists({ permis: champs.permis })) throw erreur(409, 'Ce numéro de permis est déjà enregistré.');
 
   const c = new Chauffeur({
-    ...champs, matricule: 'CHF-000000', motDePasse: await bcrypt.hash(motDePasse, 12),
+    ...champs, matricule: 'CHF-000000', etablissementId: etablissementDeConnexion(req), motDePasse: await bcrypt.hash(motDePasse, 12),
     doitChangerMotDePasse: d.doitChangerMotDePasse !== false && d.doitChangerMotDePasse !== 'false',
     creePar: auteurDe(req.soignant),
   });
   await valider(c);
-  const ambulance = d.ambulance ? await trouverAmbulance(d.ambulance) : null;
+  const ambulance = d.ambulance ? await trouverAmbulance(req, d.ambulance) : null;
   if (ambulance?.statut === 'En mission') throw erreur(409, `${ambulance.code} est en mission.`);
 
   const { cle, url } = await envoyerFichier(req.file, 'chauffeurs');
@@ -218,7 +225,7 @@ exports.creerChauffeur = async (req, res) => {
   c.photoCle = cle;
   await enregistrerAvecMatricule(c, 'CHF');
   if (ambulance) {
-    await attribuerChauffeur(ambulance, c.id);
+    await attribuerChauffeur(req, ambulance, c.id);
     await ambulance.save();
     diffuserAmbulance(ambulance);
   }
@@ -227,7 +234,7 @@ exports.creerChauffeur = async (req, res) => {
 };
 
 exports.modifierChauffeur = async (req, res) => {
-  const c = await trouverChauffeur(req.params.id);
+  const c = await trouverChauffeur(req, req.params.id);
   const d = donneesDe(req);
   const champs = CHAMPS_CHAUFFEUR(d);
   if (champs.permis && champs.permis !== c.permis && await Chauffeur.exists({ permis: champs.permis })) {
@@ -249,7 +256,7 @@ exports.modifierChauffeur = async (req, res) => {
 
 /** Suspension (impossible pendant une mission) : le chauffeur est retiré de son ambulance et déconnecté. */
 exports.changerStatutChauffeur = async (req, res) => {
-  const c = await trouverChauffeur(req.params.id);
+  const c = await trouverChauffeur(req, req.params.id);
   const statut = String(req.body?.statut || '');
   if (!u.STATUTS_CHAUFFEUR.includes(statut)) throw erreur(400, 'Statut inconnu.');
   if (statut === 'Suspendu') {
@@ -273,7 +280,7 @@ exports.changerStatutChauffeur = async (req, res) => {
 
 /** Nouveau mot de passe temporaire (généré si absent), renvoyé une seule fois. */
 exports.reinitialiserMotDePasse = async (req, res) => {
-  const c = await trouverChauffeur(req.params.id);
+  const c = await trouverChauffeur(req, req.params.id);
   const motDePasse = req.body?.motDePasse ? String(req.body.motDePasse) : genererMotDePasse();
   if (!motDePasseValide(motDePasse)) throw erreur(400, MESSAGE_MOT_DE_PASSE);
   await Chauffeur.updateOne({ _id: c._id }, { motDePasse: await bcrypt.hash(motDePasse, 12), doitChangerMotDePasse: true });
@@ -287,7 +294,7 @@ exports.reinitialiserMotDePasse = async (req, res) => {
  * (texte signé lisible par n'importe quel lecteur). Le rendu imprimable est fait par l'admin.
  */
 exports.carteService = async (req, res) => {
-  const c = await trouverChauffeur(req.params.id);
+  const c = await trouverChauffeur(req, req.params.id);
   const [vue] = await vuesChauffeurs([c]);
   const emiseLe = new Date().toISOString().slice(0, 10);
   const empreinte = crypto.createHmac('sha256', process.env.JWT_SECRET).update(`${c.id}:${c.matricule}`).digest('hex').slice(0, 12).toUpperCase();

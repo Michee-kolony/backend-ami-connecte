@@ -12,6 +12,8 @@ const chauffeurSchema = new mongoose.Schema({
   nom: { type: String, required: true, trim: true, uppercase: true },
   postnom: { type: String, default: '', trim: true, uppercase: true },
   telephone: { type: String, required: true, trim: true },
+  /** Établissement employeur : seul son personnel voit, gère et envoie ce chauffeur. */
+  etablissementId: { type: String, default: null, index: true },
   /** Photo de profil (URL publique, comme celles du personnel) et sa clé R2. */
   photo: { type: String, default: null },
   photoCle: { type: String, default: null },

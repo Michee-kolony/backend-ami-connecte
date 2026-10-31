@@ -95,7 +95,7 @@ function initialiser(serveur) {
 
     const infos = await infosDe(soignant, etablissementId);
     if (!socket.connected) return; // parti pendant la lecture de l'établissement
-    socket.join([SALLE, `soignant:${id}`]);
+    socket.join([SALLE, `soignant:${id}`, ...(etablissementId ? [`etablissement:${etablissementId}`] : [])]);
     const c = connectes.get(id) ?? { infos, sockets: new Set() };
     c.sockets.add(socket.id);
     connectes.set(id, c);
@@ -172,6 +172,15 @@ function emettrePersonnel(evenement, donnees) {
   io?.to(SALLE).emit(evenement, donnees);
 }
 
+/**
+ * Événement adressé au personnel connecté à un établissement (sa flotte, ses urgences). Sans
+ * établissement (urgence d'une patiente non rattachée) : tout le personnel, pour qu'elle ne
+ * reste jamais sans réponse.
+ */
+function emettreEtablissement(etablissementId, evenement, donnees) {
+  io?.to(etablissementId ? `etablissement:${etablissementId}` : SALLE).emit(evenement, donnees);
+}
+
 function emettrePatiente(id, evenement, donnees) {
   io?.to(`patiente:${id}`).emit(evenement, donnees);
 }
@@ -199,5 +208,5 @@ async function actualiser(soignant) {
 }
 
 module.exports = {
-  initialiser, expulser, actualiser, emettre, emettrePersonnel, emettrePatiente, emettreChauffeur, expulserChauffeur,
+  initialiser, expulser, actualiser, emettre, emettrePersonnel, emettreEtablissement, emettrePatiente, emettreChauffeur, expulserChauffeur,
 };

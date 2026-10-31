@@ -8,6 +8,7 @@ const presence = require('../config/presence');
 const notifications = require('../config/notifications');
 const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const { erreur } = require('./saisie');
+const { urgenceVisible } = require('../config/urgences');
 
 const TAILLE_MAX = 1000;
 /** Anti-saturation : un message toutes les 500 ms au plus par auteur. */
@@ -33,7 +34,7 @@ function auteurDe(req) {
 async function urgenceAccessible(req) {
   const numero = String(req.params.numero || '');
   const x = /^URG-\d+$/.test(numero) ? await Urgence.findOne({ numero }) : null;
-  const autorise = x && (req.soignant
+  const autorise = x && ((req.soignant && urgenceVisible(x, req.etablissementId))
     || (req.patiente && String(x.patienteId) === req.patiente.id)
     || (req.chauffeur && x.chauffeurId && String(x.chauffeurId) === req.chauffeur.id));
   if (!autorise) throw erreur(404, 'Urgence introuvable.');
@@ -59,7 +60,7 @@ exports.envoyer = async (req, res) => {
 
   const m = await MessageUrgence.create({ urgenceId: x._id, auteur, contenu: chiffrer(texte) });
   const message = versClient(m, x.numero);
-  presence.emettrePersonnel('urgence:message', message);
+  presence.emettreEtablissement(x.etablissementId, 'urgence:message', message);
   presence.emettrePatiente(String(x.patienteId), 'urgence:message', message);
   if (x.chauffeurId) presence.emettreChauffeur(String(x.chauffeurId), 'urgence:message', message);
   // Message pour la patiente : notification push (sans le contenu), au cas où l'application est fermée.
@@ -80,7 +81,7 @@ exports.envoyer = async (req, res) => {
 async function supprimerConversation(x) {
   await MessageUrgence.deleteMany({ urgenceId: x._id });
   const avis = { urgence: x.numero };
-  presence.emettrePersonnel('urgence:conversation-supprimee', avis);
+  presence.emettreEtablissement(x.etablissementId, 'urgence:conversation-supprimee', avis);
   presence.emettrePatiente(String(x.patienteId), 'urgence:conversation-supprimee', avis);
   if (x.chauffeurId) presence.emettreChauffeur(String(x.chauffeurId), 'urgence:conversation-supprimee', avis);
 }

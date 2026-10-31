@@ -107,3 +107,49 @@ test('le médecin chef ne peut pas changer son propre rôle ; e-mail déjà pris
   const ok = await appel('chef', 'PATCH', `/soignants/${comptes.medecin.id}`, { email: 'Nouvelle.Adresse@Essai.test' });
   assert.equal(ok.corps.email, 'nouvelle.adresse@essai.test');
 });
+
+test('connexion : un médecin affecté à plusieurs établissements choisit le sien ; ses accès suivent ce choix', async () => {
+  const bcrypt = require('bcrypt');
+  const jwt = require('jsonwebtoken');
+  const Soignant = require('../models/Soignant');
+  const Patiente = require('../models/Patiente');
+  const motDePasse = 'Multi#Site2026';
+  await Soignant.create({
+    postnom: 'TEST', sexe: 'F', dateNaissance: '1985-01-01', lieuNaissance: 'Kinshasa', nationalite: 'Congolaise',
+    pieceType: 'Passeport', adresse: 'Fictive', telephone: '000', grade: 'Médecin généraliste', specialite: 'Médecine générale',
+    prenom: 'Mireille', nom: 'MULTI', role: 'Médecin', matricule: 'MED-9103', email: 'multi@essai.test',
+    motDePasse: await bcrypt.hash(motDePasse, 4),
+    affectations: [{ etablissementId: etablissements.a.id }, { etablissementId: etablissements.b.id }, { etablissementId: etablissements.suspendu.id }],
+  });
+  const connexion = async (etablissementId) => {
+    const r = await fetch(`${api}/auth/connexion`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'multi@essai.test', motDePasse, etablissementId }),
+    });
+    return { status: r.status, corps: await r.json() };
+  };
+
+  // 1re étape : aucune session ouverte, les établissements actifs sont proposés.
+  const choix = await connexion();
+  assert.equal(choix.status, 200);
+  assert.equal(choix.corps.choixEtablissement, true);
+  assert.equal(choix.corps.jeton, undefined, 'pas de jeton avant le choix');
+  assert.deepEqual(choix.corps.etablissements.map((e) => e.nom).sort(), ['Centre A', 'Centre B'], 'établissement suspendu non proposé');
+  // Établissement suspendu ou non affecté : refusé.
+  assert.equal((await connexion(etablissements.suspendu.id)).status, 400);
+  assert.equal((await connexion('64b000000000000000000000')).status, 400);
+
+  // 2e étape : le jeton porte l'établissement choisi, et lui seul.
+  const dansA = await connexion(etablissements.a.id);
+  const dansB = await connexion(etablissements.b.id);
+  assert.equal(dansA.corps.etablissement.nom, 'Centre A');
+  assert.equal(jwt.decode(dansA.corps.jeton).etablissement, etablissements.a.id);
+  assert.equal(jwt.decode(dansB.corps.jeton).etablissement, etablissements.b.id);
+  jetons.multiA = dansA.corps.jeton;
+  jetons.multiB = dansB.corps.jeton;
+
+  const auteur = { id: comptes.chef.id, nom: 'Alain CHEF', role: 'Médecin chef de service' };
+  await Patiente.create({ numero: 'AC-PAT-991001', nom: 'Site', prenom: 'Alpha', etablissementId: etablissements.a.id, creePar: auteur });
+  assert.equal((await appel('multiA', 'GET', '/patientes/AC-PAT-991001')).status, 200, 'connecté au Centre A : dossier du Centre A accessible');
+  assert.equal((await appel('multiB', 'GET', '/patientes/AC-PAT-991001')).status, 403, 'connecté au Centre B : dossier du Centre A refusé');
+});

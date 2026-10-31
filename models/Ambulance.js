@@ -23,6 +23,8 @@ const ambulanceSchema = new mongoose.Schema({
   modele: { type: String, required: true, trim: true },
   annee: { type: Number, min: 1980, max: 2100, default: null },
   type: { type: String, enum: TYPES_AMBULANCE, required: true },
+  /** Établissement propriétaire : seul son personnel voit, gère et envoie cette ambulance. */
+  etablissementId: { type: String, default: null, index: true },
   statut: { type: String, enum: STATUTS_AMBULANCE, default: 'Disponible', index: true },
   /** Chauffeur attitré (et conducteur pendant la mission en cours). */
   chauffeurId: { type: mongoose.Schema.Types.ObjectId, ref: 'Chauffeur', default: null, index: true },

@@ -28,7 +28,7 @@ async function contexte(chauffeurId) {
   const id = String(chauffeurId);
   const actuel = contextes.get(id);
   if (actuel && actuel.expire > Date.now()) return actuel;
-  const ambulance = await Ambulance.findOne({ chauffeurId: id }).select('code urgence').lean();
+  const ambulance = await Ambulance.findOne({ chauffeurId: id }).select('code urgence etablissementId').lean();
   if (!ambulance) {
     contextes.delete(id);
     return null;
@@ -36,6 +36,7 @@ async function contexte(chauffeurId) {
   const urgence = ambulance.urgence ? await Urgence.findOne({ numero: ambulance.urgence }).select('numero patienteId').lean() : null;
   const c = {
     code: ambulance.code,
+    etablissementId: ambulance.etablissementId ?? null,
     numero: urgence?.numero ?? null,
     patienteId: urgence ? String(urgence.patienteId) : null,
     dernierEnvoi: actuel?.dernierEnvoi ?? 0,
@@ -82,7 +83,8 @@ async function enregistrerPosition(chauffeurId, donnees) {
     await Ambulance.updateOne({ code: c.code }, { position });
   }
   const message = { ambulance: c.code, urgence: c.numero, ...position };
-  presence().emettrePersonnel('ambulance:position', message);
+  // Position : personnel de l'établissement de l'ambulance seulement.
+  presence().emettreEtablissement(c.etablissementId, 'ambulance:position', message);
   if (c.patienteId) presence().emettrePatiente(c.patienteId, 'ambulance:position', message);
   return message;
 }

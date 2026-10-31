@@ -40,6 +40,13 @@ async function trouver(numero) {
   return urgence;
 }
 
+/** Urgence traitée par la régulation : celles de l'établissement de connexion (voir config/urgences.js). */
+async function trouverPourRegulation(req, numero) {
+  const x = await trouver(numero);
+  if (!u.urgenceVisible(x, req.etablissementId)) throw erreur(404, 'Urgence introuvable.');
+  return x;
+}
+
 function lireCoordonnees(d) {
   const lat = nombre(d?.lat);
   const lng = nombre(d?.lng);
@@ -146,7 +153,7 @@ async function vueMission(x) {
 /** Diffuse l'urgence à jour : personnel, patiente et chauffeur engagé. */
 async function diffuser(x, { nouvelle = false } = {}) {
   try {
-    presence.emettrePersonnel(nouvelle ? 'urgence:nouvelle' : 'urgence:maj', await vueRegulation(x));
+    presence.emettreEtablissement(x.etablissementId, nouvelle ? 'urgence:nouvelle' : 'urgence:maj', await vueRegulation(x));
     presence.emettrePatiente(String(x.patienteId), 'urgence:maj', await vuePatiente(x));
     if (x.chauffeurId) presence.emettreChauffeur(String(x.chauffeurId), 'mission:maj', await vueMission(x));
   } catch (err) {
@@ -156,7 +163,7 @@ async function diffuser(x, { nouvelle = false } = {}) {
 
 async function diffuserAmbulance(code) {
   const a = await Ambulance.findOne({ code });
-  if (a) presence.emettrePersonnel('flotte:ambulance', a.toJSON());
+  if (a) presence.emettreEtablissement(a.etablissementId, 'flotte:ambulance', a.toJSON());
 }
 
 /** Fin de mission : l'ambulance redevient disponible (si elle est encore sur cette urgence). */
@@ -232,7 +239,7 @@ exports.deplacerPatiente = async (req, res) => {
   Object.assign(x, position);
   await x.save();
   const message = { urgence: x.numero, lat: x.lat, lng: x.lng, precisionM: x.precisionM };
-  presence.emettrePersonnel('urgence:position', message);
+  presence.emettreEtablissement(x.etablissementId, 'urgence:position', message);
   if (x.chauffeurId) presence.emettreChauffeur(String(x.chauffeurId), 'urgence:position', message);
   res.json({ ok: true });
 };
@@ -257,7 +264,8 @@ exports.annulerParPatiente = async (req, res) => {
 
 /** Ambulances visibles sur la carte de la patiente : code, position et disponibilité. */
 exports.ambulancesVisibles = async (req, res) => {
-  const liste = await Ambulance.find({ statut: { $in: ['Disponible', 'En mission'] }, 'position.lat': { $ne: null } })
+  // Ambulances de l'établissement de la patiente seulement.
+  const liste = await Ambulance.find({ ...u.filtreFlotte(req.patiente.etablissementId), statut: { $in: ['Disponible', 'En mission'] }, 'position.lat': { $ne: null } })
     .select('code statut position');
   res.json(liste.map((a) => ({ code: a.code, disponible: a.statut === 'Disponible', lat: a.position.lat, lng: a.position.lng })));
 };
@@ -266,7 +274,7 @@ exports.ambulancesVisibles = async (req, res) => {
 
 /** Urgences actives (par défaut) ou toutes celles des `jours` derniers jours. */
 exports.lister = async (req, res) => {
-  const filtre = {};
+  const filtre = u.filtreRegulation(req.etablissementId);
   if (req.query.etat === 'toutes') {
     const jours = Math.min(Math.max(parseInt(req.query.jours, 10) || 30, 1), 365);
     filtre.$or = [{ createdAt: { $gte: new Date(Date.now() - jours * 86400000) } }, { etat: { $in: u.ETATS_ACTIFS } }];
@@ -278,7 +286,7 @@ exports.lister = async (req, res) => {
 };
 
 exports.obtenir = async (req, res) => {
-  res.json(await vueRegulation(await trouver(req.params.numero)));
+  res.json(await vueRegulation(await trouverPourRegulation(req, req.params.numero)));
 };
 
 function prendreEnChargeSiNouvelle(x, soignant) {
@@ -289,7 +297,7 @@ function prendreEnChargeSiNouvelle(x, soignant) {
 }
 
 exports.prendreEnCharge = async (req, res) => {
-  const x = await trouver(req.params.numero);
+  const x = await trouverPourRegulation(req, req.params.numero);
   if (x.etat !== 'nouvelle') throw erreur(409, x.estActive() ? 'Cette urgence est déjà prise en charge.' : 'Cette urgence est terminée.');
   prendreEnChargeSiNouvelle(x, req.soignant);
   await x.save();
@@ -303,18 +311,20 @@ exports.prendreEnCharge = async (req, res) => {
  * actif, sans autre mission. Avant le départ (course « Assignée »), on peut encore changer.
  */
 exports.affecter = async (req, res) => {
-  const x = await trouver(req.params.numero);
+  const x = await trouverPourRegulation(req, req.params.numero);
   if (!x.estActive()) throw erreur(409, 'Cette urgence est terminée.');
   if (x.statutCourse && x.statutCourse !== 'Assignée') throw erreur(409, 'L’ambulance est déjà partie : la course ne peut plus être réaffectée.');
 
   const chauffeurId = String(req.body?.chauffeurId || '');
-  const chauffeur = mongoose.isValidObjectId(chauffeurId) ? await Chauffeur.findById(chauffeurId) : null;
+  // Chauffeur, ambulance et accompagnant : ceux de l'établissement de connexion seulement.
+  const flotte = u.filtreFlotte(req.etablissementId);
+  const chauffeur = mongoose.isValidObjectId(chauffeurId) ? await Chauffeur.findOne({ _id: chauffeurId, ...flotte }) : null;
   if (!chauffeur) throw erreur(400, 'Choisissez le chauffeur.');
   if (chauffeur.statut !== 'Actif') throw erreur(409, 'Ce chauffeur est suspendu.');
   const autreMission = await Urgence.exists({ chauffeurId: chauffeur._id, etat: { $in: u.ETATS_ACTIFS }, numero: { $ne: x.numero } });
   if (autreMission) throw erreur(409, `${nomChauffeur(chauffeur)} est occupé sur une autre urgence.`);
 
-  const ambulance = await Ambulance.findOne({ code: String(req.body?.ambulance || '') });
+  const ambulance = await Ambulance.findOne({ code: String(req.body?.ambulance || ''), ...flotte });
   if (!ambulance) throw erreur(400, 'Choisissez l’ambulance.');
 
   // Infirmier·ère ou sage-femme qui accompagne l'ambulance (facultatif).
@@ -323,6 +333,7 @@ exports.affecter = async (req, res) => {
   if (infirmierId) {
     const s = mongoose.isValidObjectId(infirmierId) ? await Soignant.findById(infirmierId) : null;
     if (!s || s.statut !== 'Actif') throw erreur(400, 'Infirmier·ère introuvable ou suspendu·e.');
+    if (!s.affectations.some((a) => a.etablissementId === req.etablissementId)) throw erreur(400, 'Choisissez un·e infirmier·ère de votre établissement.');
     if (!/^(Infirmier|Sage-femme)/.test(s.role)) throw erreur(400, 'Choisissez un·e infirmier·ère ou une sage-femme.');
     infirmier = { id: s.id, nom: `${s.prenom} ${s.nom}`.trim(), role: s.role, telephone: s.telephone, photo: s.photo ?? null };
   }
@@ -365,7 +376,7 @@ exports.affecter = async (req, res) => {
   });
   presence.emettreChauffeur(chauffeur.id, 'mission:nouvelle', await vueMission(x));
   await diffuser(x);
-  presence.emettrePersonnel('flotte:ambulance', ambulance.toJSON());
+  presence.emettreEtablissement(ambulance.etablissementId, 'flotte:ambulance', ambulance.toJSON());
   if (ancienneAmbulance) await diffuserAmbulance(ancienneAmbulance);
   notifications.notifierPatiente(x.patienteId, {
     titre: 'Une ambulance arrive',
@@ -376,7 +387,7 @@ exports.affecter = async (req, res) => {
 };
 
 exports.cloturer = async (req, res) => {
-  const x = await trouver(req.params.numero);
+  const x = await trouverPourRegulation(req, req.params.numero);
   if (!x.estActive()) throw erreur(409, 'Cette urgence est déjà terminée.');
   x.etat = 'résolue';
   x.clotureLe = new Date();
@@ -390,7 +401,7 @@ exports.cloturer = async (req, res) => {
 };
 
 exports.annuler = async (req, res) => {
-  const x = await trouver(req.params.numero);
+  const x = await trouverPourRegulation(req, req.params.numero);
   if (!x.estActive()) throw erreur(409, 'Cette urgence est déjà terminée.');
   const motif = texte(req.body?.motif, 500);
   if (!motif) throw erreur(400, 'Indiquez le motif de l’annulation.');

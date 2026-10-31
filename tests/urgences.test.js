@@ -71,14 +71,16 @@ before(async () => {
   };
   const medecin = await Soignant.create({ ...base, prenom: 'Marie', nom: 'REGULATRICE', role: 'Médecin', matricule: 'MED-9301', email: 'med@urgences.test' });
   const infirmiere = await Soignant.create({ ...base, prenom: 'Inès', nom: 'INF', role: 'Infirmier(ère)', matricule: 'INF-9301', email: 'inf@urgences.test' });
-  jetons.medecin = jwt.sign({ sub: medecin.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  jetons.medecin = jwt.sign({ sub: medecin.id, etablissement: 'ETAB' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  // Même médecin connecté à un autre établissement : ne voit ni la flotte ni les urgences de « ETAB ».
+  jetons.medecinAutre = jwt.sign({ sub: medecin.id, etablissement: 'AUTRE' }, process.env.JWT_SECRET, { expiresIn: '10m' });
   idMedecin = medecin.id;
   idInfirmiere = infirmiere.id;
-  jetons.infirmiere = jwt.sign({ sub: infirmiere.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  jetons.infirmiere = jwt.sign({ sub: infirmiere.id, etablissement: 'ETAB' }, process.env.JWT_SECRET, { expiresIn: '10m' });
   const auteur = { id: medecin.id, nom: 'Marie REGULATRICE', role: 'Médecin' };
   const patiente = await Patiente.create({
     numero: 'AC-PAT-993001', nom: 'Tshibanda', prenom: 'Marie', telephone: '+243 82 000 0000', espaceEnLigne: 'Activé',
-    adresse: { commune: 'Ngaliema', quartier: 'Binza Pigeon' }, creePar: auteur,
+    adresse: { commune: 'Ngaliema', quartier: 'Binza Pigeon' }, etablissementId: 'ETAB', creePar: auteur,
   });
   jetons.patiente = jwt.sign({ sub: patiente.id, typ: 'patiente' }, process.env.JWT_SECRET, { expiresIn: '10m' });
 
@@ -250,6 +252,54 @@ test('urgence : annulation par la patiente avant le départ, fausse alerte annul
   assert.equal(fausse.corps.etat, 'annulée');
   const historique = await appel('medecin', 'GET', '/urgences?etat=toutes');
   assert.equal(historique.corps.length, 3);
+});
+
+test('cloisonnement : un autre établissement ne voit ni la flotte, ni les urgences, ni leurs diffusions', async () => {
+  const autre = await connecter(jetons.medecinAutre);
+  const personnel = await connecter(jetons.medecin);
+  const recusAutre = [];
+  for (const e of ['urgence:nouvelle', 'urgence:maj', 'flotte:ambulance']) autre.on(e, (d) => recusAutre.push([e, d]));
+
+  // Flotte : listes vides, fiches introuvables, aucune modification ni envoi possible.
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/flotte/ambulances')).corps, []);
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/flotte/chauffeurs')).corps, []);
+  assert.equal((await appel('medecinAutre', 'GET', `/flotte/chauffeurs/${chauffeur.id}`)).status, 404);
+  assert.equal((await appel('medecinAutre', 'PATCH', '/flotte/ambulances/AMB-01', { statut: 'Maintenance' })).status, 404);
+  assert.equal((await appel('medecinAutre', 'PATCH', `/flotte/chauffeurs/${chauffeur.id}/statut`, { statut: 'Suspendu' })).status, 404);
+
+  // Ambulance ajoutée par l'autre établissement : la sienne seulement.
+  const sienne = await appel('medecinAutre', 'POST', '/flotte/ambulances', { immatriculation: 'AU-0001-KN', modele: 'Toyota HiAce', type: 'Type A — transport' });
+  assert.equal(sienne.status, 201, JSON.stringify(sienne.corps));
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/flotte/ambulances')).corps.map((a) => a.code), [sienne.corps.code]);
+  assert.ok(!(await appel('medecin', 'GET', '/flotte/ambulances')).corps.some((a) => a.code === sienne.corps.code));
+  assert.equal((await appel('medecin', 'PATCH', `/flotte/ambulances/${sienne.corps.code}`, { chauffeurId: chauffeur.id })).status, 404);
+
+  // Carte de l'application patiente : seulement les ambulances de son établissement (« ETAB »).
+  const Ambulance = require('../models/Ambulance');
+  await Ambulance.updateMany({ code: { $in: ['AMB-01', sienne.corps.code] } }, { position: { lat: -4.33, lng: 15.3, le: new Date() } });
+  const visibles = (await appel('patiente', 'GET', '/espace-patiente/ambulances')).corps.map((a) => a.code);
+  assert.ok(visibles.includes('AMB-01'), 'ambulance de son établissement visible');
+  assert.ok(!visibles.includes(sienne.corps.code), 'ambulance d’un autre établissement masquée');
+
+  // Urgence d'une patiente de « ETAB » : reçue par son personnel seulement.
+  const recue = attendre(personnel, 'urgence:nouvelle');
+  const alerte = await appel('patiente', 'POST', '/espace-patiente/urgences', { motif: 'douleurs', lat: -4.34, lng: 15.26 });
+  assert.equal(alerte.status, 201);
+  const numero = alerte.corps.id;
+  assert.equal((await recue).id, numero);
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/urgences?etat=toutes')).corps, []);
+  for (const [methode, chemin] of [['GET', `/urgences/${numero}`], ['POST', `/urgences/${numero}/prise-en-charge`], ['GET', `/urgences/${numero}/messages`]]) {
+    assert.equal((await appel('medecinAutre', methode, chemin)).status, 404, `${methode} ${chemin}`);
+  }
+  // Son ambulance ne peut pas être envoyée sur une urgence d'un autre établissement.
+  assert.equal((await appel('medecinAutre', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: sienne.corps.code })).status, 404);
+  // Ambulance de l'autre établissement refusée par la régulation de « ETAB ».
+  assert.equal((await appel('medecin', 'POST', `/urgences/${numero}/affectation`, { chauffeurId: chauffeur.id, ambulance: sienne.corps.code })).status, 400);
+  assert.equal((await appel('medecin', 'POST', `/urgences/${numero}/annulation`, { motif: 'Essai de cloisonnement' })).status, 200);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(recusAutre.map(([e, d]) => [e, e === 'flotte:ambulance' ? d.code : d.id]), [['flotte:ambulance', sienne.corps.code]], 'seule sa propre ambulance lui est diffusée');
+  autre.disconnect();
+  personnel.disconnect();
 });
 
 test('hors connexion : une saisie renvoyée avec le même X-Operation-Id n’est enregistrée qu’une fois', async () => {
