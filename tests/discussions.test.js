@@ -73,6 +73,7 @@ before(async () => {
     infirmiere: { prenom: 'Ines', nom: 'INFIRMIERE', role: 'Infirmier(ère)', matricule: 'INF-9201' },
     intrus: { prenom: 'Igor', nom: 'INTRUS', role: 'Médecin', matricule: 'MED-9202' },
     suspendu: { prenom: 'Sam', nom: 'SUSPENDU', role: 'Médecin', matricule: 'MED-9203', statut: 'Suspendu' },
+    ailleurs: { prenom: 'Alex', nom: 'AILLEURS', role: 'Médecin', matricule: 'MED-9204', affectations: [{ etablissementId: 'ET-AUTRE' }] },
   })) {
     comptes[cle] = await Soignant.create({ ...commun, ...d, email: `${cle}@essai.test` });
     jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role, etablissement: 'ET-TEST' }, process.env.JWT_SECRET, { expiresIn: '10m' });
@@ -205,13 +206,15 @@ test('patiente ↔ soignant : choix du soignant, messages en temps réel, prése
     x.once('connect_error', ko);
   }), 'espace non activé refusé');
 
-  // Annuaire et ouverture : n'importe quel soignant actif (pas les suspendus, sans matricule).
+  // Annuaire et ouverture : soignants actifs de son établissement (ni suspendus, ni d'ailleurs, sans matricule).
   const annuaire = await appel('patiente', 'GET', '/espace-patiente/soignants');
   assert.equal(annuaire.status, 200);
   assert.ok(annuaire.corps.some((x) => x.id === comptes.infirmiere.id));
   assert.ok(!annuaire.corps.some((x) => x.id === comptes.suspendu.id));
   assert.ok(!('matricule' in annuaire.corps[0]));
   assert.equal((await appel('patiente', 'POST', '/espace-patiente/discussions', { soignantId: comptes.suspendu.id })).status, 404);
+  assert.ok(!annuaire.corps.some((x) => x.id === comptes.ailleurs.id), 'soignant d’un autre établissement absent');
+  assert.equal((await appel('patiente', 'POST', '/espace-patiente/discussions', { soignantId: comptes.ailleurs.id })).status, 404);
   const o = await appel('patiente', 'POST', '/espace-patiente/discussions', { soignantId: comptes.medecin.id });
   assert.equal(o.status, 201, JSON.stringify(o.corps));
   const id = o.corps.id;

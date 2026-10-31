@@ -227,9 +227,16 @@ exports.annuaire = async (req, res) => {
 
 // --- Application mobile : la patiente écrit au soignant de son choix -------------------------
 
-/** Soignants actifs à qui la patiente peut écrire. */
+/**
+ * Soignants à qui la patiente peut écrire : actifs et affectés à son établissement (cloisonnement,
+ * voir controllers/patientes.js). Sans établissement, aucun.
+ */
+const filtreSoignantsDe = (patiente) => ({
+  statut: 'Actif', 'affectations.etablissementId': patiente.etablissementId || { $in: [] },
+});
+
 exports.annuairePatiente = async (req, res) => {
-  const soignants = await Soignant.find({ statut: 'Actif' }).select(`${CHAMPS_PROFIL} photoCle`).sort({ prenom: 1 });
+  const soignants = await Soignant.find(filtreSoignantsDe(req.patiente)).select(`${CHAMPS_PROFIL} photoCle`).sort({ prenom: 1 });
   res.json(await Promise.all(soignants.map(profilPourPatiente)));
 };
 
@@ -245,8 +252,8 @@ exports.listerPatiente = async (req, res) => {
 exports.ouvrirPatiente = async (req, res) => {
   const soignantId = String(req.body?.soignantId || '');
   if (!mongoose.isValidObjectId(soignantId)) throw erreur(400, 'Soignant invalide.');
-  const s = await Soignant.findById(soignantId).select(`${CHAMPS_PROFIL} photoCle`);
-  if (!s || s.statut !== 'Actif') throw erreur(404, 'Soignant introuvable ou suspendu.');
+  const s = await Soignant.findOne({ _id: soignantId, ...filtreSoignantsDe(req.patiente) }).select(`${CHAMPS_PROFIL} photoCle`);
+  if (!s) throw erreur(404, 'Soignant introuvable ou suspendu.');
   const p = req.patiente;
   const cle = Discussion.cleDe(s._id, p._id);
   let d = await Discussion.findOne({ cle });
