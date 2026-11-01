@@ -672,6 +672,16 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   assert.ok(prevPasse.corps.lignes.every((l) => l.n === 0));
   assert.equal((await appel('medecinA', 'GET', `/statistiques/preventions-mensuel?mois=${futur}`)).status, 400);
   assert.ok((await appel('medecinAutre', 'GET', '/statistiques/preventions-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
+
+  // MILD, micronutriments, mébendazole : même règle (première fois cochée « Oui » de la grossesse).
+  const mildAvant = (await appel('medecinA', 'GET', '/statistiques/prevention-mensuel')).corps;
+  assert.deepEqual(mildAvant.lignes.map((l) => l.code), ['mild', 'micronutriments', 'mebendazole']);
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui, micronutriments: oui, mebendazole: { reponse: false } }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui }, finaliser: true });
+  const mildApres = (await appel('medecinA', 'GET', '/statistiques/prevention-mensuel')).corps;
+  assert.deepEqual(mildApres.lignes.map((l, i) => l.n - mildAvant.lignes[i].n), [1, 1, 0], 'MILD recochée non recomptée');
+  assert.equal(mildApres.lignes.find((l) => l.code === 'mebendazole').repere, 'Au-delà de 16 SA');
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/prevention-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');

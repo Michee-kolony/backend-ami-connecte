@@ -571,32 +571,37 @@ exports.cpnMensuel = async (req, res) => {
   }))));
 };
 
-/** Mesures préventives suivies mois par mois : VAT 1 à 5 et SP (TPI) 1 à 3. */
-const PREVENTIONS_MENSUELLES = MESURES_PREVENTIVES.filter((m) => ['VAT', 'SP (TPI)'].includes(m.groupe));
-
 /**
- * VAT 1 à 5 et SP 1 à 3 d'un mois : femmes distinctes dont la dose a été cochée « Oui » pour la
- * première fois de la grossesse sur une consultation finalisée du mois (une dose recochée aux
- * visites suivantes n'est pas recomptée).
+ * Analyse mensuelle de mesures préventives de la fiche CPN : femmes distinctes dont la mesure a
+ * été cochée « Oui » pour la première fois de la grossesse sur une consultation finalisée du mois
+ * (une mesure recochée aux visites suivantes n'est pas recomptée).
  */
-exports.preventionsMensuel = async (req, res) => {
-  const fenetre = await fenetreMensuelle(req);
-  const champs = PREVENTIONS_MENSUELLES.map((m) => `mesuresPreventives.${m.code}.reponse`).join(' ');
-  const consultations = await Consultation.find({ patienteId: { $in: fenetre.ids }, statut: 'Finalisée' })
-    .select(`patienteId grossesseId date ${champs}`).sort({ date: 1 }).lean();
-  // Mois de la première consultation où chaque dose est cochée, par grossesse.
-  const premiere = new Map(PREVENTIONS_MENSUELLES.map((m) => [m.code, new Map()]));
-  for (const c of consultations) {
-    for (const { code } of PREVENTIONS_MENSUELLES) {
-      const doses = premiere.get(code);
-      const k = id(c.grossesseId);
-      if (c.mesuresPreventives?.[code]?.reponse === true && !doses.has(k)) {
-        doses.set(k, { patienteId: id(c.patienteId), mois: jourKinshasa(c.date).slice(0, 7) });
+function mesuresMensuelles(groupes) {
+  const mesures = MESURES_PREVENTIVES.filter((m) => groupes.includes(m.groupe));
+  const champs = mesures.map((m) => `mesuresPreventives.${m.code}.reponse`).join(' ');
+  return async (req, res) => {
+    const fenetre = await fenetreMensuelle(req);
+    const consultations = await Consultation.find({ patienteId: { $in: fenetre.ids }, statut: 'Finalisée' })
+      .select(`patienteId grossesseId date ${champs}`).sort({ date: 1 }).lean();
+    // Mois de la première consultation où chaque mesure est cochée, par grossesse.
+    const premiere = new Map(mesures.map((m) => [m.code, new Map()]));
+    for (const c of consultations) {
+      for (const { code } of mesures) {
+        const parGrossesse = premiere.get(code);
+        const k = id(c.grossesseId);
+        if (c.mesuresPreventives?.[code]?.reponse === true && !parGrossesse.has(k)) {
+          parGrossesse.set(k, { patienteId: id(c.patienteId), mois: jourKinshasa(c.date).slice(0, 7) });
+        }
       }
     }
-  }
-  res.json(reponseMensuelle(fenetre, PREVENTIONS_MENSUELLES.map(({ code, libelle, groupe, repere }) => ({
-    code, libelle, groupe, repere: repere ?? '',
-    compter: (cle) => new Set([...premiere.get(code).values()].filter((d) => d.mois === cle).map((d) => d.patienteId)).size,
-  }))));
-};
+    res.json(reponseMensuelle(fenetre, mesures.map(({ code, libelle, groupe, repere }) => ({
+      code, libelle, groupe, repere: repere ?? '',
+      compter: (cle) => new Set([...premiere.get(code).values()].filter((d) => d.mois === cle).map((d) => d.patienteId)).size,
+    }))));
+  };
+}
+
+/** VAT 1 à 5 et SP (TPI) 1 à 3 du mois. */
+exports.preventionsMensuel = mesuresMensuelles(['VAT', 'SP (TPI)']);
+/** MILD, micronutriments et mébendazole du mois. */
+exports.preventionMensuel = mesuresMensuelles(['Prévention']);
