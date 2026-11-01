@@ -675,11 +675,12 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
 
   // MILD, micronutriments, mébendazole : même règle (première fois cochée « Oui » de la grossesse).
   const mildAvant = (await appel('medecinA', 'GET', '/statistiques/prevention-mensuel')).corps;
-  assert.deepEqual(mildAvant.lignes.map((l) => l.code), ['mild', 'micronutriments', 'mebendazole']);
-  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui, micronutriments: oui, mebendazole: { reponse: false } }, finaliser: true });
-  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui }, finaliser: true });
+  assert.deepEqual(mildAvant.lignes.map((l) => l.code), ['mild', 'micronutriments', 'mebendazole', 'dcip']);
+  assert.equal(mildAvant.lignes.at(-1).groupe, 'PTME');
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui, micronutriments: oui, mebendazole: { reponse: false }, dcip: oui }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { mild: oui, dcip: oui }, finaliser: true });
   const mildApres = (await appel('medecinA', 'GET', '/statistiques/prevention-mensuel')).corps;
-  assert.deepEqual(mildApres.lignes.map((l, i) => l.n - mildAvant.lignes[i].n), [1, 1, 0], 'MILD recochée non recomptée');
+  assert.deepEqual(mildApres.lignes.map((l, i) => l.n - mildAvant.lignes[i].n), [1, 1, 0, 1], 'MILD et DCIP recochées non recomptées');
   assert.equal(mildApres.lignes.find((l) => l.code === 'mebendazole').repere, 'Au-delà de 16 SA');
   assert.ok((await appel('medecinAutre', 'GET', '/statistiques/prevention-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');

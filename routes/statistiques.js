@@ -16,7 +16,7 @@ router.get('/synthese', synthese.synthese);
 router.get('/cpn-mensuel', synthese.cpnMensuel);
 // VAT 1 à 5 et SP (TPI) 1 à 3 d'un mois : ?mois=AAAA-MM&province&aire.
 router.get('/preventions-mensuel', synthese.preventionsMensuel);
-// MILD, micronutriments et mébendazole d'un mois : ?mois=AAAA-MM&province&aire.
+// MILD, micronutriments, mébendazole et conseil DCIP (PTME) d'un mois : ?mois=AAAA-MM&province&aire.
 router.get('/prevention-mensuel', synthese.preventionMensuel);
 
 module.exports = router;

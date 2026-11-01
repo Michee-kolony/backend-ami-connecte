@@ -576,8 +576,8 @@ exports.cpnMensuel = async (req, res) => {
  * été cochée « Oui » pour la première fois de la grossesse sur une consultation finalisée du mois
  * (une mesure recochée aux visites suivantes n'est pas recomptée).
  */
-function mesuresMensuelles(groupes) {
-  const mesures = MESURES_PREVENTIVES.filter((m) => groupes.includes(m.groupe));
+function mesuresMensuelles(codes) {
+  const mesures = MESURES_PREVENTIVES.filter((m) => codes.includes(m.code));
   const champs = mesures.map((m) => `mesuresPreventives.${m.code}.reponse`).join(' ');
   return async (req, res) => {
     const fenetre = await fenetreMensuelle(req);
@@ -602,6 +602,6 @@ function mesuresMensuelles(groupes) {
 }
 
 /** VAT 1 à 5 et SP (TPI) 1 à 3 du mois. */
-exports.preventionsMensuel = mesuresMensuelles(['VAT', 'SP (TPI)']);
-/** MILD, micronutriments et mébendazole du mois. */
-exports.preventionMensuel = mesuresMensuelles(['Prévention']);
+exports.preventionsMensuel = mesuresMensuelles(['vat1', 'vat2', 'vat3', 'vat4', 'vat5', 'sp1', 'sp2', 'sp3']);
+/** MILD, micronutriments, mébendazole et conseil DCIP (PTME) du mois. */
+exports.preventionMensuel = mesuresMensuelles(['mild', 'micronutriments', 'mebendazole', 'dcip']);
