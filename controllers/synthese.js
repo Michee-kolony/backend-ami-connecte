@@ -71,6 +71,23 @@ function pourcentage(code, num, den, extra = {}) {
   return { code, ...CATALOGUE[code], valeur: taux(num, den), numerateur: num, denominateur: den, ...extra };
 }
 
+/** Rang de chaque CPN (1re, 2e, 3e…) dans sa grossesse, par ordre chronologique. */
+function rangsCpn(cpn) {
+  const parGrossesse = new Map();
+  for (const c of cpn) {
+    const k = id(c.grossesseId);
+    if (!parGrossesse.has(k)) parGrossesse.set(k, []);
+    parGrossesse.get(k).push(c);
+  }
+  const rang = new Map();
+  for (const liste of parGrossesse.values()) liste.sort((a, b) => a.date - b.date).forEach((c, i) => rang.set(c, i + 1));
+  return { rang, parGrossesse };
+}
+
+/** Femmes distinctes dont la CPN de rang `n` tombe dans le mois `mois` (AAAA-MM, Kinshasa). */
+const femmesCpnDuMois = (cpn, rang, n, mois) =>
+  new Set(cpn.filter((c) => rang.get(c) === n && jourKinshasa(c.date).slice(0, 7) === mois).map((c) => id(c.patienteId))).size;
+
 const mediane = (valeurs) => {
   if (!valeurs.length) return null;
   const v = [...valeurs].sort((x, y) => x - y);
@@ -176,16 +193,7 @@ exports.synthese = async (req, res) => {
   const cpnPeriode = cpn.filter((c) => dansPeriode(c.date));
   // Rang de chaque CPN dans sa grossesse (1re, 2e, 3e, 4e…), par ordre chronologique : CPN2 à CPN4
   // comptent les femmes dont la visite de ce rang a eu lieu pendant la période.
-  const rangCpn = new Map();
-  const cpnParGrossesse = new Map();
-  for (const c of cpn) {
-    const k = id(c.grossesseId);
-    if (!cpnParGrossesse.has(k)) cpnParGrossesse.set(k, []);
-    cpnParGrossesse.get(k).push(c);
-  }
-  for (const liste of cpnParGrossesse.values()) {
-    liste.sort((a, b) => a.date - b.date).forEach((c, i) => rangCpn.set(c, i + 1));
-  }
+  const { rang: rangCpn, parGrossesse: cpnParGrossesse } = rangsCpn(cpn);
   const femmesCpnRang = (n) => new Set(cpnPeriode.filter((c) => rangCpn.get(c) === n).map((c) => id(c.patienteId))).size;
   const cpnComplete = (c) => c.constantes?.poidsKg != null && c.constantes?.taSystolique != null && c.constantes?.taDiastolique != null && !!c.prochainRdv?.date;
   const references = cs.filter((c) => dansPeriode(c.date) && c.reference?.motifs?.length);
@@ -376,16 +384,6 @@ exports.synthese = async (req, res) => {
     ],
   };
 
-  // CPN1 à CPN4 par mois (6 derniers mois, le dernier est le mois en cours), indépendamment de la
-  // période choisie : femmes distinctes dont la visite de ce rang a eu lieu dans le mois.
-  const cpnParRang = {
-    mois: tendance.mois,
-    rangs: [1, 2, 3, 4].map((n) => ({
-      rang: `CPN${n}`,
-      valeurs: moisCles.map((m) => new Set(cpn.filter((c) => rangCpn.get(c) === n && moisDe(c.date) === m).map((c) => id(c.patienteId))).size),
-    })),
-  };
-
   // --- Comparaison par aire de santé (section 19, ligne 2) ---------------------------------
   const aireDe = (pid) => patienteDe.get(id(pid))?.adresse?.aireSante || 'Non renseignée';
   const parAire = new Map();
@@ -515,7 +513,6 @@ exports.synthese = async (req, res) => {
     references: referencesModule,
     alertesParType,
     tendance,
-    cpnParRang,
     comparaisonAires,
     continuum,
     fluxReco,
@@ -523,5 +520,42 @@ exports.synthese = async (req, res) => {
     aTraiter: { total: aTraiter.length, parType, lignes: aTraiter.slice(0, 20) },
     qualite,
     donneesManquantes: DONNEES_MANQUANTES,
+  });
+};
+
+/**
+ * CPN1 à CPN4 d'un mois donné (?mois=AAAA-MM, mois en cours par défaut) pour l'établissement de
+ * connexion : femmes distinctes ayant fait la visite de ce rang dans le mois, mois précédent et
+ * historique des 6 mois se terminant par le mois choisi. Filtres facultatifs : ?province&aire.
+ */
+exports.cpnMensuel = async (req, res) => {
+  const moisCourant = jourKinshasa(new Date()).slice(0, 7);
+  const mois = req.query.mois ? String(req.query.mois) : moisCourant;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mois)) throw erreur(400, 'Mois invalide (format attendu : AAAA-MM).');
+  if (mois > moisCourant) throw erreur(400, 'Le mois demandé n’est pas encore commencé.');
+  const province = req.query.province ? texte(req.query.province, 80) : '';
+  const aire = req.query.aire ? texte(req.query.aire, 120) : '';
+
+  const filtre = { ...filtrePatientes(req) };
+  if (province) filtre['adresse.province'] = province;
+  if (aire) filtre['adresse.aireSante'] = aire;
+  const ids = await Patiente.distinct('_id', filtre);
+  // Toutes les CPN de la grossesse comptent pour le rang, même celles antérieures à la fenêtre.
+  const cpn = await Consultation.find({ patienteId: { $in: ids }, statut: 'Finalisée', type: { $in: TYPES_CPN } })
+    .select('patienteId grossesseId date').lean();
+  const { rang } = rangsCpn(cpn);
+
+  const [a, m] = mois.split('-').map(Number);
+  const cles = Array.from({ length: 6 }, (_, i) => new Date(Date.UTC(a, m - 6 + i, 1)).toISOString().slice(0, 7));
+  const rangs = [1, 2, 3, 4].map((n) => {
+    const valeurs = cles.map((cle) => femmesCpnDuMois(cpn, rang, n, cle));
+    return { rang: `CPN${n}`, n: valeurs[5], precedent: valeurs[4], valeurs };
+  });
+
+  res.json({
+    mois,
+    moisCourant,
+    historique: { cles, mois: cles.map((cle) => `${MOIS_COURTS[+cle.slice(5) - 1]} ${cle.slice(2, 4)}`) },
+    rangs,
   });
 };

@@ -638,8 +638,23 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   for (let i = 0; i < 2; i++) await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Suivi prénatal', finaliser: true });
   const apres = valeursCpn((await appel('medecinA', 'GET', '/statistiques/synthese?periode=mois')).corps);
   assert.deepEqual(apres.map((v, i) => v - avant[i]), [1, 1, 1, 0], 'trois CPN : comptée en CPN1, CPN2 et CPN3');
-  const ceMois = (synthese) => synthese.cpnParRang.rangs.map((r) => r.valeurs.at(-1));
-  assert.deepEqual(ceMois((await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee')).corps), apres, 'mois en cours, quel que soit le filtre de période');
+  // Route mensuelle : mois en cours par défaut, mois passés consultables, mois futur refusé.
+  const mensuel = await appel('medecinA', 'GET', '/statistiques/cpn-mensuel');
+  assert.equal(mensuel.status, 200, JSON.stringify(mensuel.corps));
+  assert.equal(mensuel.corps.mois, mensuel.corps.moisCourant);
+  assert.deepEqual(mensuel.corps.rangs.map((r) => r.n), apres, 'mêmes chiffres que la synthèse du mois');
+  assert.equal(mensuel.corps.historique.cles.at(-1), mensuel.corps.mois);
+  assert.equal(mensuel.corps.historique.cles.length, 6);
+  const [an, mo] = mensuel.corps.mois.split('-').map(Number);
+  const moisPasse = new Date(Date.UTC(an, mo - 3, 1)).toISOString().slice(0, 7);
+  const passe = await appel('medecinA', 'GET', `/statistiques/cpn-mensuel?mois=${moisPasse}`);
+  assert.equal(passe.status, 200);
+  assert.equal(passe.corps.mois, moisPasse);
+  assert.deepEqual(passe.corps.rangs.map((r) => r.n), [0, 0, 0, 0], 'aucune CPN d’essai il y a deux mois');
+  const futur = new Date(Date.UTC(an, mo, 1)).toISOString().slice(0, 7);
+  assert.equal((await appel('medecinA', 'GET', `/statistiques/cpn-mensuel?mois=${futur}`)).status, 400);
+  assert.equal((await appel('medecinA', 'GET', '/statistiques/cpn-mensuel?mois=2026-13')).status, 400);
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/statistiques/cpn-mensuel')).corps.rangs.map((r) => r.n), autreAvant, 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');
