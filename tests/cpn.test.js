@@ -638,6 +638,8 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   for (let i = 0; i < 2; i++) await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Suivi prénatal', finaliser: true });
   const apres = valeursCpn((await appel('medecinA', 'GET', '/statistiques/synthese?periode=mois')).corps);
   assert.deepEqual(apres.map((v, i) => v - avant[i]), [1, 1, 1, 0], 'trois CPN : comptée en CPN1, CPN2 et CPN3');
+  const ceMois = (synthese) => synthese.cpnParRang.rangs.map((r) => r.valeurs.at(-1));
+  assert.deepEqual(ceMois((await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee')).corps), apres, 'mois en cours, quel que soit le filtre de période');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');

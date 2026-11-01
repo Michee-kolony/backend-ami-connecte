@@ -376,6 +376,16 @@ exports.synthese = async (req, res) => {
     ],
   };
 
+  // CPN1 à CPN4 par mois (6 derniers mois, le dernier est le mois en cours), indépendamment de la
+  // période choisie : femmes distinctes dont la visite de ce rang a eu lieu dans le mois.
+  const cpnParRang = {
+    mois: tendance.mois,
+    rangs: [1, 2, 3, 4].map((n) => ({
+      rang: `CPN${n}`,
+      valeurs: moisCles.map((m) => new Set(cpn.filter((c) => rangCpn.get(c) === n && moisDe(c.date) === m).map((c) => id(c.patienteId))).size),
+    })),
+  };
+
   // --- Comparaison par aire de santé (section 19, ligne 2) ---------------------------------
   const aireDe = (pid) => patienteDe.get(id(pid))?.adresse?.aireSante || 'Non renseignée';
   const parAire = new Map();
@@ -505,6 +515,7 @@ exports.synthese = async (req, res) => {
     references: referencesModule,
     alertesParType,
     tendance,
+    cpnParRang,
     comparaisonAires,
     continuum,
     fluxReco,
