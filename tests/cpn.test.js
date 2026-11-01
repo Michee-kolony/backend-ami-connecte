@@ -305,6 +305,14 @@ test('cloisonnement : un soignant d’un autre établissement n’accède ni au 
     const agenda = await appel(qui, 'GET', '/rendez-vous');
     assert.ok(!agenda.corps.some((r) => r.patiente?.numero === dossier.numero), `${qui} : rendez-vous absents de l'agenda`);
   }
+  // Tableau de bord : chiffres de l'établissement de connexion, mais carte des provinces globale.
+  const [ici, ailleurs] = await Promise.all([appel('medecinA', 'GET', '/statistiques/patientes'), appel('medecinAutre', 'GET', '/statistiques/patientes')]);
+  assert.ok(ici.corps.totaux.patientes > 0);
+  assert.equal(ailleurs.corps.totaux.patientes, 0, 'aucune patiente de l’autre établissement comptée');
+  assert.equal(ailleurs.corps.recentes.length, 0);
+  assert.deepEqual(ailleurs.corps.provinces, ici.corps.provinces, 'carte des provinces identique pour tout le réseau');
+  assert.ok(ailleurs.corps.provinces.find((p) => p.province === 'Kinshasa').patientes > 0);
+
   // Refus journalisé, avec l'établissement de connexion du soignant.
   const refus = await JournalAudit.findOne({ action: 'acces.refuse', patienteId: dossier.id, 'details.etablissementId': etablissements.autre.id });
   assert.ok(refus, 'refus journalisé');
@@ -618,6 +626,19 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   assert.equal(s.continuum[0].etape, 'Grossesses enregistrées');
   assert.ok(s.continuum.every((e, i) => i === 0 || e.n <= s.continuum[i - 1].n), 'entonnoir décroissant');
   assert.equal(s.tendance.mois.length, 6);
+
+  // CPN1 à CPN4 : femmes dont la visite de ce rang (dans leur grossesse) tombe dans la période.
+  const rangs = ['CPN_CPN1', 'CPN_CPN2', 'CPN_CPN3', 'CPN_CPN4'];
+  const valeursCpn = (synthese) => rangs.map((code) => synthese.modules.cpn.find((x) => x.code === code).valeur);
+  const avant = valeursCpn(s);
+  const autreAvant = valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps);
+  const femme = await creer('medecinA', { patiente: { nom: 'Rangs', prenom: 'Cpn', ageDeclare: 27, adresse: { province: 'Kinshasa' } } });
+  const gid = (await appel('medecinA', 'GET', `/patientes/${femme.corps.numero}`)).corps.grossesses[0].id;
+  await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Première consultation prénatale', finaliser: true });
+  for (let i = 0; i < 2; i++) await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Suivi prénatal', finaliser: true });
+  const apres = valeursCpn((await appel('medecinA', 'GET', '/statistiques/synthese?periode=mois')).corps);
+  assert.deepEqual(apres.map((v, i) => v - avant[i]), [1, 1, 1, 0], 'trois CPN : comptée en CPN1, CPN2 et CPN3');
+  assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');
   assert.equal(kwilu.status, 200);

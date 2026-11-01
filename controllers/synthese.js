@@ -174,11 +174,27 @@ exports.synthese = async (req, res) => {
   const enCours = gr.filter((g) => g.statut === 'En cours');
   const abandons = enCours.filter((g) => (derniereCpn.get(id(g._id)) ?? g.createdAt) < seuilAbandon && !rdvAVenir.has(id(g.patienteId)));
   const cpnPeriode = cpn.filter((c) => dansPeriode(c.date));
+  // Rang de chaque CPN dans sa grossesse (1re, 2e, 3e, 4e…), par ordre chronologique : CPN2 à CPN4
+  // comptent les femmes dont la visite de ce rang a eu lieu pendant la période.
+  const rangCpn = new Map();
+  const cpnParGrossesse = new Map();
+  for (const c of cpn) {
+    const k = id(c.grossesseId);
+    if (!cpnParGrossesse.has(k)) cpnParGrossesse.set(k, []);
+    cpnParGrossesse.get(k).push(c);
+  }
+  for (const liste of cpnParGrossesse.values()) {
+    liste.sort((a, b) => a.date - b.date).forEach((c, i) => rangCpn.set(c, i + 1));
+  }
+  const femmesCpnRang = (n) => new Set(cpnPeriode.filter((c) => rangCpn.get(c) === n).map((c) => id(c.patienteId))).size;
   const cpnComplete = (c) => c.constantes?.poidsKg != null && c.constantes?.taSystolique != null && c.constantes?.taDiastolique != null && !!c.prochainRdv?.date;
   const references = cs.filter((c) => dansPeriode(c.date) && c.reference?.motifs?.length);
   const cpnModule = [
     nombre('CPN_INSCRITES', new Set(gr.filter((g) => dansPeriode(g.createdAt)).map((g) => id(g.patienteId))).size, { lien: '/admin/patientes' }),
     nombre('CPN_CPN1', new Set(cpnPeriode.filter((c) => c.type === 'Première consultation prénatale').map((c) => id(c.patienteId))).size, { lien: '/admin/patientes' }),
+    nombre('CPN_CPN2', femmesCpnRang(2), { lien: '/admin/patientes' }),
+    nombre('CPN_CPN3', femmesCpnRang(3), { lien: '/admin/patientes' }),
+    nombre('CPN_CPN4', femmesCpnRang(4), { lien: '/admin/patientes' }),
     nombre('CPN_RDV_PREVUS', rdvPeriode.length, { lien: '/admin/rendez-vous' }),
     nombre('CPN_RDV_HONORES', effectues.length, { lien: '/admin/rendez-vous' }),
     pourcentage('CPN_HONORABILITE', rdvEchus.filter((r) => r.statut === 'Effectué').length, rdvEchus.length, { lien: '/admin/rendez-vous' }),
@@ -377,8 +393,6 @@ exports.synthese = async (req, res) => {
 
   // --- Entonnoir du continuum mère-enfant (cohorte : grossesses enregistrées sur 12 mois) --
   const cohorteGr = gr.filter((g) => g.createdAt >= il12Mois);
-  const cpnParGrossesse = new Map();
-  for (const c of cpn) cpnParGrossesse.set(id(c.grossesseId), [...(cpnParGrossesse.get(id(c.grossesseId)) ?? []), c]);
   const accParGrossesse = new Map(acc.filter((a) => a.accouchement?.heure).map((a) => [id(a.grossesseId), a]));
   const nnParGrossesse = new Map();
   for (const e of enfants) {

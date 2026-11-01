@@ -96,18 +96,26 @@ exports.patientes = async (req, res) => {
   });
 
   // --- Provinces (carte de la RDC) ----------------------------------------------------
-  const provinceDe = new Map(patientes.map((p) => [String(p._id), p.adresse?.province || '']));
+  // Vue globale du système, tous établissements confondus : effectifs seulement, aucune identité.
+  const [parProvince, enCoursParProvince] = await Promise.all([
+    Patiente.aggregate([{ $group: { _id: '$adresse.province', n: { $sum: 1 } } }]),
+    Grossesse.aggregate([
+      { $match: { statut: 'En cours' } },
+      { $lookup: { from: Patiente.collection.name, localField: 'patienteId', foreignField: '_id', as: 'p' } },
+      { $group: { _id: { $arrayElemAt: ['$p.adresse.province', 0] }, n: { $sum: 1 } } },
+    ]),
+  ]);
   const provinces = PROVINCES_RDC.map((province) => ({ province, patientes: 0, grossessesEnCours: 0 }));
   const parNom = new Map(provinces.map((p) => [p.province, p]));
   let sansProvince = 0;
-  for (const p of patientes) {
-    const ligne = parNom.get(p.adresse?.province);
-    if (ligne) ligne.patientes++;
-    else sansProvince++;
+  for (const { _id, n } of parProvince) {
+    const ligne = parNom.get(_id);
+    if (ligne) ligne.patientes += n;
+    else sansProvince += n;
   }
-  for (const g of enCours) {
-    const ligne = parNom.get(provinceDe.get(String(g.patienteId)));
-    if (ligne) ligne.grossessesEnCours++;
+  for (const { _id, n } of enCoursParProvince) {
+    const ligne = parNom.get(_id);
+    if (ligne) ligne.grossessesEnCours += n;
   }
 
   // --- Qualité des données ------------------------------------------------------------
