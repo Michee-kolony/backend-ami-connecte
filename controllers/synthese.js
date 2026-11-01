@@ -605,3 +605,27 @@ function mesuresMensuelles(codes) {
 exports.preventionsMensuel = mesuresMensuelles(['vat1', 'vat2', 'vat3', 'vat4', 'vat5', 'sp1', 'sp2', 'sp3']);
 /** MILD, micronutriments, mébendazole et conseil DCIP (PTME) du mois. */
 exports.preventionMensuel = mesuresMensuelles(['mild', 'micronutriments', 'mebendazole', 'dcip']);
+
+/** Résultat de TDR noté positif (texte libre : « Positif », « + », « pos »…), jamais s'il dit négatif. */
+const tdrPositif = (resultat) => /posit|^\s*pos\b|\+/i.test(resultat) && !/n[ée]gat|^\s*n[ée]g\b/i.test(resultat);
+
+/**
+ * TDR palu d'un mois : femmes distinctes avec un résultat de TDR palu noté sur une consultation
+ * finalisée du mois (un TDR peut être refait à chaque visite : chaque mois compte), et parmi
+ * elles celles dont un résultat est noté positif.
+ */
+exports.tdrPaluMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const debut = instantJour(`${fenetre.cles[0]}-01`);
+  const consultations = await Consultation.find({
+    patienteId: { $in: fenetre.ids }, statut: 'Finalisée', date: { $gte: debut }, 'laboratoire.tdrPalu': { $nin: [null, ''] },
+  }).select('patienteId date laboratoire.tdrPalu').lean();
+  const tests = consultations.map((c) => ({
+    patienteId: id(c.patienteId), mois: jourKinshasa(c.date).slice(0, 7), positif: tdrPositif(c.laboratoire.tdrPalu),
+  }));
+  const femmes = (cle, garder) => new Set(tests.filter((t) => t.mois === cle && garder(t)).map((t) => t.patienteId)).size;
+  res.json(reponseMensuelle(fenetre, [
+    { code: 'tdrPalu', libelle: 'TDR palu réalisé', groupe: 'Laboratoire', repere: '', compter: (cle) => femmes(cle, () => true) },
+    { code: 'tdrPaluPositif', libelle: 'TDR palu positif', groupe: 'Laboratoire', repere: '', compter: (cle) => femmes(cle, (t) => t.positif) },
+  ]));
+};

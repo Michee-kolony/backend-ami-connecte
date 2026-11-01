@@ -18,5 +18,7 @@ router.get('/cpn-mensuel', synthese.cpnMensuel);
 router.get('/preventions-mensuel', synthese.preventionsMensuel);
 // MILD, micronutriments, mébendazole et conseil DCIP (PTME) d'un mois : ?mois=AAAA-MM&province&aire.
 router.get('/prevention-mensuel', synthese.preventionMensuel);
+// TDR palu d'un mois (réalisés, positifs) : ?mois=AAAA-MM&province&aire.
+router.get('/tdr-palu-mensuel', synthese.tdrPaluMensuel);
 
 module.exports = router;

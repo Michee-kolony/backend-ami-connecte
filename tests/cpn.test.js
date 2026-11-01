@@ -683,6 +683,17 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   assert.deepEqual(mildApres.lignes.map((l, i) => l.n - mildAvant.lignes[i].n), [1, 1, 0, 1], 'MILD et DCIP recochées non recomptées');
   assert.equal(mildApres.lignes.find((l) => l.code === 'mebendazole').repere, 'Au-delà de 16 SA');
   assert.ok((await appel('medecinAutre', 'GET', '/statistiques/prevention-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
+
+  // TDR palu : femmes avec un résultat noté dans le mois, et celles dont un résultat est positif.
+  const tdrAvant = (await appel('medecinA', 'GET', '/statistiques/tdr-palu-mensuel')).corps;
+  assert.deepEqual(tdrAvant.lignes.map((l) => l.code), ['tdrPalu', 'tdrPaluPositif']);
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', laboratoire: { tdrPalu: 'Négatif' }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Consultation non programmée', laboratoire: { tdrPalu: 'Positif (+)' }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Suivi prénatal', laboratoire: { tdrPalu: 'neg' }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gid}/consultations`, { type: 'Suivi prénatal', laboratoire: { hb: '11' }, finaliser: true });
+  const tdrApres = (await appel('medecinA', 'GET', '/statistiques/tdr-palu-mensuel')).corps;
+  assert.deepEqual(tdrApres.lignes.map((l, i) => l.n - tdrAvant.lignes[i].n), [2, 1], 'deux femmes testées (une fois chacune), une positive');
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/tdr-palu-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');
