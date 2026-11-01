@@ -1,6 +1,8 @@
 // Présence en temps réel (socket.io) : chaque page de l'espace administrateur ouverte garde
-// une connexion. Un soignant est en ligne tant qu'il lui reste au moins une connexion ;
-// la liste est diffusée à tout le personnel à chaque arrivée et à chaque départ.
+// une connexion. Un soignant est en ligne tant qu'il lui reste au moins une connexion.
+// À chaque arrivée et à chaque départ, la liste détaillée (« presence » : noms, photos) n'est
+// envoyée qu'au personnel connecté au même établissement ; tout le personnel reçoit seulement les
+// identifiants des soignants en ligne (« presence:ids », pastilles des discussions).
 // L'application mobile des patientes se connecte aussi : le personnel reçoit les identifiants des
 // patientes en ligne (« presence:patientes »), les patientes ceux des soignants en ligne
 // (« presence:soignants ») — des identifiants seulement, les noms viennent de l'API.
@@ -16,8 +18,13 @@ const suiviAmbulances = require('./suiviAmbulances');
 
 const SALLE = 'personnel';
 const SALLE_PATIENTES = 'patientes';
+/** Personnel connecté sans établissement : liste détaillée limitée à ce groupe. */
+const SALLE_SANS_ETABLISSEMENT = 'personnel:sans-etablissement';
 
-/** id du soignant → { infos, sockets } (plusieurs onglets ou appareils possibles). */
+/**
+ * id du soignant → { profil, connexions } ; connexions : socket → établissement de connexion
+ * (plusieurs onglets ou appareils possibles, éventuellement dans des établissements différents).
+ */
 const connectes = new Map();
 /** id de la patiente → ses connexions (téléphone, navigateur…). */
 const patientesConnectees = new Map();
@@ -25,8 +32,24 @@ const patientesConnectees = new Map();
 const chauffeursConnectes = new Map();
 let io = null;
 
-function diffuser() {
-  io?.to(SALLE).emit('presence', [...connectes.values()].map((c) => c.infos));
+const salleEtablissement = (etablissementId) => (etablissementId ? `etablissement:${etablissementId}` : SALLE_SANS_ETABLISSEMENT);
+
+/** Soignants ayant au moins une connexion ouverte dans l'établissement (null : sans établissement). */
+function enLigneDans(etablissementId) {
+  const liste = [];
+  for (const { profil, connexions } of connectes.values()) {
+    const ici = [...connexions.values()].filter((x) => x.etablissementId === etablissementId);
+    if (!ici.length) continue;
+    const connecteDepuis = new Date(Math.min(...ici.map((x) => x.connecteDepuis)));
+    liste.push({ ...profil, etablissement: ici[0].etablissement, etablissementId, connecteDepuis });
+  }
+  return liste;
+}
+
+/** Listes à jour pour les établissements concernés ; identifiants à tout le personnel et aux patientes. */
+function diffuser(etablissementIds) {
+  for (const e of new Set(etablissementIds)) io?.to(salleEtablissement(e)).emit('presence', enLigneDans(e));
+  io?.to(SALLE).emit('presence:ids', [...connectes.keys()]);
   io?.to(SALLE_PATIENTES).emit('presence:soignants', [...connectes.keys()]);
 }
 
@@ -38,13 +61,14 @@ function diffuserChauffeurs() {
   io?.to(SALLE).emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
 }
 
-async function infosDe(soignant, etablissementId, connecteDepuis = new Date()) {
+const profilDe = (soignant) => ({
+  id: soignant.id, prenom: soignant.prenom, nom: soignant.nom, postnom: soignant.postnom,
+  role: soignant.role, matricule: soignant.matricule, photo: soignant.photo ?? null, sexe: soignant.sexe,
+});
+
+async function nomEtablissement(etablissementId) {
   const [etablissement] = etablissementId ? await Etablissement.actifsParIds([etablissementId]) : [];
-  return {
-    id: soignant.id, prenom: soignant.prenom, nom: soignant.nom, postnom: soignant.postnom,
-    role: soignant.role, matricule: soignant.matricule, photo: soignant.photo ?? null, sexe: soignant.sexe,
-    etablissement: etablissement?.nom ?? null, etablissementId: etablissementId ?? null, connecteDepuis,
-  };
+  return etablissement?.nom ?? null;
 }
 
 function initialiser(serveur) {
@@ -79,27 +103,26 @@ function initialiser(serveur) {
   io.on('connection', async (socket) => {
     if (socket.data.patienteId) return connecterPatiente(socket);
     if (socket.data.chauffeurId) return connecterChauffeur(socket);
-    const { soignant, etablissementId } = socket.data;
+    const { soignant } = socket.data;
+    const etablissementId = socket.data.etablissementId ?? null;
     const id = soignant.id;
 
     socket.on('discussion:ecrit', (donnees) => relayerEcriture(socket, id, donnees));
 
     socket.on('disconnect', () => {
       const c = connectes.get(id);
-      if (!c?.sockets.delete(socket.id)) return;
-      if (!c.sockets.size) {
-        connectes.delete(id);
-        diffuser();
-      }
+      if (!c?.connexions.delete(socket.id)) return;
+      if (!c.connexions.size) connectes.delete(id);
+      diffuser([etablissementId]);
     });
 
-    const infos = await infosDe(soignant, etablissementId);
+    const etablissement = await nomEtablissement(etablissementId);
     if (!socket.connected) return; // parti pendant la lecture de l'établissement
-    socket.join([SALLE, `soignant:${id}`, ...(etablissementId ? [`etablissement:${etablissementId}`] : [])]);
-    const c = connectes.get(id) ?? { infos, sockets: new Set() };
-    c.sockets.add(socket.id);
+    socket.join([SALLE, `soignant:${id}`, salleEtablissement(etablissementId)]);
+    const c = connectes.get(id) ?? { profil: profilDe(soignant), connexions: new Map() };
+    c.connexions.set(socket.id, { etablissementId, etablissement, connecteDepuis: new Date() });
     connectes.set(id, c);
-    diffuser();
+    diffuser([etablissementId]);
     socket.emit('presence:patientes', [...patientesConnectees.keys()]);
     socket.emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
   });
@@ -203,8 +226,8 @@ function expulser(id) {
 async function actualiser(soignant) {
   const c = connectes.get(soignant.id);
   if (!c) return;
-  c.infos = await infosDe(soignant, c.infos.etablissementId, c.infos.connecteDepuis);
-  diffuser();
+  c.profil = profilDe(soignant);
+  diffuser([...c.connexions.values()].map((x) => x.etablissementId));
 }
 
 module.exports = {

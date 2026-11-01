@@ -268,3 +268,27 @@ test('patiente ↔ soignant : choix du soignant, messages en temps réel, prése
   const apres = await attendre(med.recus, 'presence:patientes');
   assert.ok(!apres.includes(patiente.id));
 });
+
+test('tableau de bord : liste « en ligne » limitée à l’établissement de connexion, identifiants pour tous', async () => {
+  const jwt = require('jsonwebtoken');
+  jetons.ailleursConnecte = jwt.sign({ sub: comptes.ailleurs.id, role: 'Médecin', etablissement: 'ET-AUTRE' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  const ici = await connecter('medecin');
+  const autre = await connecter('ailleursConnecte');
+  const derniere = (recus, evenement) => recus.filter((e) => e.evenement === evenement).at(-1)?.donnees;
+  await new Promise((r) => setTimeout(r, 200));
+
+  const listeIci = derniere(ici.recus, 'presence');
+  assert.ok(listeIci.some((s) => s.id === comptes.medecin.id));
+  assert.ok(!listeIci.some((s) => s.id === comptes.ailleurs.id), 'médecin d’un autre établissement absent de la liste');
+  assert.ok(listeIci.every((s) => s.etablissementId === 'ET-TEST'));
+  assert.deepEqual(derniere(autre.recus, 'presence').map((s) => s.id), [comptes.ailleurs.id], 'seul dans son établissement');
+  // Pastilles « en ligne » des discussions : identifiants de tout le personnel connecté.
+  assert.ok(derniere(ici.recus, 'presence:ids').includes(comptes.ailleurs.id));
+
+  // Départ : la liste de l'autre établissement est mise à jour, sans toucher celle-ci.
+  const avant = ici.recus.filter((e) => e.evenement === 'presence').length;
+  autre.s.close();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(ici.recus.filter((e) => e.evenement === 'presence').length, avant, 'aucune liste renvoyée à un autre établissement');
+  assert.ok(!derniere(ici.recus, 'presence:ids').includes(comptes.ailleurs.id));
+});
