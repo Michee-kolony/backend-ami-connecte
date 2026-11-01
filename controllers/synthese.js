@@ -18,6 +18,7 @@ const Urgence = require('../models/Urgence');
 const Reco = require('../models/Reco');
 const { ROLES_MATERNITE } = require('../models/Soignant');
 const { jourKinshasa } = require('../config/vaccination');
+const { MESURES_PREVENTIVES } = require('../config/cpn');
 const { ALERTES, MOTIF_RECO } = require('../config/relance');
 const { MOTIFS: MOTIFS_URGENCE, ETATS_ACTIFS: URGENCES_ACTIVES } = require('../config/urgences');
 const { VERSION_REGLES, PARAMETRES, PERIODES, CATALOGUE, DONNEES_MANQUANTES } = require('../config/indicateurs');
@@ -524,38 +525,78 @@ exports.synthese = async (req, res) => {
 };
 
 /**
- * CPN1 à CPN4 d'un mois donné (?mois=AAAA-MM, mois en cours par défaut) pour l'établissement de
- * connexion : femmes distinctes ayant fait la visite de ce rang dans le mois, mois précédent et
- * historique des 6 mois se terminant par le mois choisi. Filtres facultatifs : ?province&aire.
+ * Fenêtre d'une analyse mensuelle (?mois=AAAA-MM, mois en cours par défaut ; ?province&aire) :
+ * patientes de l'établissement de connexion retenues et les 6 mois se terminant par le mois choisi.
  */
-exports.cpnMensuel = async (req, res) => {
+async function fenetreMensuelle(req) {
   const moisCourant = jourKinshasa(new Date()).slice(0, 7);
   const mois = req.query.mois ? String(req.query.mois) : moisCourant;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mois)) throw erreur(400, 'Mois invalide (format attendu : AAAA-MM).');
   if (mois > moisCourant) throw erreur(400, 'Le mois demandé n’est pas encore commencé.');
   const province = req.query.province ? texte(req.query.province, 80) : '';
   const aire = req.query.aire ? texte(req.query.aire, 120) : '';
-
   const filtre = { ...filtrePatientes(req) };
   if (province) filtre['adresse.province'] = province;
   if (aire) filtre['adresse.aireSante'] = aire;
-  const ids = await Patiente.distinct('_id', filtre);
-  // Toutes les CPN de la grossesse comptent pour le rang, même celles antérieures à la fenêtre.
-  const cpn = await Consultation.find({ patienteId: { $in: ids }, statut: 'Finalisée', type: { $in: TYPES_CPN } })
-    .select('patienteId grossesseId date').lean();
-  const { rang } = rangsCpn(cpn);
-
   const [a, m] = mois.split('-').map(Number);
   const cles = Array.from({ length: 6 }, (_, i) => new Date(Date.UTC(a, m - 6 + i, 1)).toISOString().slice(0, 7));
-  const rangs = [1, 2, 3, 4].map((n) => {
-    const valeurs = cles.map((cle) => femmesCpnDuMois(cpn, rang, n, cle));
-    return { rang: `CPN${n}`, n: valeurs[5], precedent: valeurs[4], valeurs };
-  });
+  return { mois, moisCourant, cles, ids: await Patiente.distinct('_id', filtre) };
+}
 
-  res.json({
+/** Réponse d'une analyse mensuelle : `compter(cle)` donne le nombre de femmes du mois `cle`. */
+function reponseMensuelle({ mois, moisCourant, cles }, lignes) {
+  return {
     mois,
     moisCourant,
     historique: { cles, mois: cles.map((cle) => `${MOIS_COURTS[+cle.slice(5) - 1]} ${cle.slice(2, 4)}`) },
-    rangs,
-  });
+    lignes: lignes.map(({ compter, ...ligne }) => {
+      const valeurs = cles.map(compter);
+      return { ...ligne, n: valeurs[5], precedent: valeurs[4], valeurs };
+    }),
+  };
+}
+
+/**
+ * CPN1 à CPN4 d'un mois : femmes distinctes ayant fait la visite de ce rang dans le mois,
+ * mois précédent et historique de 6 mois.
+ */
+exports.cpnMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  // Toutes les CPN de la grossesse comptent pour le rang, même celles antérieures à la fenêtre.
+  const cpn = await Consultation.find({ patienteId: { $in: fenetre.ids }, statut: 'Finalisée', type: { $in: TYPES_CPN } })
+    .select('patienteId grossesseId date').lean();
+  const { rang } = rangsCpn(cpn);
+  res.json(reponseMensuelle(fenetre, [1, 2, 3, 4].map((n) => ({
+    code: `CPN${n}`, libelle: `CPN${n}`, compter: (cle) => femmesCpnDuMois(cpn, rang, n, cle),
+  }))));
+};
+
+/** Mesures préventives suivies mois par mois : VAT 1 à 5 et SP (TPI) 1 à 3. */
+const PREVENTIONS_MENSUELLES = MESURES_PREVENTIVES.filter((m) => ['VAT', 'SP (TPI)'].includes(m.groupe));
+
+/**
+ * VAT 1 à 5 et SP 1 à 3 d'un mois : femmes distinctes dont la dose a été cochée « Oui » pour la
+ * première fois de la grossesse sur une consultation finalisée du mois (une dose recochée aux
+ * visites suivantes n'est pas recomptée).
+ */
+exports.preventionsMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const champs = PREVENTIONS_MENSUELLES.map((m) => `mesuresPreventives.${m.code}.reponse`).join(' ');
+  const consultations = await Consultation.find({ patienteId: { $in: fenetre.ids }, statut: 'Finalisée' })
+    .select(`patienteId grossesseId date ${champs}`).sort({ date: 1 }).lean();
+  // Mois de la première consultation où chaque dose est cochée, par grossesse.
+  const premiere = new Map(PREVENTIONS_MENSUELLES.map((m) => [m.code, new Map()]));
+  for (const c of consultations) {
+    for (const { code } of PREVENTIONS_MENSUELLES) {
+      const doses = premiere.get(code);
+      const k = id(c.grossesseId);
+      if (c.mesuresPreventives?.[code]?.reponse === true && !doses.has(k)) {
+        doses.set(k, { patienteId: id(c.patienteId), mois: jourKinshasa(c.date).slice(0, 7) });
+      }
+    }
+  }
+  res.json(reponseMensuelle(fenetre, PREVENTIONS_MENSUELLES.map(({ code, libelle, groupe, repere }) => ({
+    code, libelle, groupe, repere: repere ?? '',
+    compter: (cle) => new Set([...premiere.get(code).values()].filter((d) => d.mois === cle).map((d) => d.patienteId)).size,
+  }))));
 };

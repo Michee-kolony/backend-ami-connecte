@@ -14,5 +14,7 @@ router.get('/enfants', ctrl.enfants);
 router.get('/synthese', synthese.synthese);
 // CPN1 à CPN4 d'un mois (mois passés consultables) : ?mois=AAAA-MM&province&aire.
 router.get('/cpn-mensuel', synthese.cpnMensuel);
+// VAT 1 à 5 et SP (TPI) 1 à 3 d'un mois : ?mois=AAAA-MM&province&aire.
+router.get('/preventions-mensuel', synthese.preventionsMensuel);
 
 module.exports = router;

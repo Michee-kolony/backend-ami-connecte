@@ -642,7 +642,7 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   const mensuel = await appel('medecinA', 'GET', '/statistiques/cpn-mensuel');
   assert.equal(mensuel.status, 200, JSON.stringify(mensuel.corps));
   assert.equal(mensuel.corps.mois, mensuel.corps.moisCourant);
-  assert.deepEqual(mensuel.corps.rangs.map((r) => r.n), apres, 'mêmes chiffres que la synthèse du mois');
+  assert.deepEqual(mensuel.corps.lignes.map((r) => r.n), apres, 'mêmes chiffres que la synthèse du mois');
   assert.equal(mensuel.corps.historique.cles.at(-1), mensuel.corps.mois);
   assert.equal(mensuel.corps.historique.cles.length, 6);
   const [an, mo] = mensuel.corps.mois.split('-').map(Number);
@@ -650,11 +650,28 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   const passe = await appel('medecinA', 'GET', `/statistiques/cpn-mensuel?mois=${moisPasse}`);
   assert.equal(passe.status, 200);
   assert.equal(passe.corps.mois, moisPasse);
-  assert.deepEqual(passe.corps.rangs.map((r) => r.n), [0, 0, 0, 0], 'aucune CPN d’essai il y a deux mois');
+  assert.deepEqual(passe.corps.lignes.map((r) => r.n), [0, 0, 0, 0], 'aucune CPN d’essai il y a deux mois');
   const futur = new Date(Date.UTC(an, mo, 1)).toISOString().slice(0, 7);
   assert.equal((await appel('medecinA', 'GET', `/statistiques/cpn-mensuel?mois=${futur}`)).status, 400);
   assert.equal((await appel('medecinA', 'GET', '/statistiques/cpn-mensuel?mois=2026-13')).status, 400);
-  assert.deepEqual((await appel('medecinAutre', 'GET', '/statistiques/cpn-mensuel')).corps.rangs.map((r) => r.n), autreAvant, 'cloisonnement par établissement');
+  assert.deepEqual((await appel('medecinAutre', 'GET', '/statistiques/cpn-mensuel')).corps.lignes.map((r) => r.n), autreAvant, 'cloisonnement par établissement');
+
+  // VAT et SP du mois : première dose cochée « Oui » de la grossesse, jamais recomptée ensuite.
+  const prevAvant = (await appel('medecinA', 'GET', '/statistiques/preventions-mensuel')).corps;
+  assert.deepEqual(prevAvant.lignes.map((l) => l.code), ['vat1', 'vat2', 'vat3', 'vat4', 'vat5', 'sp1', 'sp2', 'sp3']);
+  const vaccinee = await creer('medecinA', { patiente: { nom: 'Vat', prenom: 'Sp', ageDeclare: 25, adresse: { province: 'Kinshasa' } } });
+  const gv = (await appel('medecinA', 'GET', `/patientes/${vaccinee.corps.numero}`)).corps.grossesses[0].id;
+  const oui = { reponse: true };
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Première consultation prénatale', mesuresPreventives: { vat1: oui, sp1: oui }, finaliser: true });
+  await appel('medecinA', 'POST', `/grossesses/${gv}/consultations`, { type: 'Suivi prénatal', mesuresPreventives: { vat1: oui, vat2: oui, sp1: { reponse: false } }, finaliser: true });
+  const prevApres = (await appel('medecinA', 'GET', '/statistiques/preventions-mensuel')).corps;
+  const ecart = Object.fromEntries(prevApres.lignes.map((l, i) => [l.code, l.n - prevAvant.lignes[i].n]));
+  assert.deepEqual(ecart, { vat1: 1, vat2: 1, vat3: 0, vat4: 0, vat5: 0, sp1: 1, sp2: 0, sp3: 0 }, 'VAT1 recochée non recomptée');
+  assert.equal(prevApres.lignes.find((l) => l.code === 'sp1').repere, 'À 16 SA');
+  const prevPasse = await appel('medecinA', 'GET', `/statistiques/preventions-mensuel?mois=${moisPasse}`);
+  assert.ok(prevPasse.corps.lignes.every((l) => l.n === 0));
+  assert.equal((await appel('medecinA', 'GET', `/statistiques/preventions-mensuel?mois=${futur}`)).status, 400);
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/preventions-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');
