@@ -694,6 +694,22 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   const tdrApres = (await appel('medecinA', 'GET', '/statistiques/tdr-palu-mensuel')).corps;
   assert.deepEqual(tdrApres.lignes.map((l, i) => l.n - tdrAvant.lignes[i].n), [2, 1], 'deux femmes testées (une fois chacune), une positive');
   assert.ok((await appel('medecinAutre', 'GET', '/statistiques/tdr-palu-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
+
+  // Échographies 1, 2, 3 : rang dans la grossesse par ordre de date ; une 4e n'est pas comptée.
+  const Echographie = require('../models/Echographie');
+  const Grossesse = require('../models/Grossesse');
+  const echoAvant = (await appel('medecinA', 'GET', '/statistiques/echographies-mensuel')).corps;
+  assert.deepEqual(echoAvant.lignes.map((l) => l.code), ['echo1', 'echo2', 'echo3']);
+  const g = await Grossesse.findById(gv);
+  const auteurEcho = { id: 'essai', nom: 'Essai', role: 'Médecin' };
+  const jourMois = (decalage) => { const d = new Date(Date.UTC(an, mo - 1 + decalage, 1)); return d.toISOString().slice(0, 10); };
+  for (const date of [jourMois(-2), jourMois(0), jourMois(0), jourMois(0)]) {
+    await Echographie.create({ patienteId: g.patienteId, grossesseId: g._id, etablissementId: g.etablissementId ?? null, date, auteur: auteurEcho });
+  }
+  const echoApres = (await appel('medecinA', 'GET', '/statistiques/echographies-mensuel')).corps;
+  assert.deepEqual(echoApres.lignes.map((l, i) => l.n - echoAvant.lignes[i].n), [0, 1, 1], 'écho 2 et 3 ce mois (la 4e ignorée)');
+  assert.equal(echoApres.lignes[0].valeurs[3] - echoAvant.lignes[0].valeurs[3], 1, 'écho 1 il y a deux mois');
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/echographies-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');

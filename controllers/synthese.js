@@ -606,6 +606,30 @@ exports.preventionsMensuel = mesuresMensuelles(['vat1', 'vat2', 'vat3', 'vat4', 
 /** MILD, micronutriments, mébendazole et conseil DCIP (PTME) du mois. */
 exports.preventionMensuel = mesuresMensuelles(['mild', 'micronutriments', 'mebendazole', 'dcip']);
 
+/**
+ * Échographies 1, 2 et 3 d'un mois : rang de chaque échographie dans sa grossesse (ordre de date,
+ * puis d'enregistrement) ; femmes distinctes dont l'échographie de ce rang est datée du mois.
+ */
+exports.echographiesMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  // Toutes les échographies de la grossesse comptent pour le rang, même antérieures à la fenêtre.
+  const echos = await Echographie.find({ patienteId: { $in: fenetre.ids } }).select('patienteId grossesseId date createdAt').lean();
+  const parGrossesse = new Map();
+  for (const e of echos) {
+    const k = id(e.grossesseId);
+    if (!parGrossesse.has(k)) parGrossesse.set(k, []);
+    parGrossesse.get(k).push(e);
+  }
+  const rang = new Map();
+  for (const liste of parGrossesse.values()) {
+    liste.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt).forEach((e, i) => rang.set(e, i + 1));
+  }
+  res.json(reponseMensuelle(fenetre, [1, 2, 3].map((n) => ({
+    code: `echo${n}`, libelle: `Écho ${n}`,
+    compter: (cle) => new Set(echos.filter((e) => rang.get(e) === n && e.date.startsWith(cle)).map((e) => id(e.patienteId))).size,
+  }))));
+};
+
 /** Résultat de TDR noté positif (texte libre : « Positif », « + », « pos »…), jamais s'il dit négatif. */
 const tdrPositif = (resultat) => /posit|^\s*pos\b|\+/i.test(resultat) && !/n[ée]gat|^\s*n[ée]g\b/i.test(resultat);
 

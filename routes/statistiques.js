@@ -20,5 +20,7 @@ router.get('/preventions-mensuel', synthese.preventionsMensuel);
 router.get('/prevention-mensuel', synthese.preventionMensuel);
 // TDR palu d'un mois (réalisés, positifs) : ?mois=AAAA-MM&province&aire.
 router.get('/tdr-palu-mensuel', synthese.tdrPaluMensuel);
+// Échographies 1, 2 et 3 d'un mois : ?mois=AAAA-MM&province&aire.
+router.get('/echographies-mensuel', synthese.echographiesMensuel);
 
 module.exports = router;
