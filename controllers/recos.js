@@ -13,11 +13,11 @@ const { ROLES_RESPONSABLE } = require('../config/relance');
 const moteur = require('../config/moteurRelance');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide, genererMotDePasse, donneesDe } = require('./flotte');
-const { exigerSupervision, filtreTerritoire } = require('./relance');
+const { exigerSupervision, filtreRecos } = require('./relance');
 const { erreur, texte, valider } = require('./saisie');
 
 async function trouverReco(req, id) {
-  const reco = mongoose.isValidObjectId(id) ? await Reco.findOne({ _id: id, ...filtreTerritoire(req) }) : null;
+  const reco = mongoose.isValidObjectId(id) ? await Reco.findOne({ _id: id, ...filtreRecos(req) }) : null;
   if (!reco) throw erreur(404, 'RECO introuvable.');
   return reco;
 }
@@ -42,8 +42,10 @@ async function lireChamps(req, d, { creation }) {
     c.zones = zones.map((z) => texte(z, 120)).filter(Boolean).slice(0, 50);
   }
   if (d.etablissementId !== undefined || creation) {
-    const etablissementId = String(d.etablissementId || req.etablissementId || '');
-    if (req.etablissementId && etablissementId !== req.etablissementId) throw erreur(403, 'Vous ne gérez que les RECO de votre structure.');
+    // Le RECO appartient toujours à l'établissement de connexion de celui qui le crée ou le modifie.
+    if (!req.etablissementId) throw erreur(403, 'Connectez-vous à votre établissement pour gérer ses RECO.');
+    const etablissementId = String(d.etablissementId || req.etablissementId);
+    if (etablissementId !== req.etablissementId) throw erreur(403, 'Vous ne gérez que les RECO de votre structure.');
     const [etab] = await Etablissement.actifsParIds([etablissementId]);
     if (!etab) throw erreur(400, 'Choisissez la structure de rattachement du RECO.');
     c.etablissementId = etab.id;
@@ -61,7 +63,7 @@ async function lireChamps(req, d, { creation }) {
 }
 
 exports.lister = async (req, res) => {
-  const liste = await Reco.find(filtreTerritoire(req)).sort({ statut: 1, nom: 1 });
+  const liste = await Reco.find(filtreRecos(req)).sort({ statut: 1, nom: 1 });
   res.json(await vues(liste));
 };
 

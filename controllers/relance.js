@@ -29,6 +29,14 @@ function filtreTerritoire(req) {
   return req.etablissementId ? { etablissementId: req.etablissementId } : {};
 }
 
+/**
+ * RECO visibles : uniquement ceux de l'établissement de connexion. Sans établissement de
+ * connexion, aucun (comme les dossiers des patientes : voir filtrePatientes).
+ */
+function filtreRecos(req) {
+  return req.etablissementId ? { etablissementId: req.etablissementId } : { _id: { $in: [] } };
+}
+
 /** Tâches visibles par le soignant connecté. */
 function filtreVisibilite(req) {
   if (estSuperviseur(req)) return filtreTerritoire(req);
@@ -166,8 +174,9 @@ exports.attribuer = async (req, res) => {
   const t = await trouverTache(req, req.params.numero);
   if (!t.estOuverte()) throw erreur(409, `Tâche « ${t.statut} » : rouvrez-la d’abord.`);
   const d = objet(req.body);
-  const reco = mongoose.isValidObjectId(d.recoId) ? await Reco.findById(d.recoId) : null;
-  if (!reco || reco.statut !== 'Actif') throw erreur(400, 'Choisissez un RECO actif.');
+  // Seuls les RECO de l'établissement de connexion sont attribuables.
+  const reco = mongoose.isValidObjectId(d.recoId) ? await Reco.findOne({ _id: d.recoId, ...filtreRecos(req) }) : null;
+  if (!reco || reco.statut !== 'Actif') throw erreur(400, 'Choisissez un RECO actif de votre structure.');
   if (t.etablissementId && reco.etablissementId !== t.etablissementId) throw erreur(400, 'Ce RECO n’est pas rattaché à la structure de la tâche.');
   const motif = texte(d.motif, 300);
   const reattribution = t.recoId && String(t.recoId) !== reco.id;
@@ -388,4 +397,5 @@ exports.referentiel = async (req, res) => {
 
 module.exports.estSuperviseur = estSuperviseur;
 module.exports.filtreTerritoire = filtreTerritoire;
+module.exports.filtreRecos = filtreRecos;
 module.exports.exigerSupervision = exigerSupervision;

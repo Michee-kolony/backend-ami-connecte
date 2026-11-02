@@ -158,6 +158,12 @@ test('Comptes RECO : tout le personnel soignant peut en ajouter', async () => {
 
   // Un superviseur d'une autre structure ne voit pas ces RECO.
   assert.equal((await appel('superviseurB', 'GET', '/relance/recos')).corps.length, 0);
+  assert.equal((await formulaireReco('superviseurB', 'PATCH', `/relance/recos/${ids.reco2}`, { telephone: '1' }, { photo: false })).status, 404, 'ni modifiable');
+  // Ni créé pour une autre structure ; sans établissement de connexion : aucun RECO visible ni créable.
+  assert.equal((await formulaireReco('superviseurB', 'POST', '/relance/recos', { prenom: 'Z', nom: 'Autre', sexe: 'F', telephone: '0', etablissementId: ids.csA })).status, 403);
+  jetons.sansEtab = require('jsonwebtoken').sign({ sub: ids.chef, etablissement: null }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  assert.equal((await appel('sansEtab', 'GET', '/relance/recos')).corps.length, 0);
+  assert.equal((await formulaireReco('sansEtab', 'POST', '/relance/recos', { prenom: 'Z', nom: 'Sans', sexe: 'F', telephone: '0', etablissementId: ids.csA })).status, 403);
 
   const c = await appel(null, 'POST', '/reco/connexion', { matricule: ids.matricule, motDePasse: ids.motDePasseReco });
   assert.equal(c.status, 200);

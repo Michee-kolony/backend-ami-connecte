@@ -25,7 +25,7 @@ const { ALERTES, MOTIF_RECO, RESULTATS_CONTACT } = require('../config/relance');
 const ParcoursRelance = require('../models/ParcoursRelance');
 const { MOTIFS: MOTIFS_URGENCE, ETATS_ACTIFS: URGENCES_ACTIVES } = require('../config/urgences');
 const { VERSION_REGLES, PARAMETRES, PERIODES, CATALOGUE, DONNEES_MANQUANTES } = require('../config/indicateurs');
-const { filtreTerritoire } = require('./relance');
+const { filtreTerritoire, filtreRecos } = require('./relance');
 const { calculer } = require('./indicateursRelance');
 const { erreur, texte, jour } = require('./saisie');
 const { filtrePatientes, idsPatientes } = require('./patientes');
@@ -946,7 +946,7 @@ exports.recoMensuel = async (req, res) => {
   const maintenant = new Date();
   const aire = req.query.aire ? texte(req.query.aire, 120) : '';
   const [recos, relance] = await Promise.all([
-    Reco.find({ ...filtreTerritoire(req), ...(aire ? { aireSante: aire } : {}) }).select('createdAt').lean(),
+    Reco.find({ ...filtreRecos(req), ...(aire ? { aireSante: aire } : {}) }).select('createdAt').lean(),
     relanceMensuelle(req, fenetre),
   ]);
   const { taches, beneficiaire, menage, actions, visites } = relance;

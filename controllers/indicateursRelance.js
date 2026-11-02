@@ -17,7 +17,7 @@ const ParcoursRelance = require('../models/ParcoursRelance');
 const { journaliser } = require('../config/audit');
 const { jourKinshasa } = require('../config/vaccination');
 const r = require('../config/relance');
-const { estSuperviseur, filtreTerritoire } = require('./relance');
+const { estSuperviseur, filtreTerritoire, filtreRecos } = require('./relance');
 const { erreur, texte, jour } = require('./saisie');
 
 const FINAUX_VALIDES = ['Réintégration confirmée', 'Clôturée sans réintégration'];
@@ -186,7 +186,7 @@ exports.tableauDeBord = async (req, res) => {
     cloturesExceptionnelles: taches.filter((t) => t.resolution?.exceptionnelle).length,
     actionsHorsLigne: taches.reduce((n, t) => n + t.actions.filter((a) => a.horsLigne).length, 0),
     actionsEnConflit: taches.reduce((n, t) => n + t.actions.filter((a) => a.conflit).length, 0),
-    synchronisations: (await Reco.find(filtreTerritoire(req)).select('matricule prenom nom derniereSynchronisation statut'))
+    synchronisations: (await Reco.find(filtreRecos(req)).select('matricule prenom nom derniereSynchronisation statut'))
       .map((x) => ({ matricule: x.matricule, nom: `${x.prenom} ${x.nom}`, statut: x.statut, derniereSynchronisation: x.derniereSynchronisation })),
   };
 
