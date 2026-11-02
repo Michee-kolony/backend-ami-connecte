@@ -710,6 +710,137 @@ test('synthèse du tableau de bord : formules vérifiables, N/A si dénominateur
   assert.deepEqual(echoApres.lignes.map((l, i) => l.n - echoAvant.lignes[i].n), [0, 1, 1], 'écho 2 et 3 ce mois (la 4e ignorée)');
   assert.equal(echoApres.lignes[0].valeurs[3] - echoAvant.lignes[0].valeurs[3], 1, 'écho 1 il y a deux mois');
   assert.ok((await appel('medecinAutre', 'GET', '/statistiques/echographies-mensuel')).corps.lignes.every((l) => l.n === 0), 'cloisonnement par établissement');
+
+  // Module Accouchement : deux dossiers de la structure (césarienne compliquée, voie basse) et un accouchement à domicile déclaré.
+  const Accouchement = require('../models/Accouchement');
+  const Enfant = require('../models/Enfant');
+  const accAvant = (await appel('medecinA', 'GET', '/statistiques/accouchements-mensuel')).corps;
+  assert.equal(accAvant.lignes.length, 20);
+  const maintenantAcc = new Date();
+  const dossierAcc = (numero, accouchement, admission = {}) => Accouchement.create({
+    numero, patienteId: g.patienteId, grossesseId: g._id, etablissementId: g.etablissementId ?? null, statut: 'Post-partum', creePar: auteurEcho,
+    admission: { admiseLe: maintenantAcc, admisePar: auteurEcho, ...admission },
+    accouchement: { heure: maintenantAcc, enregistrePar: auteurEcho, enregistreLe: maintenantAcc, ...accouchement },
+  });
+  const a1 = await dossierAcc('AC-ACC-990001', { mode: 'Césarienne', accoucheur: 'Dr Essai', delivrance: { pertesSangMl: 800 } }, { motif: 'Prééclampsie sévère' });
+  const a2 = await dossierAcc('AC-ACC-990002', { mode: 'Normal', accoucheur: '' });
+  const enfantAcc = (numero, accouchementId, etatNaissance) => Enfant.create({
+    numero, mereId: g.patienteId, accouchementId, grossesseId: g._id, sexe: 'Féminin', neLe: maintenantAcc,
+    dateNaissance: maintenantAcc.toISOString().slice(0, 10), etatNaissance, creePar: auteurEcho,
+  });
+  await enfantAcc('AC-ENF-990001', a1._id, 'Vivant');
+  await enfantAcc('AC-ENF-990002', a2._id, 'Mort-né');
+  await Grossesse.updateOne({ _id: gid }, { statut: 'Terminée', issue: { date: jourMois(0), lieu: 'Domicile', issue: 'Naissance vivante', mode: 'Voie basse', enregistreePar: auteurEcho, enregistreeLe: maintenantAcc } });
+  const accApres = (await appel('medecinA', 'GET', '/statistiques/accouchements-mensuel')).corps;
+  const ecartAcc = Object.fromEntries(accApres.lignes.slice(0, 15).map((l, i) => [l.code, l.n == null ? null : l.n - accAvant.lignes[i].n]));
+  assert.deepEqual(ecartAcc, {
+    accTotal: 3, accAssistes: 1, accVoieBasse: 2, accCesarienne: 1, accDomicile: 1, accStructure: 2, accPrematures: 0,
+    naisVivantes: 1, naisMortNes: 1, compMaternelles: 1, compHpp: 1, compEclampsie: 1, compReferences: 0, compContreReferences: null, compDeces: 0,
+  });
+  const nAcc = (code) => accApres.lignes.find((l) => l.code === code).n;
+  assert.equal(nAcc('tauxCesariennes'), Math.round((nAcc('accCesarienne') / nAcc('accTotal')) * 1000) / 10);
+  assert.equal(nAcc('tauxMortinatalite'), Math.round((nAcc('naisMortNes') / (nAcc('naisMortNes') + nAcc('naisVivantes'))) * 10000) / 10);
+  assert.equal(accApres.lignes.find((l) => l.code === 'tauxCesariennes').valeurs[0], null, 'N/A sans accouchement');
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/accouchements-mensuel')).corps.lignes.every((l) => !l.n), 'cloisonnement par établissement');
+
+  // Nouveau-nés : deux enfants nés vivants il y a deux mois (fenêtre de 42 j écoulée), l'un suivi 3 fois, l'autre une fois.
+  const nnMois = (await appel('medecinA', 'GET', '/statistiques/nouveau-nes-mensuel')).corps;
+  assert.equal(nnMois.lignes.length, 14);
+  const neIlYa = new Date(Date.now() - 60 * 86400000);
+  const jourNe = require('../config/vaccination').jourKinshasa(neIlYa);
+  const jourApres = (j) => new Date(Date.parse(`${jourNe}T00:00:00Z`) + j * 86400000).toISOString().slice(0, 10);
+  const moisNe = jourNe.slice(0, 7);
+  const nnAvant = (await appel('medecinA', 'GET', `/statistiques/nouveau-nes-mensuel?mois=${moisNe}`)).corps;
+  const nouveauNe = (numero, extra) => Enfant.create({
+    numero, mereId: g.patienteId, grossesseId: g._id, neLe: neIlYa, dateNaissance: jourApres(0), creePar: auteurEcho, ...extra,
+  });
+  await nouveauNe('AC-ENF-990003', {
+    sexe: 'Masculin', naissance: { poidsG: 2300, miseAuSeinMoins1h: true, senn: { maintienTemperature: true, crede: true }, soinsCordon: { lameSterile: true }, traitement: { vitamineK1: true } },
+    suivis: [1, 1, 6, 30].map((j) => ({ date: jourApres(j), auteur: auteurEcho, le: new Date() })),
+  });
+  await nouveauNe('AC-ENF-990004', { sexe: 'Féminin', statut: 'Décédé', naissance: { poidsG: 3200 }, suivis: [{ date: jourApres(50), auteur: auteurEcho, le: new Date() }, { date: jourApres(2), auteur: auteurEcho, le: new Date() }] });
+  const nnApres = (await appel('medecinA', 'GET', `/statistiques/nouveau-nes-mensuel?mois=${moisNe}`)).corps;
+  const ecartNn = Object.fromEntries(nnApres.lignes.slice(0, 11).map((l, i) => [l.code, l.n - nnAvant.lignes[i].n]));
+  assert.deepEqual(ecartNn, {
+    nnTotal: 2, nnMasculin: 1, nnFeminin: 1, nnFaiblePoids: 1, nnPrematures: 0, nnSoinsEssentiels: 1,
+    cponNouveauNes: 2, cponAttendues: 6, cponRealisees: 4, nnReferes: 0, nnDeces: 1,
+  }, 'même jour compté une fois, visite au-delà de 42 j ignorée');
+  const nNn = (code) => nnApres.lignes.find((l) => l.code === code).n;
+  assert.equal(nNn('tauxCpon'), Math.round((nNn('cponRealisees') / nNn('cponAttendues')) * 1000) / 10);
+  assert.ok((await appel('medecinAutre', 'GET', `/statistiques/nouveau-nes-mensuel?mois=${moisNe}`)).corps.lignes.every((l) => !l.n), 'cloisonnement par établissement');
+
+  // Vaccination : enfant A (5 mois) rattrapé ce mois-ci (Rota 1 annulée) ; enfant B (Penta1 il y a 5 mois, Penta3 échu : abandon).
+  const vacAvant = (await appel('medecinA', 'GET', '/statistiques/vaccination-mensuel')).corps;
+  const auj = require('../config/vaccination').jourKinshasa();
+  const dose = (code, date) => ({ code, date, administreePar: auteurEcho, le: new Date() });
+  const enfantVac = (numero, joursDepuisNaissance, vaccinations) => Enfant.create({
+    numero, mereId: g.patienteId, grossesseId: g._id, sexe: 'Masculin', neLe: new Date(Date.now() - joursDepuisNaissance * 86400000),
+    dateNaissance: auj, creePar: auteurEcho, vaccinations,
+  });
+  await enfantVac('AC-ENF-990005', 150, [dose('bcg', auj), dose('vpo0', auj), dose('penta1', auj), dose('vpo1', auj), dose('pcv1', auj),
+    { ...dose('rota1', auj), annulation: { motif: 'Erreur', le: new Date() } }]);
+  await enfantVac('AC-ENF-990006', 200, [dose('penta1', new Date(Date.now() - 155 * 86400000).toISOString().slice(0, 10))]);
+  const vacApres = (await appel('medecinA', 'GET', '/statistiques/vaccination-mensuel')).corps;
+  const ecartVac = (code) => { const i = vacApres.lignes.findIndex((l) => l.code === code); return vacApres.lignes[i].n - vacAvant.lignes[i].n; };
+  assert.deepEqual(['vacEnfants', 'vac_bcg', 'vac_vpo0', 'vac_penta1', 'vac_penta2', 'vac_pcv1', 'vacDoses', 'vacZeroDose', 'vacAbandons', 'vacSousVaccines', 'vacAJour'].map(ecartVac),
+    [2, 1, 1, 1, 0, 1, 5, 0, 1, 2, 0], 'dose annulée non comptée ; Penta3 échu non fait : abandon');
+  assert.equal(vacApres.lignes.filter((l) => l.code.startsWith('couv_')).length, 8);
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/vaccination-mensuel')).corps.lignes.every((l) => !l.n), 'cloisonnement par établissement');
+
+  // RECO : un relais, deux tâches (la mère et son enfant : un ménage, deux bénéficiaires), visites et orientation.
+  const Reco = require('../models/Reco');
+  const TacheRelance = require('../models/TacheRelance');
+  const recoAvant = (await appel('medecinA', 'GET', '/statistiques/reco-mensuel')).corps;
+  assert.equal(recoAvant.lignes.length, 12);
+  const etabReco = (await require('../models/Patiente').findById(g.patienteId)).etablissementId;
+  const reco = await Reco.create({ matricule: 'RECO-990001', prenom: 'Essai', nom: 'Reco', sexe: 'F', telephone: '000', etablissementId: etabReco, motDePasse: 'x', creePar: auteurEcho });
+  const parReco = { id: reco.id, nom: 'Essai RECO', role: 'RECO' };
+  const hier = new Date(Date.now() - 3600000);
+  const action = (type, resultat = null) => ({ operationId: `op-${Math.random()}`, type, resultat, le: hier, recuLe: hier, par: parReco });
+  const enfantReco = await Enfant.findOne({ numero: 'AC-ENF-990005' });
+  await TacheRelance.create({
+    numero: 'REL-990001', domaine: 'CPN', source: 'CPN', personneType: 'Patiente', patienteId: g.patienteId, cle: 'essai-1', echeance: new Date(Date.now() + 86400000),
+    etablissementId: etabReco, recoId: reco._id, creePar: auteurEcho, statut: 'Orientée', contactEtabliLe: hier,
+    actions: [action('visite_realisee', 'Absente du domicile'), action('visite_realisee', 'Personne rencontrée'), action('orientation')],
+    visites: [{ prevueLe: hier, planifieeLe: hier, realiseeLe: hier }, { prevueLe: hier, planifieeLe: hier }],
+    orientation: { le: hier, structure: 'CS Essai', par: parReco },
+    confirmation: { le: new Date(), source: 'Structure', reference: 'essai', par: auteurEcho },
+  });
+  await TacheRelance.create({
+    numero: 'REL-990002', domaine: 'Vaccination', source: 'Vaccination', personneType: 'Enfant', enfantId: enfantReco._id, cle: 'essai-2', echeance: new Date(Date.now() + 86400000),
+    etablissementId: etabReco, recoId: reco._id, creePar: auteurEcho,
+  });
+  const recoApres = (await appel('medecinA', 'GET', '/statistiques/reco-mensuel')).corps;
+  const ecartReco = Object.fromEntries(recoApres.lignes.slice(0, 11).map((l, i) => [l.code, l.n - recoAvant.lignes[i].n]));
+  assert.deepEqual(ecartReco, {
+    recoEnregistres: 1, recoActifs: 1, recoMenages: 1, recoBeneficiaires: 2, recoVisitesRealisees: 2, recoVisitesPlanifiees: 2,
+    recoVisitesNonRealisees: 1, recoAbsents: 1, recoRetrouves: 1, recoReferences: 1, recoReferesRecus: 1,
+  });
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/reco-mensuel')).corps.lignes.every((l) => !l.n), 'cloisonnement par établissement');
+
+  // Parcours : la tâche de la mère passe en RAC ; l'enfant et un cas clôturé sans réintégration en ARC.
+  const ecartParcours = async (route, faire) => {
+    const avant = (await appel('medecinA', 'GET', `/statistiques/${route}`)).corps;
+    await faire();
+    const apres = (await appel('medecinA', 'GET', `/statistiques/${route}`)).corps;
+    return Object.fromEntries(apres.lignes.map((l, i) => [l.code, l.n == null ? null : Math.round((l.n - (avant.lignes[i].n ?? 0)) * 10) / 10]));
+  };
+  const rac = await ecartParcours('rac-mensuel', () => TacheRelance.updateOne({ numero: 'REL-990001' }, { parcoursCode: 'RAC' }));
+  assert.deepEqual([rac.racAbandons, rac.racJamaisCpn, rac.racARelancer, rac.racContactees, rac.racRetrouvees, rac.racSensibilisees, rac.racOrientees, rac.racRevenues, rac.racPerdues],
+    [1, 0, 1, 1, 1, 1, 1, 0, 0]);
+  const arc = await ecartParcours('arc-mensuel', async () => {
+    await TacheRelance.updateOne({ numero: 'REL-990002' }, { parcoursCode: 'ARC' });
+    await TacheRelance.create({
+      numero: 'REL-990003', parcoursCode: 'ARC', domaine: 'Vaccination', source: 'Vaccination', personneType: 'Enfant', enfantId: enfantReco._id, cle: 'essai-3',
+      echeance: new Date(), etablissementId: etabReco, creePar: auteurEcho, ouverte: false, statut: 'Clôturée sans réintégration', statutLe: new Date(),
+    });
+  });
+  assert.deepEqual([arc.arcIdentifies, arc.arcAContacter, arc.arcContactes, arc.arcResolus, arc.arcNonResolus], [2, 2, 0, 0, 1]);
+  const arcApres = (await appel('medecinA', 'GET', '/statistiques/arc-mensuel')).corps;
+  assert.equal(arcApres.lignes.find((l) => l.code === 'arcTauxResolution').n, 0);
+  assert.equal(arcApres.parcours.statut, 'À valider');
+  for (const route of ['rpc-mensuel', 'irc-mensuel', 'tcc-mensuel']) assert.equal((await appel('medecinA', 'GET', `/statistiques/${route}`)).corps.lignes.length, 10);
+  assert.ok((await appel('medecinAutre', 'GET', '/statistiques/rac-mensuel')).corps.lignes.every((l) => !l.n), 'cloisonnement par établissement');
   assert.deepEqual(valeursCpn((await appel('medecinAutre', 'GET', '/statistiques/synthese?periode=mois')).corps), autreAvant, 'pas comptée dans un autre établissement');
 
   const kwilu = await appel('medecinA', 'GET', '/statistiques/synthese?periode=annee&province=Kwilu');

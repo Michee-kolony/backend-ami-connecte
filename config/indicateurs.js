@@ -18,6 +18,12 @@ const PARAMETRES = {
   slaAlerteHeures: 48,
   /** Rendez-vous CPN en retard depuis plus longtemps : priorité « Prioritaire ». */
   retardCpnPrioritaireJours: 14,
+  /** Consultations postnatales (CPoN) du nouveau-né : 3 attendues, au plus tard à J3, J7 et 6 semaines (42 j). */
+  cpon1Jours: 3,
+  cpon2Jours: 7,
+  cpon3Jours: 42,
+  /** Faible poids de naissance : strictement en dessous de ce poids (g). */
+  faiblePoidsG: 2500,
 };
 
 /** Périodes proposées par le bandeau de filtres. */
@@ -151,6 +157,8 @@ const CATALOGUE = {
 const DONNEES_MANQUANTES = [
   'Dénominateurs officiels (populations cibles CPN, accouchements attendus, cohortes PEV) : couvertures non calculables.',
   'Accusé de réception et contre-référence des références CPN et obstétricales (seule l’émission est enregistrée).',
+  'Accouchement : décès maternel et éclampsie / prééclampsie sévère sans champ dédié (repérés dans les textes saisis).',
+  'Nouveau-né : date du décès et référence (motif, structure, date) non enregistrées ; seul le statut « Décédé » / « Transféré » existe.',
   'Laboratoire : distinction examen prescrit / réalisé / résultat reçu.',
   'Statuts du fournisseur SMS/WhatsApp (soumis, délivré, lu) : seuls les rappels push sont tracés.',
   'Définitions validées RAC, ARC, RPC, IRC, TCC (dictionnaire métier AMI) et définition PEV RDC du zéro-dose.',

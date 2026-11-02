@@ -17,9 +17,12 @@ const AlerteRelance = require('../models/AlerteRelance');
 const Urgence = require('../models/Urgence');
 const Reco = require('../models/Reco');
 const { ROLES_MATERNITE } = require('../models/Soignant');
-const { jourKinshasa } = require('../config/vaccination');
+const vaccination = require('../config/vaccination');
+const { jourKinshasa } = vaccination;
 const { MESURES_PREVENTIVES } = require('../config/cpn');
-const { ALERTES, MOTIF_RECO } = require('../config/relance');
+const { HEMORRAGIE_PHYSIOLOGIQUE_MAX_ML } = require('../config/accouchement');
+const { ALERTES, MOTIF_RECO, RESULTATS_CONTACT } = require('../config/relance');
+const ParcoursRelance = require('../models/ParcoursRelance');
 const { MOTIFS: MOTIFS_URGENCE, ETATS_ACTIFS: URGENCES_ACTIVES } = require('../config/urgences');
 const { VERSION_REGLES, PARAMETRES, PERIODES, CATALOGUE, DONNEES_MANQUANTES } = require('../config/indicateurs');
 const { filtreTerritoire } = require('./relance');
@@ -37,6 +40,8 @@ const taux = (num, den) => (den ? Math.round((num / den) * 1000) / 10 : null);
 const id = (v) => (v == null ? '' : String(v));
 const nomComplet = (p) => (p ? [p.prenom, p.nom].filter(Boolean).join(' ') : '');
 const instantJour = (iso) => new Date(`${iso}T00:00:00+01:00`);
+/** Mois civil (AAAA-MM, Kinshasa) d'un instant. */
+const moisDe = (d) => jourKinshasa(d).slice(0, 7);
 const decalerJour = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * JOUR).toISOString().slice(0, 10);
 
 /** Bornes de la période demandée (jours civils de Kinshasa, bornes incluses). */
@@ -651,5 +656,534 @@ exports.tdrPaluMensuel = async (req, res) => {
   res.json(reponseMensuelle(fenetre, [
     { code: 'tdrPalu', libelle: 'TDR palu réalisé', groupe: 'Laboratoire', repere: '', compter: (cle) => femmes(cle, () => true) },
     { code: 'tdrPaluPositif', libelle: 'TDR palu positif', groupe: 'Laboratoire', repere: '', compter: (cle) => femmes(cle, (t) => t.positif) },
+  ]));
+};
+
+const SEUIL_PREMATURE_JOURS = 37 * 7;
+/** Issue de grossesse écrite par un dossier d'accouchement (controllers/accouchements.js). */
+const ISSUE_DE_DOSSIER = /^Dossier d’accouchement /;
+const aDomicile = (lieu) => /domicile|maison/i.test(lieu || '');
+const ECLAMPSIE = /[ée]clamp/i;
+const DECES = /d[ée]c[èe]s|d[ée]c[ée]d/i;
+
+/**
+ * Module Accouchement d'un mois (20 indicateurs) : dossiers d'accouchement de la plateforme datés
+ * du mois (heure de naissance) et accouchements hors plateforme déclarés (issue de grossesse
+ * « Naissance vivante » / « Mort-né » sans dossier, ou enfant enregistré « Né hors plateforme »).
+ * Nombres et taux par mois ; un taux dont le dénominateur est nul vaut null (« N/A »).
+ * Éclampsie et décès maternel n'ont pas de champ dédié : repérés dans les textes saisis.
+ */
+exports.accouchementsMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const debutJour = `${fenetre.cles[0]}-01`;
+  const debut = instantJour(debutJour);
+  const ids = { $in: fenetre.ids };
+  const [dossiers, grossesses, enfants, referencesCpn] = await Promise.all([
+    Accouchement.find({ patienteId: ids, 'accouchement.heure': { $gte: debut } })
+      .select('grossesseId admission.motif examenClinique.conclusion surveillances.affection surveillances.incident evacuation accouchement postPartum.sortie.observations postPartum.surveillances.observations').lean(),
+    Grossesse.find({ patienteId: ids }).select('datation issue').lean(),
+    Enfant.find({ mereId: ids, neLe: { $gte: debut } }).select('mereId grossesseId accouchementId origine lieuNaissance etatNaissance neLe dateNaissance').lean(),
+    Consultation.find({ patienteId: ids, statut: 'Finalisée', 'reference.motifs.0': { $exists: true }, date: { $gte: debut } }).select('date').lean(),
+  ]);
+  const grossesseDe = new Map(grossesses.map((g) => [id(g._id), g]));
+  const premature = (gid, jourIso) => {
+    const d = grossesseDe.get(id(gid))?.datation;
+    if (!d) return false;
+    return d.agReferenceJours + Math.round((Date.parse(`${jourIso}T00:00:00Z`) - Date.parse(`${d.dateReference}T00:00:00Z`)) / JOUR) < SEUIL_PREMATURE_JOURS;
+  };
+
+  // Un accouchement par dossier (structure) ou par grossesse / naissance déclarée hors plateforme.
+  const accouchements = dossiers.map((a) => {
+    const jourAcc = jourKinshasa(a.accouchement.heure);
+    const issue = grossesseDe.get(id(a.grossesseId))?.issue;
+    const textes = [a.admission?.motif, a.examenClinique?.conclusion, a.accouchement.indicationCesarienne, a.evacuation?.motif, issue?.complications,
+      ...(a.surveillances ?? []).flatMap((s) => [s.affection, s.incident])].filter(Boolean).join(' ');
+    const textesMere = [a.postPartum?.sortie?.observations, issue?.complications, issue?.orientation,
+      ...(a.postPartum?.surveillances ?? []).map((s) => s.observations)].filter(Boolean).join(' ');
+    const d = a.accouchement.delivrance ?? {};
+    const hpp = d.hemorragie === 'Pathologique' || d.pertesSangMl > HEMORRAGIE_PHYSIOLOGIQUE_MAX_ML;
+    const eclampsie = ECLAMPSIE.test(textes);
+    const deces = DECES.test(textesMere);
+    return {
+      mois: jourAcc.slice(0, 7), dossier: true, structure: true, domicile: false,
+      assiste: !!(a.accouchement.accoucheur || '').trim(),
+      cesarienne: a.accouchement.mode === 'Césarienne', voieBasse: a.accouchement.mode !== 'Césarienne',
+      premature: premature(a.grossesseId, jourAcc), hpp, eclampsie, deces,
+      complication: hpp || eclampsie || deces || a.accouchement.dechirure?.degre >= 3 || !!a.evacuation || !!(issue?.complications || '').trim(),
+    };
+  });
+  // Hors plateforme : lieu déclaré (domicile, autre structure ou inconnu), aucun détail clinique.
+  const horsPlateforme = (jourIso, lieu, mode, gid) => accouchements.push({
+    mois: jourIso.slice(0, 7), dossier: false, structure: !!(lieu || '').trim() && !aDomicile(lieu), domicile: aDomicile(lieu),
+    assiste: false, cesarienne: mode === 'Césarienne', voieBasse: /^Voie basse/.test(mode || ''),
+    premature: gid ? premature(gid, jourIso) : false, hpp: false, eclampsie: false, deces: false, complication: false,
+  });
+  const declarees = new Set();
+  for (const g of grossesses) {
+    const i = g.issue;
+    if (!i || i.date < debutJour || !['Naissance vivante', 'Mort-né'].includes(i.issue) || ISSUE_DE_DOSSIER.test(i.resume || '')) continue;
+    declarees.add(id(g._id));
+    horsPlateforme(i.date, i.lieu, i.mode, g._id);
+  }
+  const naissancesHors = new Set();
+  for (const e of enfants) {
+    if (e.origine !== 'Né hors plateforme' || e.accouchementId || (e.grossesseId && declarees.has(id(e.grossesseId)))) continue;
+    const cle = e.grossesseId ? id(e.grossesseId) : `${id(e.mereId)}|${e.dateNaissance}`;
+    if (naissancesHors.has(cle)) continue; // jumeaux : un seul accouchement
+    naissancesHors.add(cle);
+    horsPlateforme(e.dateNaissance, e.lieuNaissance, '', e.grossesseId);
+  }
+
+  // Naissances : enfants enregistrés (toutes origines) et mort-nés déclarés sans dossier d'enfant.
+  const naissances = enfants.map((e) => ({ mois: moisDe(e.neLe), vivant: e.etatNaissance === 'Vivant' }));
+  const avecEnfant = new Set(enfants.map((e) => id(e.grossesseId)).filter(Boolean));
+  for (const g of grossesses) {
+    if (declarees.has(id(g._id)) && g.issue.issue === 'Mort-né' && !avecEnfant.has(id(g._id))) naissances.push({ mois: g.issue.date.slice(0, 7), vivant: false });
+  }
+
+  const duMois = (cle) => accouchements.filter((a) => a.mois === cle);
+  const compte = (cle, garder) => duMois(cle).filter(garder).length;
+  const vivants = (cle) => naissances.filter((n) => n.mois === cle && n.vivant).length;
+  const mortNes = (cle) => naissances.filter((n) => n.mois === cle && !n.vivant).length;
+  const references = (cle) => dossiers.filter((a) => a.evacuation?.le && moisDe(a.evacuation.le) === cle).length
+    + referencesCpn.filter((c) => moisDe(c.date) === cle).length;
+  const ratio = (num, den, facteur) => (den ? Math.round((num / den) * facteur * 10) / 10 : null);
+  const ligne = (code, libelle, groupe, unite, compter, extra = {}) => ({ code, libelle, groupe, unite, repere: '', compter, ...extra });
+  const ACC = 'Accouchements';
+  const NAIS = 'Naissances';
+  const COMP = 'Complications et références';
+  const TAUX = 'Taux';
+
+  res.json(reponseMensuelle(fenetre, [
+    ligne('accTotal', 'Accouchements enregistrés', ACC, 'accouchement(s)', (c) => duMois(c).length, { repere: 'Structure et hors plateforme' }),
+    ligne('accAssistes', 'Assistés par un personnel qualifié', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.assiste), { repere: 'Accoucheur renseigné' }),
+    ligne('accVoieBasse', 'Par voie basse', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.voieBasse), { repere: 'Instrumentale comprise' }),
+    ligne('accCesarienne', 'Par césarienne', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.cesarienne)),
+    ligne('accDomicile', 'À domicile (déclarés)', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.domicile), { sens: 'baisse' }),
+    ligne('accStructure', 'En structure sanitaire', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.structure)),
+    ligne('accPrematures', 'Accouchements prématurés', ACC, 'accouchement(s)', (c) => compte(c, (a) => a.premature), { repere: 'Moins de 37 SA (grossesse datée)', sens: 'baisse' }),
+    ligne('naisVivantes', 'Naissances vivantes', NAIS, 'naissance(s)', vivants),
+    ligne('naisMortNes', 'Mort-nés', NAIS, 'naissance(s)', mortNes, { sens: 'baisse' }),
+    ligne('compMaternelles', 'Complications maternelles', COMP, 'cas', (c) => compte(c, (a) => a.complication), { repere: 'HPP, éclampsie, déchirure 3e-4e degré, évacuation…', sens: 'baisse' }),
+    ligne('compHpp', 'Hémorragies du postpartum', COMP, 'cas', (c) => compte(c, (a) => a.hpp), { repere: `Délivrance pathologique ou > ${HEMORRAGIE_PHYSIOLOGIQUE_MAX_ML} ml`, sens: 'baisse' }),
+    ligne('compEclampsie', 'Éclampsie / prééclampsie sévère', COMP, 'cas', (c) => compte(c, (a) => a.eclampsie), { repere: 'Repérée dans les textes du dossier', sens: 'baisse' }),
+    ligne('compReferences', 'Références obstétricales', COMP, 'référence(s)', references, { repere: 'Évacuations et références CPN' }),
+    ligne('compContreReferences', 'Contre-références obstétricales', COMP, 'retour(s)', () => null, { repere: 'Non enregistrée dans la plateforme' }),
+    ligne('compDeces', 'Décès maternels', COMP, 'décès', (c) => compte(c, (a) => a.deces), { repere: 'Repérés dans les observations de la mère', sens: 'baisse' }),
+    ligne('tauxAssistes', 'Taux d’accouchements assistés', TAUX, '%', (c) => ratio(compte(c, (a) => a.assiste), duMois(c).length, 100), { repere: 'Assistés ÷ accouchements' }),
+    ligne('tauxCesariennes', 'Taux de césariennes', TAUX, '%', (c) => ratio(compte(c, (a) => a.cesarienne), duMois(c).length, 100), { repere: 'Césariennes ÷ accouchements' }),
+    ligne('tauxComplications', 'Taux de complications obstétricales', TAUX, '%', (c) => ratio(compte(c, (a) => a.complication), compte(c, (a) => a.dossier), 100), { repere: 'Complications ÷ accouchements de la structure', sens: 'baisse' }),
+    ligne('tauxMortinatalite', 'Taux de mortinatalité', TAUX, '‰', (c) => ratio(mortNes(c), vivants(c) + mortNes(c), 1000), { repere: 'Mort-nés ÷ naissances × 1000', sens: 'baisse' }),
+    ligne('tauxMortaliteMaternelle', 'Taux de mortalité maternelle', TAUX, 'pour 100 000 NV', (c) => ratio(compte(c, (a) => a.deces), vivants(c), 100000), { repere: 'Décès ÷ naissances vivantes × 100 000', sens: 'baisse' }),
+  ]));
+};
+
+/** Doses comptées une à une dans le module Vaccination (enfants ayant reçu la dose dans le mois). */
+const DOSES_VACCINATION = ['bcg', 'vpo0', 'penta1', 'penta2', 'penta3', 'vpo1', 'vpo2', 'vpo3', 'pcv1', 'pcv2', 'pcv3'];
+/** Couverture par antigène : enfants ayant reçu la dose ÷ enfants en âge de l'avoir reçue (dose échue ou faite). */
+const COUVERTURE_VACCINATION = ['bcg', 'penta1', 'penta3', 'vpo3', 'pcv3', 'rota3', 'var1', 'vaa'];
+const DOSE_ECHUE = ['En retard', 'Hors délai'];
+
+/**
+ * Module Vaccination d'un mois (28 indicateurs) — enfants nés vivants, ni décédés ni transférés.
+ *   - Activité du mois : doses administrées (saisies non annulées) datées du mois, enfants distincts ;
+ *   - État à la fin du mois (ou aujourd'hui pour le mois en cours) : carnet recalculé avec les seules
+ *     doses faites à cette date (à jour, zéro dose, sous-vaccinés, abandons, couverture, achèvement) ;
+ *   - Relance : tâches RECO du domaine Vaccination (contact établi, réintégration confirmée).
+ */
+exports.vaccinationMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const debut = instantJour(`${fenetre.cles[0]}-01`);
+  const auj = jourKinshasa(new Date());
+  const enfants = (await Enfant.find({ mereId: { $in: fenetre.ids }, etatNaissance: 'Vivant' })
+    .select('mereId dateNaissance etatNaissance statut vaccinations createdAt')).filter((e) => e.estSuivi());
+  const idsEnfants = enfants.map((e) => e._id);
+  const [taches, rdvs] = await Promise.all([
+    TacheRelance.find({ domaine: 'Vaccination', enfantId: { $in: idsEnfants }, $or: [{ contactEtabliLe: { $gte: debut } }, { statutLe: { $gte: debut } }] })
+      .select('enfantId statut statutLe contactEtabliLe').lean(),
+    RendezVous.find({ enfantId: { $in: idsEnfants }, date: { $gte: debut, $lt: new Date() }, statut: { $nin: ['Effectué', 'Annulé'] } }).select('date').lean(),
+  ]);
+  const vaccins = new Set(vaccination.CALENDRIER.filter((d) => d.type === 'Vaccin').map((d) => d.code));
+  const requisComplet = vaccination.CALENDRIER.filter((d) => d.type === 'Vaccin' && d.seance !== '15 mois').map((d) => d.code);
+  const doses = enfants.map((e) => ({ e, faites: e.vaccinationsValides().filter((v) => vaccins.has(v.code)) }));
+  // Carnet actuel (toutes les doses) : dates prévues pour les doses manquées.
+  const carnetsActuels = new Map(enfants.map((e) => [e.id, e.carnet(auj)]));
+
+  // État de chaque enfant à la fin de chaque mois de la fenêtre (calculé une fois par mois).
+  const etats = new Map();
+  const etatDu = (cle) => {
+    if (etats.has(cle)) return etats.get(cle);
+    const [a, m] = cle.split('-').map(Number);
+    const fin = [new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10), auj].sort()[0];
+    const liste = enfants.filter((e) => e.dateNaissance <= fin && jourKinshasa(e.createdAt) <= fin).map((e) => {
+      const carnet = vaccination.calendrier(e.dateNaissance, e.vaccinationsValides().filter((v) => v.date <= fin), fin);
+      const statut = new Map(carnet.doses.map((d) => [d.code, d.statut]));
+      const vaccinsCarnet = carnet.doses.filter((d) => vaccins.has(d.code));
+      const ageMois = (Date.parse(fin) - Date.parse(e.dateNaissance)) / (30.44 * JOUR);
+      return {
+        statut,
+        aJour: vaccinsCarnet.every((d) => ['Faite', 'À venir'].includes(d.statut)),
+        sousVaccine: vaccinsCarnet.some((d) => DOSE_ECHUE.includes(d.statut)),
+        penta3Echue: statut.get('penta1') === 'Faite' && !['À venir', 'À faire'].includes(statut.get('penta3')),
+        complet: carnet.resume.completementVaccine,
+        cohorte12a23: ageMois >= 12 && ageMois < 24,
+      };
+    });
+    etats.set(cle, liste);
+    return liste;
+  };
+  const enEtat = (cle, garder) => etatDu(cle).filter(garder).length;
+
+  const moisDose = (v) => v.date.slice(0, 7);
+  const enfantsAyantRecu = (cle, garder) => doses.filter(({ faites }) => faites.some((v) => moisDose(v) === cle && garder(v))).length;
+  const recu = (code) => (cle) => enfantsAyantRecu(cle, (v) => v.code === code);
+  // Calendrier terminé : dernière dose requise (vaccins jusqu'à 9 mois) faite dans le mois.
+  const terminePar = doses.map(({ e, faites }) => {
+    const dates = requisComplet.map((code) => faites.find((v) => v.code === code)?.date);
+    return dates.every(Boolean) ? dates.sort().at(-1).slice(0, 7) : null;
+  });
+  // Doses manquées : échéance (date prévue + tolérance) dans le mois, non faite à l'échéance.
+  const manquees = [];
+  for (const e of enfants) {
+    for (const d of carnetsActuels.get(e.id)?.doses ?? []) {
+      if (!vaccins.has(d.code)) continue;
+      const echeance = new Date(Date.parse(d.datePrevue) + vaccination.TOLERANCE_JOURS * JOUR).toISOString().slice(0, 10);
+      if (echeance >= auj || (d.administration && d.administration.date <= echeance)) continue;
+      manquees.push(echeance.slice(0, 7));
+    }
+  }
+  const tachesDuMois = (cle, garder) => new Set(taches.filter((t) => garder(t, cle)).map((t) => id(t.enfantId))).size;
+  const retrouves = (cle) => tachesDuMois(cle, (t, c) => t.contactEtabliLe && moisDe(t.contactEtabliLe) === c);
+  const reintegres = (cle) => tachesDuMois(cle, (t, c) => t.statut === 'Réintégration confirmée' && moisDe(t.statutLe) === c);
+  const clotureesSans = (cle) => tachesDuMois(cle, (t, c) => t.statut === 'Clôturée sans réintégration' && moisDe(t.statutLe) === c);
+  const zeroDose = (x) => DOSE_ECHUE.includes(x.statut.get('penta1'));
+  const abandon = (x) => x.penta3Echue && x.statut.get('penta3') !== 'Faite';
+  const libelleDose = (code) => vaccination.PAR_CODE.get(code).libelle;
+  const ligne = (code, libelle, groupe, unite, compter, extra = {}) => ({ code, libelle, groupe, unite, repere: '', compter, ...extra });
+  const ACT = 'Enfants vaccinés dans le mois';
+  const ETAT = 'Statut vaccinal (fin du mois)';
+  const REL = 'Relance et suivi';
+  const COUV = 'Couverture par antigène';
+  const TAUX = 'Taux';
+
+  res.json(reponseMensuelle(fenetre, [
+    ligne('vacEnfants', 'Enfants enregistrés en vaccination', ETAT, 'enfant(s)', (c) => etatDu(c).length, { repere: 'Suivis à la fin du mois' }),
+    ...DOSES_VACCINATION.map((code) => ligne(`vac_${code}`, `Ont reçu le ${libelleDose(code)}`, ACT, 'enfant(s)', recu(code))),
+    ligne('vacRota', 'Antirotavirus selon le calendrier', ACT, 'enfant(s)', recu('rota3'), { repere: 'Série complète (Rota 3) reçue' }),
+    ligne('vacRougeole', 'Rougeole selon le calendrier', ACT, 'enfant(s)', (c) => doses.filter(({ e, faites }) => faites.some((v) => v.code === 'var1' && moisDose(v) === c
+      && v.date >= vaccination.dateAge(e.dateNaissance, { mois: 9 }))).length, { repere: 'RR1 reçu à 9 mois ou plus' }),
+    ligne('vacAJour', 'À jour pour leur âge', ETAT, 'enfant(s)', (c) => enEtat(c, (x) => x.aJour), { repere: 'Tous les vaccins échus faits' }),
+    ligne('vacZeroDose', 'Enfants zéro dose', ETAT, 'enfant(s)', (c) => enEtat(c, zeroDose), { repere: 'Penta1 échu non reçu', sens: 'baisse' }),
+    ligne('vacSousVaccines', 'Enfants sous-vaccinés', ETAT, 'enfant(s)', (c) => enEtat(c, (x) => x.sousVaccine), { repere: 'Au moins un vaccin en retard', sens: 'baisse' }),
+    ligne('vacAbandons', 'Abandons de la vaccination', ETAT, 'enfant(s)', (c) => enEtat(c, abandon), { repere: 'Penta1 reçu, Penta3 échu non reçu', sens: 'baisse' }),
+    ligne('vacRetrouves', 'Retrouvés par les RECO', REL, 'enfant(s)', retrouves, { repere: 'Contact établi (relance vaccination)' }),
+    ligne('vacReintegres', 'Réintégrés dans le calendrier', REL, 'enfant(s)', reintegres, { repere: 'Réintégration confirmée' }),
+    ligne('vacTermines', 'Calendrier vaccinal terminé', REL, 'enfant(s)', (c) => terminePar.filter((m) => m === c).length, { repere: 'Dernier vaccin jusqu’à 9 mois reçu' }),
+    ligne('vacDoses', 'Doses administrées', REL, 'dose(s)', (c) => doses.reduce((s, { faites }) => s + faites.filter((v) => moisDose(v) === c).length, 0), { repere: 'Vaccins (hors vitamine A, mébendazole)' }),
+    ligne('vacDosesManquees', 'Doses manquées', REL, 'dose(s)', (c) => manquees.filter((m) => m === c).length, { repere: `Non faites ${vaccination.TOLERANCE_JOURS} j après la date prévue`, sens: 'baisse' }),
+    ligne('vacRdvManques', 'Rendez-vous vaccinaux manqués', REL, 'rendez-vous', (c) => rdvs.filter((r) => moisDe(r.date) === c).length, { repere: 'Passés, ni effectués ni annulés', sens: 'baisse' }),
+    ...COUVERTURE_VACCINATION.map((code) => ligne(`couv_${code}`, `Couverture ${libelleDose(code)}`, COUV, '%', (c) => {
+      const eligibles = etatDu(c).filter((x) => !['À venir', 'À faire', undefined].includes(x.statut.get(code)));
+      return taux(eligibles.filter((x) => x.statut.get(code) === 'Faite').length, eligibles.length);
+    }, { repere: 'Reçu ÷ en âge de l’avoir reçu' })),
+    ligne('tauxAbandonPenta', 'Taux d’abandon Penta1-Penta3', TAUX, '%', (c) => taux(enEtat(c, abandon), enEtat(c, (x) => x.penta3Echue)), { repere: 'Sans Penta3 ÷ Penta1 reçu, Penta3 échu', sens: 'baisse' }),
+    ligne('tauxReintegration', 'Taux de réintégration vaccinale', TAUX, '%', (c) => taux(reintegres(c), reintegres(c) + clotureesSans(c)), { repere: 'Réintégrés ÷ relances clôturées' }),
+    ligne('tauxAchevement', 'Taux d’achèvement du calendrier', TAUX, '%', (c) => taux(enEtat(c, (x) => x.cohorte12a23 && x.complet), enEtat(c, (x) => x.cohorte12a23)), { repere: 'Complètement vaccinés ÷ enfants de 12 à 23 mois' }),
+  ]));
+};
+
+/** Premier instant du mois `cle` (AAAA-MM) et du mois suivant, à Kinshasa. */
+const bornesMois = (cle) => {
+  const [a, m] = cle.split('-').map(Number);
+  return [instantJour(`${cle}-01`), instantJour(new Date(Date.UTC(a, m, 1)).toISOString().slice(0, 10))];
+};
+
+/**
+ * Tâches de relance de l'établissement de connexion utiles à la fenêtre mensuelle (hors doublons
+ * annulés), avec leurs actions et visites. Bénéficiaire : personne relancée (patiente, enfant ou
+ * personne déclarée) ; ménage : la mère (patiente ou mère de l'enfant), ou le foyer déclaré (nom et
+ * quartier). Avec un filtre province / aire de santé, seules les tâches des patientes retenues (et
+ * de leurs enfants) comptent.
+ */
+async function relanceMensuelle(req, fenetre, filtreTache = {}) {
+  const debut = instantJour(`${fenetre.cles[0]}-01`);
+  const filtre = !!(req.query.province || req.query.aire);
+  const [tachesToutes, enfants] = await Promise.all([
+    TacheRelance.find({
+      ...filtreTerritoire(req), ...filtreTache, statut: { $ne: 'Doublon annulé' },
+      $or: [{ ouverte: true }, { statutLe: { $gte: debut } }, { createdAt: { $gte: debut } }, { 'confirmation.le': { $gte: debut } }],
+    }).select('personneType source patienteId enfantId declaree recoId ouverte statut statutLe createdAt contactEtabliLe '
+      + 'actions.type actions.resultat actions.le actions.par.id actions.conflit visites orientation.le confirmation.le resolution.le').lean(),
+    Enfant.find({ mereId: { $in: fenetre.ids } }).select('mereId').lean(),
+  ]);
+  const mereDe = new Map(enfants.map((e) => [id(e._id), id(e.mereId)]));
+  const retenues = new Set(fenetre.ids.map(id));
+  const taches = tachesToutes.filter((t) => !filtre || retenues.has(id(t.patienteId)) || mereDe.has(id(t.enfantId)));
+  const beneficiaire = (t) => (t.enfantId ? `E:${id(t.enfantId)}` : t.patienteId ? `P:${id(t.patienteId)}` : `D:${t.declaree?.nom ?? ''}|${t.declaree?.quartier ?? ''}`.toLowerCase());
+  return {
+    taches,
+    beneficiaire,
+    menage: (t) => (t.patienteId ? `P:${id(t.patienteId)}` : t.enfantId ? `P:${mereDe.get(id(t.enfantId)) ?? id(t.enfantId)}` : beneficiaire(t)),
+    actions: taches.flatMap((t) => (t.actions ?? []).filter((a) => !a.conflit).map((a) => ({ ...a, t, mois: moisDe(a.le) }))),
+    visites: taches.flatMap((t) => (t.visites ?? []).map((v) => ({ ...v, mois: moisDe(v.prevueLe) }))),
+    /** Tâches actives pendant le mois : créées avant sa fin, encore ouvertes à son début. */
+    actives: (cle) => {
+      const [d, f] = bornesMois(cle);
+      return taches.filter((t) => t.createdAt < f && (t.ouverte || (t.resolution?.le ?? t.statutLe) >= d));
+    },
+  };
+}
+
+const distincts = (liste, cle) => new Set(liste.map(cle)).size;
+
+/**
+ * Module communautaire RECO d'un mois — A. indicateurs transversaux (12) : RECO et tâches de
+ * relance de l'établissement de connexion (voir relanceMensuelle) ; avec un filtre d'aire de
+ * santé, les RECO de l'aire choisie.
+ */
+exports.recoMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const maintenant = new Date();
+  const aire = req.query.aire ? texte(req.query.aire, 120) : '';
+  const [recos, relance] = await Promise.all([
+    Reco.find({ ...filtreTerritoire(req), ...(aire ? { aireSante: aire } : {}) }).select('createdAt').lean(),
+    relanceMensuelle(req, fenetre),
+  ]);
+  const { taches, beneficiaire, menage, actions, visites } = relance;
+  const bornes = bornesMois;
+  // Tâches suivies par un RECO pendant le mois : actives et attribuées.
+  const suivies = (cle) => relance.actives(cle).filter((t) => t.recoId);
+  const realisees = (cle) => actions.filter((a) => a.mois === cle && a.type === 'visite_realisee');
+  const planifieesEchues = (cle) => visites.filter((v) => v.mois === cle && v.prevueLe < maintenant);
+  const ligne = (code, libelle, groupe, unite, compter, extra = {}) => ({ code, libelle, groupe, unite, repere: '', compter, ...extra });
+  const RECO = 'RECO et bénéficiaires';
+  const VIS = 'Visites à domicile';
+  const REF = 'Retrouvés et références';
+
+  res.json(reponseMensuelle(fenetre, [
+    ligne('recoEnregistres', 'RECO enregistrés', RECO, 'RECO', (c) => recos.filter((r) => r.createdAt < bornes(c)[1]).length, { repere: 'Comptes créés à la fin du mois' }),
+    ligne('recoActifs', 'RECO actifs', RECO, 'RECO', (c) => distincts(actions.filter((a) => a.mois === c && a.par?.id), (a) => a.par.id), { repere: 'Au moins une action dans le mois' }),
+    ligne('recoMenages', 'Ménages suivis', RECO, 'ménage(s)', (c) => distincts(suivies(c), menage), { repere: 'Foyer de la mère ou foyer déclaré' }),
+    ligne('recoBeneficiaires', 'Bénéficiaires suivis', RECO, 'personne(s)', (c) => distincts(suivies(c), beneficiaire), { repere: 'Relance attribuée à un RECO' }),
+    ligne('recoVisitesRealisees', 'Visites réalisées', VIS, 'visite(s)', (c) => realisees(c).length),
+    ligne('recoVisitesPlanifiees', 'Visites planifiées', VIS, 'visite(s)', (c) => visites.filter((v) => v.mois === c).length, { repere: 'Prévues dans le mois' }),
+    ligne('recoVisitesNonRealisees', 'Visites non réalisées', VIS, 'visite(s)', (c) => planifieesEchues(c).filter((v) => !v.realiseeLe).length, { repere: 'Date prévue passée, sans visite', sens: 'baisse' }),
+    ligne('recoAbsents', 'Bénéficiaires absents lors des visites', VIS, 'personne(s)', (c) => distincts(realisees(c).filter((a) => a.resultat === 'Absente du domicile'), (a) => beneficiaire(a.t)), { sens: 'baisse' }),
+    ligne('recoRetrouves', 'Bénéficiaires retrouvés', REF, 'personne(s)', (c) => distincts(taches.filter((t) => t.contactEtabliLe && moisDe(t.contactEtabliLe) === c), beneficiaire), { repere: 'Contact établi dans le mois' }),
+    ligne('recoReferences', 'Références communautaires', REF, 'référence(s)', (c) => taches.filter((t) => t.orientation?.le && moisDe(t.orientation.le) === c).length, { repere: 'Orientations vers une structure' }),
+    ligne('recoReferesRecus', 'Référés effectivement reçus', REF, 'personne(s)', (c) => distincts(taches.filter((t) => t.orientation && t.confirmation?.le && moisDe(t.confirmation.le) === c), beneficiaire), { repere: 'Venue confirmée par la structure' }),
+    ligne('recoTauxVisites', 'Taux de réalisation des visites', 'Taux', '%', (c) => taux(planifieesEchues(c).filter((v) => v.realiseeLe).length, planifieesEchues(c).length), { repere: 'Visites prévues réalisées ÷ prévues échues' }),
+  ]));
+};
+
+/**
+ * Lignes de chaque parcours de relance (B. RAC, C. ARC, D. RPC, E. IRC, F. TCC), calculées sur les
+ * mesures communes `m` du mois `c`. « Cas » : tâches ; « bénéficiaires », « femmes » : personnes
+ * distinctes. Les définitions opérationnelles sont celles des fiches de paramétrage des parcours.
+ */
+const LIGNES_PARCOURS = {
+  RAC: (m) => [
+    m.ligne('racAbandons', 'Femmes identifiées en abandon de CPN', 'Identification', 'femme(s)', (c) => m.personnes(m.identifiees(c).filter((t) => t.source !== 'RECO' && t.personneType === 'Patiente')), { repere: 'Relances détectées dans le mois' }),
+    m.ligne('racJamaisCpn', 'Jamais commencé la CPN, identifiées par les RECO', 'Identification', 'femme(s)', (c) => m.personnes(m.identifiees(c).filter((t) => (t.source === 'RECO' || t.personneType === 'Déclarée') && !m.cpnAvant(t))), { repere: 'Signalées par un RECO, sans CPN' }),
+    m.ligne('racARelancer', 'Femmes à relancer', 'Identification', 'femme(s)', (c) => m.personnes(m.actives(c)), { repere: 'Relance active dans le mois' }),
+    m.ligne('racContactees', 'Femmes contactées', 'Relance', 'femme(s)', (c) => m.personnes(m.contactees(c)), { repere: 'Appel ou visite tenté' }),
+    m.ligne('racRetrouvees', 'Femmes retrouvées', 'Relance', 'femme(s)', (c) => m.personnes(m.retrouvees(c)), { repere: 'Contact établi dans le mois' }),
+    m.ligne('racSensibilisees', 'Femmes sensibilisées', 'Relance', 'femme(s)', (c) => m.personnes(m.jointes(c)), { repere: 'Jointe ou rencontrée par le RECO' }),
+    m.ligne('racOrientees', 'Orientées vers une structure', 'Relance', 'femme(s)', (c) => m.personnes(m.orientees(c))),
+    m.ligne('racRevenues', 'Femmes revenues en CPN', 'Issue', 'femme(s)', (c) => m.personnes(m.reintegrees(c)), { repere: 'Retour confirmé par la structure' }),
+    m.ligne('racPerdues', 'Femmes toujours perdues de vue', 'Issue', 'femme(s)', (c) => m.personnes(m.perdues(c)), { repere: 'Non retrouvée ou clôturée sans retour', sens: 'baisse' }),
+    m.ligne('racTauxRelance', 'Taux de relance', 'Taux', '%', (c) => taux(m.personnes(m.contactees(c)), m.personnes(m.actives(c))), { repere: 'Contactées ÷ à relancer' }),
+    m.ligne('racTauxReintegration', 'Taux de réintégration CPN', 'Taux', '%', (c) => taux(m.personnes(m.reintegrees(c)), m.personnes(m.actives(c))), { repere: 'Revenues ÷ à relancer' }),
+    m.ligne('racTauxAbandon', 'Taux d’abandon CPN', 'Taux', '%', (c) => taux(m.personnes(m.identifiees(c).filter((t) => t.source !== 'RECO' && t.personneType === 'Patiente')), m.femmesEnCpn(c)), { repere: 'Abandons identifiés ÷ femmes en suivi CPN', sens: 'baisse' }),
+  ],
+  ARC: (m) => [
+    m.ligne('arcIdentifies', 'Cas identifiés (définition ARC)', 'Cas', 'cas', (c) => m.identifiees(c).length, { repere: m.definition }),
+    m.ligne('arcAContacter', 'Cas à contacter', 'Cas', 'cas', (c) => m.aContacter(c).length, { repere: 'Actifs, sans contact au début du mois' }),
+    m.ligne('arcContactes', 'Cas contactés', 'Suivi', 'cas', (c) => m.contactees(c).length),
+    m.ligne('arcRetrouves', 'Cas retrouvés', 'Suivi', 'cas', (c) => m.retrouvees(c).length),
+    m.ligne('arcOrientes', 'Cas orientés', 'Suivi', 'cas', (c) => m.orientees(c).length),
+    m.ligne('arcIntervention', 'Cas ayant bénéficié d’une intervention', 'Suivi', 'cas', (c) => m.intervention(c).length, { repere: 'Contact, visite ou orientation' }),
+    m.ligne('arcResolus', 'Cas résolus', 'Issue', 'cas', (c) => m.reintegrees(c).length, { repere: 'Réintégration confirmée' }),
+    m.ligne('arcNonResolus', 'Cas non résolus', 'Issue', 'cas', (c) => m.sansReintegration(c).length, { repere: 'Clôturés sans réintégration', sens: 'baisse' }),
+    m.ligne('arcTauxResolution', 'Taux de résolution', 'Taux', '%', (c) => taux(m.reintegrees(c).length, m.reintegrees(c).length + m.sansReintegration(c).length), { repere: 'Résolus ÷ cas clôturés' }),
+    m.ligne('arcTauxSuivi', 'Taux de suivi des cas', 'Taux', '%', (c) => taux(m.contactees(c).length, m.aContacter(c).length), { repere: 'Contactés ÷ à contacter' }),
+  ],
+  RPC: (m) => [
+    m.ligne('rpcIdentifies', 'Cas identifiés (définition RPC)', 'Cas', 'cas', (c) => m.identifiees(c).length, { repere: m.definition }),
+    m.ligne('rpcConcernes', 'Bénéficiaires concernés', 'Cas', 'personne(s)', (c) => m.personnes(m.actives(c)), { repere: 'Relance active dans le mois' }),
+    m.ligne('rpcContactes', 'Bénéficiaires contactés', 'Suivi', 'personne(s)', (c) => m.personnes(m.contactees(c))),
+    m.ligne('rpcVisites', 'Visites réalisées', 'Suivi', 'visite(s)', (c) => m.visitesRealisees(c)),
+    m.ligne('rpcReferences', 'Références effectuées', 'Suivi', 'référence(s)', (c) => m.orientees(c).length),
+    m.ligne('rpcPrisEnCharge', 'Bénéficiaires pris en charge', 'Issue', 'personne(s)', (c) => m.personnes(m.confirmees(c)), { repere: 'Venue confirmée par la structure' }),
+    m.ligne('rpcClotures', 'Cas clôturés', 'Issue', 'cas', (c) => m.cloturees(c).length),
+    m.ligne('rpcEnAttente', 'Cas en attente', 'Issue', 'cas', (c) => m.enAttente(c).length, { repere: 'Ouverts à la fin du mois' }),
+    m.ligne('rpcTauxPriseEnCharge', 'Taux de prise en charge', 'Taux', '%', (c) => taux(m.personnes(m.confirmees(c)), m.personnes(m.actives(c))), { repere: 'Pris en charge ÷ concernés' }),
+    m.ligne('rpcTauxCloture', 'Taux de clôture des cas', 'Taux', '%', (c) => taux(m.cloturees(c).length, m.actives(c).length), { repere: 'Clôturés ÷ cas actifs du mois' }),
+  ],
+  IRC: (m) => [
+    m.ligne('ircIdentifies', 'Cas identifiés (définition IRC)', 'Cas', 'cas', (c) => m.identifiees(c).length, { repere: m.definition }),
+    m.ligne('ircConcernes', 'Bénéficiaires concernés', 'Cas', 'personne(s)', (c) => m.personnes(m.actives(c)), { repere: 'Relance active dans le mois' }),
+    m.ligne('ircContactes', 'Bénéficiaires contactés', 'Suivi', 'personne(s)', (c) => m.personnes(m.contactees(c))),
+    m.ligne('ircRetrouves', 'Bénéficiaires retrouvés', 'Suivi', 'personne(s)', (c) => m.personnes(m.retrouvees(c))),
+    m.ligne('ircOrientes', 'Bénéficiaires orientés', 'Suivi', 'personne(s)', (c) => m.personnes(m.orientees(c))),
+    m.ligne('ircReintegres', 'Bénéficiaires réintégrés', 'Issue', 'personne(s)', (c) => m.personnes(m.reintegrees(c)), { repere: 'Réintégration confirmée' }),
+    m.ligne('ircSuivis', 'Cas suivis', 'Issue', 'cas', (c) => m.suivis(c).length, { repere: 'Au moins une action du RECO' }),
+    m.ligne('ircClotures', 'Cas clôturés', 'Issue', 'cas', (c) => m.cloturees(c).length),
+    m.ligne('ircTauxReintegration', 'Taux de réintégration', 'Taux', '%', (c) => taux(m.personnes(m.reintegrees(c)), m.personnes(m.actives(c))), { repere: 'Réintégrés ÷ concernés' }),
+    m.ligne('ircTauxSuivi', 'Taux de suivi des cas', 'Taux', '%', (c) => taux(m.suivis(c).length, m.actives(c).length), { repere: 'Cas suivis ÷ cas actifs du mois' }),
+  ],
+  TCC: (m) => [
+    m.ligne('tccIdentifies', 'Cas identifiés (définition TCC)', 'Cas', 'cas', (c) => m.identifiees(c).length, { repere: m.definition }),
+    m.ligne('tccConcernes', 'Bénéficiaires concernés', 'Cas', 'personne(s)', (c) => m.personnes(m.actives(c)), { repere: 'Relance active dans le mois' }),
+    m.ligne('tccContactes', 'Bénéficiaires contactés', 'Suivi', 'personne(s)', (c) => m.personnes(m.contactees(c))),
+    m.ligne('tccVisites', 'Visites effectuées', 'Suivi', 'visite(s)', (c) => m.visitesRealisees(c)),
+    m.ligne('tccOrientes', 'Bénéficiaires orientés', 'Suivi', 'personne(s)', (c) => m.personnes(m.orientees(c))),
+    m.ligne('tccSuivis', 'Bénéficiaires ayant bénéficié d’un suivi', 'Suivi', 'personne(s)', (c) => m.personnes(m.intervention(c)), { repere: 'Contact, visite ou orientation' }),
+    m.ligne('tccResolus', 'Cas résolus', 'Issue', 'cas', (c) => m.reintegrees(c).length, { repere: 'Réintégration confirmée' }),
+    m.ligne('tccEnAttente', 'Cas en attente', 'Issue', 'cas', (c) => m.enAttente(c).length, { repere: 'Ouverts à la fin du mois' }),
+    m.ligne('tccTauxResolution', 'Taux de résolution', 'Taux', '%', (c) => taux(m.reintegrees(c).length, m.cloturees(c).length), { repere: 'Résolus ÷ cas clôturés' }),
+    m.ligne('tccTauxSuivi', 'Taux de suivi', 'Taux', '%', (c) => taux(m.personnes(m.intervention(c)), m.personnes(m.actives(c))), { repere: 'Suivis ÷ concernés' }),
+  ],
+};
+const ACTIONS_CONTACT = ['tentative', 'visite_realisee'];
+const CLOTURES_VALIDES = ['Réintégration confirmée', 'Clôturée sans réintégration'];
+
+/**
+ * Parcours de relance d'un mois (tâches dont le parcoursCode est `code`) : mesures communes datées
+ * de l'action (contact, visite, orientation, confirmation, clôture), puis lignes du parcours.
+ */
+const parcoursMensuel = (code) => async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const [relance, fiche] = await Promise.all([
+    relanceMensuelle(req, fenetre, { parcoursCode: code }),
+    ParcoursRelance.findOne({ code }).select('statut libelle').lean(),
+  ]);
+  const { taches, beneficiaire, actions } = relance;
+  // RAC : CPN finalisées des patientes (jamais commencé la CPN, femmes en suivi CPN).
+  const cpn = code === 'RAC'
+    ? await Consultation.find({ patienteId: { $in: fenetre.ids }, statut: 'Finalisée', type: { $in: TYPES_CPN } }).select('patienteId grossesseId date').lean()
+    : [];
+  const grossesses = code === 'RAC' ? await Grossesse.find({ patienteId: { $in: fenetre.ids } }).select('patienteId statut createdAt issue.date').lean() : [];
+  const dansMois = (d, c) => !!d && moisDe(d) === c;
+  const clotureLe = (t) => (t.ouverte ? null : t.resolution?.le ?? t.statutLe);
+  const tachesAvecAction = (c, garder) => {
+    const ids_ = new Set(actions.filter((a) => a.mois === c && garder(a)).map((a) => a.t));
+    return taches.filter((t) => ids_.has(t));
+  };
+  const m = {
+    definition: fiche?.statut === 'Validé' ? 'Définition validée (fiche du parcours)' : 'Définition à valider (fiche du parcours)',
+    ligne: (code_, libelle, groupe, unite, compter, extra = {}) => ({ code: code_, libelle, groupe, unite, repere: '', compter, ...extra }),
+    personnes: (liste) => distincts(liste, beneficiaire),
+    actives: relance.actives,
+    identifiees: (c) => taches.filter((t) => dansMois(t.createdAt, c)),
+    contactees: (c) => tachesAvecAction(c, (a) => ACTIONS_CONTACT.includes(a.type)),
+    jointes: (c) => tachesAvecAction(c, (a) => RESULTATS_CONTACT.includes(a.resultat)),
+    suivis: (c) => tachesAvecAction(c, () => true),
+    intervention: (c) => [...new Set([...tachesAvecAction(c, (a) => RESULTATS_CONTACT.includes(a.resultat) || a.type === 'orientation'), ...m.orientees(c)])],
+    visitesRealisees: (c) => actions.filter((a) => a.mois === c && a.type === 'visite_realisee').length,
+    retrouvees: (c) => taches.filter((t) => dansMois(t.contactEtabliLe, c)),
+    orientees: (c) => taches.filter((t) => dansMois(t.orientation?.le, c)),
+    confirmees: (c) => taches.filter((t) => dansMois(t.confirmation?.le, c)),
+    reintegrees: (c) => taches.filter((t) => t.statut === 'Réintégration confirmée' && dansMois(t.confirmation?.le ?? clotureLe(t), c)),
+    sansReintegration: (c) => taches.filter((t) => t.statut === 'Clôturée sans réintégration' && dansMois(clotureLe(t), c)),
+    perdues: (c) => taches.filter((t) => (t.statut === 'Non retrouvée' && dansMois(t.statutLe, c)) || (t.statut === 'Clôturée sans réintégration' && dansMois(clotureLe(t), c))),
+    cloturees: (c) => taches.filter((t) => CLOTURES_VALIDES.includes(t.statut) && dansMois(clotureLe(t), c)),
+    enAttente: (c) => {
+      const fin = bornesMois(c)[1];
+      return taches.filter((t) => t.createdAt < fin && (t.ouverte || clotureLe(t) >= fin));
+    },
+    aContacter: (c) => {
+      const debut = bornesMois(c)[0];
+      return relance.actives(c).filter((t) => !t.contactEtabliLe || t.contactEtabliLe >= debut);
+    },
+    cpnAvant: (t) => !!t.patienteId && cpn.some((x) => id(x.patienteId) === id(t.patienteId) && x.date < t.createdAt),
+    /** Femmes dont une grossesse est en cours pendant le mois, avec au moins une CPN avant sa fin. */
+    femmesEnCpn: (c) => {
+      const [debut, fin] = bornesMois(c);
+      const enCours = grossesses.filter((g) => g.createdAt < fin && (g.statut === 'En cours' || (g.issue?.date && instantJour(g.issue.date) >= debut)));
+      return new Set(enCours.filter((g) => cpn.some((x) => id(x.grossesseId) === id(g._id) && x.date < fin)).map((g) => id(g.patienteId))).size;
+    },
+  };
+  res.json({ ...reponseMensuelle(fenetre, LIGNES_PARCOURS[code](m)), parcours: { code, libelle: fiche?.libelle ?? '', statut: fiche?.statut ?? 'À valider' } });
+};
+
+exports.racMensuel = parcoursMensuel('RAC');
+exports.arcMensuel = parcoursMensuel('ARC');
+exports.rpcMensuel = parcoursMensuel('RPC');
+exports.ircMensuel = parcoursMensuel('IRC');
+exports.tccMensuel = parcoursMensuel('TCC');
+
+/** Soins essentiels du nouveau-né (SENN) : tous notés « Oui ». */
+const soinsEssentiels = (n = {}) => n.senn?.maintienTemperature === true && n.senn?.crede === true && n.miseAuSeinMoins1h === true
+  && n.traitement?.vitamineK1 === true && (n.soinsCordon?.lameSterile === true || n.soinsCordon?.filSterile === true);
+
+/**
+ * Module Nouveau-né et suivi postnatal d'un mois (14 indicateurs) : cohorte des enfants nés vivants
+ * dans le mois (toutes origines), rattachée à son mois de naissance. Consultations postnatales
+ * (CPoN) : visites de suivi de l'enfant et consultations « Postnatal » de la mère dans les 42 jours,
+ * une par jour ; la k-ième est la CPoN k. Une CPoN est attendue quand son délai (J3, J7, 6 semaines)
+ * est écoulé ou qu'elle a déjà été faite. Décès et référence n'ont ni date ni motif : statut seul.
+ */
+exports.nouveauNesMensuel = async (req, res) => {
+  const fenetre = await fenetreMensuelle(req);
+  const debut = instantJour(`${fenetre.cles[0]}-01`);
+  const ids = { $in: fenetre.ids };
+  const enfants = await Enfant.find({ mereId: ids, neLe: { $gte: debut }, etatNaissance: 'Vivant' })
+    .select('mereId grossesseId sexe neLe dateNaissance statut naissance suivis.date').lean();
+  const [grossesses, postnatales] = await Promise.all([
+    Grossesse.find({ _id: { $in: enfants.map((e) => e.grossesseId).filter(Boolean) } }).select('datation').lean(),
+    Consultation.find({ patienteId: { $in: enfants.map((e) => e.mereId) }, statut: 'Finalisée', type: 'Postnatal', date: { $gte: debut } })
+      .select('patienteId grossesseId date').lean(),
+  ]);
+  const datationDe = new Map(grossesses.map((g) => [id(g._id), g.datation]));
+  const auj = jourKinshasa(new Date());
+  const ecartJours = (de, a) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`)) / JOUR);
+  const limites = [PARAMETRES.cpon1Jours, PARAMETRES.cpon2Jours, PARAMETRES.cpon3Jours];
+
+  const cohorte = enfants.map((e) => {
+    const d = datationDe.get(id(e.grossesseId));
+    const ag = d ? d.agReferenceJours + ecartJours(d.dateReference, e.dateNaissance) : null;
+    const dansFenetre = (jourIso) => { const j = ecartJours(e.dateNaissance, jourIso); return j >= 0 && j <= PARAMETRES.cpon3Jours; };
+    const jours = new Set([
+      ...(e.suivis ?? []).map((s) => s.date),
+      ...postnatales.filter((c) => id(c.patienteId) === id(e.mereId) && (!e.grossesseId || id(c.grossesseId) === id(e.grossesseId))).map((c) => jourKinshasa(c.date)),
+    ].filter(dansFenetre));
+    const realisees = Math.min(jours.size, limites.length);
+    const age = ecartJours(e.dateNaissance, auj);
+    return {
+      mois: jourKinshasa(e.neLe).slice(0, 7), sexe: e.sexe, poids: e.naissance?.poidsG ?? null,
+      premature: ag != null && ag < SEUIL_PREMATURE_JOURS, senn: soinsEssentiels(e.naissance),
+      realisees, attendues: limites.filter((l, i) => i < realisees || age > l).length,
+      fenetreEcoulee: age > PARAMETRES.cpon3Jours,
+      refere: e.statut === 'Transféré', decede: e.statut === 'Décédé',
+    };
+  });
+
+  const duMois = (cle) => cohorte.filter((e) => e.mois === cle);
+  const compte = (cle, garder) => duMois(cle).filter(garder).length;
+  const somme = (cle, champ) => duMois(cle).reduce((s, e) => s + e[champ], 0);
+  const faiblePoids = (e) => e.poids != null && e.poids < PARAMETRES.faiblePoidsG;
+  const complet = (e) => e.realisees >= limites.length;
+  const ligne = (code, libelle, groupe, unite, compter, extra = {}) => ({ code, libelle, groupe, unite, repere: '', compter, ...extra });
+  const NN = 'Nouveau-nés';
+  const CPON = 'Suivi postnatal';
+  const REF = 'Références et décès';
+  const TAUX = 'Taux';
+
+  res.json(reponseMensuelle(fenetre, [
+    ligne('nnTotal', 'Nouveau-nés enregistrés', NN, 'nouveau-né(s)', (c) => duMois(c).length, { repere: 'Nés vivants dans le mois' }),
+    ligne('nnMasculin', 'Sexe masculin', NN, 'nouveau-né(s)', (c) => compte(c, (e) => e.sexe === 'Masculin')),
+    ligne('nnFeminin', 'Sexe féminin', NN, 'nouveau-né(s)', (c) => compte(c, (e) => e.sexe === 'Féminin')),
+    ligne('nnFaiblePoids', 'Faible poids de naissance', NN, 'nouveau-né(s)', (c) => compte(c, faiblePoids), { repere: `Moins de ${PARAMETRES.faiblePoidsG} g`, sens: 'baisse' }),
+    ligne('nnPrematures', 'Prématurés', NN, 'nouveau-né(s)', (c) => compte(c, (e) => e.premature), { repere: 'Moins de 37 SA (grossesse datée)', sens: 'baisse' }),
+    ligne('nnSoinsEssentiels', 'Soins essentiels reçus', NN, 'nouveau-né(s)', (c) => compte(c, (e) => e.senn), { repere: 'Température, cordon, sein < 1 h, Crédé, vitamine K1' }),
+    ligne('cponNouveauNes', 'Nouveau-nés vus en CPoN', CPON, 'nouveau-né(s)', (c) => compte(c, (e) => e.realisees > 0), { repere: `Au moins une CPoN dans les ${PARAMETRES.cpon3Jours} j` }),
+    ligne('cponAttendues', 'CPoN attendues', CPON, 'consultation(s)', (c) => somme(c, 'attendues'), { repere: `J${PARAMETRES.cpon1Jours}, J${PARAMETRES.cpon2Jours}, 6 semaines (délai écoulé)` }),
+    ligne('cponRealisees', 'CPoN réalisées', CPON, 'consultation(s)', (c) => somme(c, 'realisees'), { repere: 'Suivi de l’enfant ou CPoN de la mère' }),
+    ligne('nnReferes', 'Nouveau-nés référés', REF, 'nouveau-né(s)', (c) => compte(c, (e) => e.refere), { repere: 'Statut « Transféré » (date non enregistrée)' }),
+    ligne('nnDeces', 'Décès néonatals', REF, 'décès', (c) => compte(c, (e) => e.decede), { repere: 'Statut « Décédé » (date non enregistrée)', sens: 'baisse' }),
+    ligne('tauxCpon', 'Taux de réalisation des CPoN', TAUX, '%', (c) => taux(somme(c, 'realisees'), somme(c, 'attendues')), { repere: 'CPoN réalisées ÷ attendues' }),
+    ligne('tauxFaiblePoids', 'Taux de faible poids de naissance', TAUX, '%', (c) => taux(compte(c, faiblePoids), compte(c, (e) => e.poids != null)), { repere: 'Faible poids ÷ nouveau-nés pesés', sens: 'baisse' }),
+    ligne('tauxSuiviComplet', 'Taux de suivi postnatal complet', TAUX, '%', (c) => taux(compte(c, complet), compte(c, (e) => complet(e) || e.fenetreEcoulee)), { repere: `3 CPoN ÷ nouveau-nés de plus de ${PARAMETRES.cpon3Jours} j` }),
   ]));
 };

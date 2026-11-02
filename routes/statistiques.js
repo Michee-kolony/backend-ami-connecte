@@ -22,5 +22,19 @@ router.get('/prevention-mensuel', synthese.preventionMensuel);
 router.get('/tdr-palu-mensuel', synthese.tdrPaluMensuel);
 // Échographies 1, 2 et 3 d'un mois : ?mois=AAAA-MM&province&aire.
 router.get('/echographies-mensuel', synthese.echographiesMensuel);
+// Module Accouchement d'un mois (20 indicateurs : nombres et taux) : ?mois=AAAA-MM&province&aire.
+router.get('/accouchements-mensuel', synthese.accouchementsMensuel);
+// Module Nouveau-né et suivi postnatal d'un mois (14 indicateurs) : ?mois=AAAA-MM&province&aire.
+router.get('/nouveau-nes-mensuel', synthese.nouveauNesMensuel);
+// Module Vaccination d'un mois (28 indicateurs, couverture par antigène) : ?mois=AAAA-MM&province&aire.
+router.get('/vaccination-mensuel', synthese.vaccinationMensuel);
+// Module communautaire RECO d'un mois (indicateurs transversaux) : ?mois=AAAA-MM&province&aire.
+router.get('/reco-mensuel', synthese.recoMensuel);
+// Parcours de relance d'un mois (B. RAC, C. ARC, D. RPC, E. IRC, F. TCC) : ?mois=AAAA-MM&province&aire.
+router.get('/rac-mensuel', synthese.racMensuel);
+router.get('/arc-mensuel', synthese.arcMensuel);
+router.get('/rpc-mensuel', synthese.rpcMensuel);
+router.get('/irc-mensuel', synthese.ircMensuel);
+router.get('/tcc-mensuel', synthese.tccMensuel);
 
 module.exports = router;
