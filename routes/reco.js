@@ -2,6 +2,7 @@
 const express = require('express');
 const { authentifierReco } = require('../middleware/reco');
 const ctrl = require('../controllers/espaceReco');
+const discussions = require('../controllers/discussions');
 
 const router = express.Router();
 
@@ -19,5 +20,12 @@ router.post('/synchroniser', ctrl.synchroniser);
 router.post('/signalements', ctrl.signaler);
 router.get('/alertes', ctrl.alertes);
 router.post('/alertes/:id/accuser', ctrl.accuserAlerte);
+// Messagerie avec les soignants et les chauffeurs de son établissement (discussions chiffrées).
+router.get('/contacts', discussions.contactsReco);
+router.get('/discussions', discussions.listerReco);
+router.post('/discussions', discussions.ouvrirReco);
+router.get('/discussions/:id/messages', discussions.messages);
+router.post('/discussions/:id/messages', discussions.envoyer);
+router.post('/discussions/:id/lu', discussions.marquerLu);
 
 module.exports = router;

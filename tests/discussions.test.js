@@ -34,12 +34,12 @@ async function connecter(qui) {
   return { s, recus };
 }
 
-/** Attend qu'un événement arrive (ou échoue après `ms`). */
-function attendre(recus, evenement, ms = 2000) {
+/** Attend qu'un événement arrive (ou échoue après `ms`) ; `si` : condition sur ses données. */
+function attendre(recus, evenement, ms = 2000, si = () => true) {
   return new Promise((ok, ko) => {
     const debut = Date.now();
     const t = setInterval(() => {
-      const e = recus.find((x) => x.evenement === evenement);
+      const e = recus.find((x) => x.evenement === evenement && si(x.donnees));
       if (e) { clearInterval(t); ok(e.donnees); } else if (Date.now() - debut > ms) { clearInterval(t); ko(new Error(`${evenement} non reçu`)); }
     }, 20);
   });
@@ -291,4 +291,81 @@ test('tableau de bord : liste « en ligne » limitée à l’établissement de c
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(ici.recus.filter((e) => e.evenement === 'presence').length, avant, 'aucune liste renvoyée à un autre établissement');
   assert.ok(!derniere(ici.recus, 'presence:ids').includes(comptes.ailleurs.id));
+});
+
+test('RECO ↔ médecin et chauffeur de son établissement : messages en temps réel, cloisonnement', async () => {
+  const Reco = require('../models/Reco');
+  const Chauffeur = require('../models/Chauffeur');
+  const jwt = require('jsonwebtoken');
+  const auteur = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
+  const reco = await Reco.create({ matricule: 'RECO-920001', prenom: 'Rita', nom: 'RELAIS', sexe: 'F', telephone: '000', etablissementId: 'ET-TEST', motDePasse: 'x', creePar: auteur });
+  const recoAilleurs = await Reco.create({ matricule: 'RECO-920002', prenom: 'Remy', nom: 'LOIN', sexe: 'M', telephone: '000', etablissementId: 'ET-AUTRE', motDePasse: 'x', creePar: auteur });
+  const chauffeur = await Chauffeur.create({ matricule: 'CHF-920001', prenom: 'Charles', nom: 'VOLANT', telephone: '000', etablissementId: 'ET-TEST', motDePasse: 'x', creePar: auteur });
+  const chauffeurAilleurs = await Chauffeur.create({ matricule: 'CHF-920002', prenom: 'Cyril', nom: 'ROUTE', telephone: '000', etablissementId: 'ET-AUTRE', motDePasse: 'x', creePar: auteur });
+  jetons.reco = jwt.sign({ sub: reco.id, typ: 'reco' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  jetons.chauffeur = jwt.sign({ sub: chauffeur.id, typ: 'chauffeur' }, process.env.JWT_SECRET, { expiresIn: '10m' });
+
+  // Contacts du RECO : soignants affectés à son établissement et chauffeurs de son établissement seulement.
+  const contacts = await appel('reco', 'GET', '/reco/contacts');
+  assert.equal(contacts.status, 200);
+  const ids = contacts.corps.map((c) => c.id);
+  assert.ok(ids.includes(comptes.medecin.id) && ids.includes(chauffeur.id));
+  assert.ok(!ids.includes(comptes.ailleurs.id) && !ids.includes(comptes.suspendu.id) && !ids.includes(chauffeurAilleurs.id));
+  assert.equal(contacts.corps.find((c) => c.id === chauffeur.id).role, 'Chauffeur');
+  assert.equal(contacts.corps.find((c) => c.id === comptes.medecin.id).matricule, undefined, 'pas de matricule du personnel côté RECO');
+  assert.equal((await appel('reco', 'POST', '/reco/discussions', { soignantId: comptes.ailleurs.id })).status, 404);
+  assert.equal((await appel('reco', 'POST', '/reco/discussions', { chauffeurId: chauffeurAilleurs.id })).status, 404);
+
+  // RECO → médecin, remis en temps réel au médecin, réponse remise au RECO.
+  const med = await connecter('medecin');
+  const sReco = client(base, { auth: { jeton: jetons.reco }, transports: ['websocket'], reconnection: false });
+  sockets.push(sReco);
+  const recusReco = [];
+  sReco.onAny((evenement, donnees) => recusReco.push({ evenement, donnees }));
+  await new Promise((ok, ko) => { sReco.once('presence:ids', ok); sReco.once('connect_error', ko); });
+  assert.ok(await attendre(med.recus, 'presence:recos', 2000, (ids) => ids.includes(reco.id)), 'le personnel voit le RECO en ligne');
+
+  const o = await appel('reco', 'POST', '/reco/discussions', { soignantId: comptes.medecin.id });
+  assert.equal(o.status, 201);
+  assert.equal(o.corps.interlocuteur.prenom, 'Marie');
+  const envoi = await appel('reco', 'POST', `/reco/discussions/${o.corps.id}/messages`, { texte: 'Bonjour docteur, la maman du quartier Lemba est absente.' });
+  assert.equal(envoi.status, 201);
+  assert.equal((await attendre(med.recus, 'discussion:message')).texte, 'Bonjour docteur, la maman du quartier Lemba est absente.');
+
+  const listeMed = await appel('medecin', 'GET', '/discussions');
+  const vue = listeMed.corps.find((d) => d.id === o.corps.id);
+  assert.equal(vue.interlocuteur.role, 'RECO');
+  assert.equal(vue.nonLus, 1);
+  assert.equal((await appel('medecin', 'POST', `/discussions/${o.corps.id}/messages`, { texte: 'Merci, je la rappelle.' })).status, 201);
+  // Le RECO reçoit aussi ses propres messages (tous ses appareils) : on attend la réponse du médecin.
+  const reponse = await attendre(recusReco, 'discussion:message', 2000, (m) => m.auteurId === comptes.medecin.id);
+  assert.equal(reponse.texte, 'Merci, je la rappelle.');
+  assert.equal((await appel('reco', 'POST', `/reco/discussions/${o.corps.id}/lu`)).corps.lus, 1);
+
+  // Le médecin trouve les RECO de son établissement dans l'annuaire et peut leur écrire le premier ; pas ceux d'ailleurs.
+  const annuaire = await appel('medecin', 'GET', '/discussions/annuaire');
+  assert.ok(annuaire.corps.some((s) => s.id === reco.id && s.role === 'RECO'));
+  assert.ok(!annuaire.corps.some((s) => s.id === recoAilleurs.id));
+  assert.equal((await appel('medecin', 'POST', '/discussions', { recoId: reco.id })).corps.id, o.corps.id);
+  assert.equal((await appel('medecin', 'POST', '/discussions', { recoId: recoAilleurs.id })).status, 404);
+
+  // RECO ↔ chauffeur.
+  const oc = await appel('reco', 'POST', '/reco/discussions', { chauffeurId: chauffeur.id });
+  assert.equal(oc.status, 201);
+  await appel('reco', 'POST', `/reco/discussions/${oc.corps.id}/messages`, { texte: 'Pouvez-vous passer à Lemba ?' });
+  const listeCh = await appel('chauffeur', 'GET', '/chauffeur/discussions');
+  assert.equal(listeCh.status, 200);
+  assert.equal(listeCh.corps.length, 1);
+  assert.equal(listeCh.corps[0].interlocuteur.role, 'RECO');
+  assert.equal(listeCh.corps[0].nonLus, 1);
+  assert.equal((await appel('chauffeur', 'POST', `/chauffeur/discussions/${oc.corps.id}/messages`, { texte: 'J’arrive.' })).status, 201);
+  assert.equal((await appel('chauffeur', 'GET', '/chauffeur/recos')).corps.map((r) => r.id).join(), reco.id);
+  // Le chauffeur ne lit pas la discussion RECO ↔ médecin, le médecin non plus celle RECO ↔ chauffeur.
+  assert.equal((await appel('chauffeur', 'GET', `/chauffeur/discussions/${o.corps.id}/messages`)).status, 404);
+  assert.equal((await appel('medecin', 'GET', `/discussions/${oc.corps.id}/messages`)).status, 404);
+
+  // RECO suspendu : plus de message possible vers lui, ni d'accès.
+  await Reco.updateOne({ _id: reco._id }, { statut: 'Suspendu' });
+  assert.equal((await appel('medecin', 'POST', `/discussions/${o.corps.id}/messages`, { texte: 'Encore là ?' })).status, 409);
+  assert.equal((await appel('reco', 'GET', '/reco/discussions')).status, 401);
 });

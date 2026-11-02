@@ -11,6 +11,7 @@ const { auteurDe, enregistrerAvecMatricule } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const { ROLES_RESPONSABLE } = require('../config/relance');
 const moteur = require('../config/moteurRelance');
+const presence = require('../config/presence');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide, genererMotDePasse, donneesDe } = require('./flotte');
 const { exigerSupervision, filtreRecos } = require('./relance');
@@ -127,6 +128,7 @@ exports.changerStatut = async (req, res) => {
   if (statut === 'Suspendu') reco.sessionsRevoqueesLe = new Date(Math.floor(Date.now() / 1000) * 1000);
   reco.modifiePar = auteurDe(req.soignant);
   await reco.save();
+  if (statut === 'Suspendu') presence.expulserReco(reco.id); // messagerie temps réel coupée aussitôt
   // Ses tâches ouvertes doivent être réattribuées : le superviseur est alerté.
   if (statut === 'Suspendu') {
     const taches = await TacheRelance.find({ recoId: reco._id, ouverte: true }).select('numero etablissementId');
@@ -143,6 +145,7 @@ exports.revoquerSessions = async (req, res) => {
   const reco = await trouverReco(req, req.params.id);
   reco.sessionsRevoqueesLe = new Date(Math.floor(Date.now() / 1000) * 1000);
   await reco.save();
+  presence.expulserReco(reco.id);
   await journaliser(req, { action: 'reco.revocation', ressource: { type: 'reco', id: reco.matricule } });
   res.json({ revoqueesLe: reco.sessionsRevoqueesLe });
 };
@@ -156,6 +159,7 @@ exports.reinitialiserMotDePasse = async (req, res) => {
   reco.doitChangerMotDePasse = true;
   reco.sessionsRevoqueesLe = new Date(Math.floor(Date.now() / 1000) * 1000);
   await reco.save();
+  presence.expulserReco(reco.id);
   await journaliser(req, { action: 'reco.mot_de_passe', ressource: { type: 'reco', id: reco.matricule } });
   res.json({ matricule: reco.matricule, motDePasse });
 };
@@ -174,6 +178,7 @@ exports.supprimer = async (req, res) => {
   const ouvertes = await TacheRelance.countDocuments({ recoId: reco._id, ouverte: true });
   if (ouvertes) throw erreur(409, `${reco.prenom} ${reco.nom} a encore ${ouvertes} tâche(s) ouverte(s) : réattribuez-les avant de supprimer le compte.`);
   await Reco.deleteOne({ _id: reco._id });
+  presence.expulserReco(reco.id);
   // Ses alertes ne concernaient que lui : fermées (conservées pour l'historique).
   await AlerteRelance.updateMany({ destinataire: 'reco', recoId: reco._id, ouverte: true }, { ouverte: false, accuseLe: new Date(), accusePar: auteurDe(req.soignant) });
   if (reco.photoCle) supprimerFichier(reco.photoCle).catch(() => {});

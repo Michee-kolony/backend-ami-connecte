@@ -1,5 +1,6 @@
-// Discussions privées en temps réel : entre soignants (médecins et infirmier·ères), et entre une
-// patiente (application mobile) et le soignant de son choix.
+// Discussions privées en temps réel : entre soignants (médecins et infirmier·ères), entre une
+// patiente (application mobile) et le soignant de son choix, et entre un relais communautaire
+// (application RECO) et les soignants ou les chauffeurs de son établissement.
 // Sécurité : participants seulement (vérifié à chaque requête), texte chiffré au repos,
 // contenu jamais journalisé, taille et débit d'envoi limités.
 const mongoose = require('mongoose');
@@ -7,11 +8,14 @@ const Discussion = require('../models/Discussion');
 const MessageDiscussion = require('../models/MessageDiscussion');
 const Soignant = require('../models/Soignant');
 const Patiente = require('../models/Patiente');
+const Reco = require('../models/Reco');
+const Chauffeur = require('../models/Chauffeur');
 const { urlSignee } = require('../config/r2');
 const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const presence = require('../config/presence');
 const notifications = require('../config/notifications');
 const { filtrePatientes } = require('./patientes');
+const { filtreRecos } = require('./relance');
 
 const TAILLE_MAX = 2000;
 const PAR_PAGE = 50;
@@ -41,8 +45,82 @@ async function profilPourPatiente(s) {
   } : null;
 }
 
-/** Participant connecté : soignant (espace administrateur) ou patiente (application mobile). */
-const moiDe = (req) => req.soignant?._id ?? req.patiente._id;
+/** RECO vu par le soignant ou le chauffeur (rôle « RECO »). */
+async function profilReco(r) {
+  return r ? {
+    id: r.id, prenom: r.prenom, nom: r.nom, role: 'RECO', photo: (await urlSignee(r.photoCle)) ?? r.photo ?? null,
+    matricule: r.matricule, statut: r.statut,
+  } : null;
+}
+
+/** Chauffeur vu par le RECO (rôle « Chauffeur »). */
+async function profilChauffeur(c) {
+  return c ? {
+    id: c.id, prenom: c.prenom, nom: c.nom, role: 'Chauffeur', photo: (await urlSignee(c.photoCle)) ?? c.photo ?? null,
+    matricule: c.matricule, statut: c.statut,
+  } : null;
+}
+
+/** Participant connecté : soignant (espace administrateur), patiente, RECO ou chauffeur (applications). */
+const moiDe = (req) => req.soignant?._id ?? req.patiente?._id ?? req.reco?._id ?? req.chauffeur._id;
+
+/** Nature d'un participant de la discussion. */
+function natureDe(d, id) {
+  if (d.patienteId?.equals(id)) return 'patiente';
+  if (d.recoId?.equals(id)) return 'reco';
+  if (d.chauffeurId?.equals(id)) return 'chauffeur';
+  return 'soignant';
+}
+
+/**
+ * Profil de l'autre participant, vu par `moi`. Un soignant vu depuis une application (patiente,
+ * RECO, chauffeur) ne montre ni matricule ni coordonnées.
+ */
+async function interlocuteurDe(d, moi) {
+  const autre = d.participants.find((p) => !p.equals(moi));
+  switch (natureDe(d, autre)) {
+    case 'patiente': return profilPatiente(await Patiente.findById(autre).select('prenom nom numero photoCle espaceEnLigne'));
+    case 'reco': return profilReco(await Reco.findById(autre));
+    case 'chauffeur': return profilChauffeur(await Chauffeur.findById(autre));
+    default: {
+      const s = await Soignant.findById(autre).select(`${CHAMPS_PROFIL} photoCle`);
+      return natureDe(d, moi) === 'soignant' ? profil(s) : profilPourPatiente(s);
+    }
+  }
+}
+
+const INACTIF = {
+  patiente: 'Cette patiente n’a plus d’accès actif.', reco: 'Ce RECO n’a plus d’accès actif.',
+  chauffeur: 'Ce chauffeur n’a plus d’accès actif.', soignant: 'Ce soignant n’a plus d’accès actif.',
+};
+
+/** L'autre participant a-t-il toujours un accès actif ? (sinon, message refusé) */
+async function toujoursActif(nature, id) {
+  if (nature === 'patiente') return !!(await Patiente.exists({ _id: id, espaceEnLigne: 'Activé' }));
+  const modele = { reco: Reco, chauffeur: Chauffeur, soignant: Soignant }[nature];
+  return !!(await modele.exists({ _id: id, statut: 'Actif' }));
+}
+
+/** Discussion unique d'une paire de participants : retrouvée, ou créée (course entre deux onglets gérée). */
+async function ouvrirOuCreer(a, b, marques = {}) {
+  const cle = Discussion.cleDe(a, b);
+  let d = await Discussion.findOne({ cle });
+  if (!d) {
+    try {
+      d = await Discussion.create({ participants: [a, b], cle, ...marques });
+    } catch (err) {
+      if (err.code !== 11000) throw err;
+      d = await Discussion.findOne({ cle }); // créée au même instant par l'autre participant
+    }
+  }
+  return d;
+}
+
+/** Discussions résumées du participant connecté. */
+async function listerPour(moi, filtre) {
+  const discussions = await Discussion.find(filtre).sort({ dernierMessageLe: -1, updatedAt: -1 });
+  return Promise.all(discussions.map(async (d) => resume(d, moi, await interlocuteurDe(d, moi))));
+}
 
 /** Message tel qu'envoyé au client (texte déchiffré, accusé de lecture de l'autre participant). */
 function versClient(m) {
@@ -72,37 +150,24 @@ async function resume(d, moi, interlocuteur) {
   return { id: d.id, interlocuteur, dernierMessage: dernier ? versClient(dernier) : null, nonLus, dernierMessageLe: d.dernierMessageLe };
 }
 
-/** Mes discussions (soignant) : avec des collègues et avec des patientes. */
+/** Mes discussions (soignant) : avec des collègues, des patientes et des RECO. */
 exports.lister = async (req, res) => {
-  const moi = req.soignant._id;
-  const discussions = await Discussion.find({ participants: moi }).sort({ dernierMessageLe: -1, updatedAt: -1 })
-    .populate('participants', CHAMPS_PROFIL);
-  const ids = discussions.map((d) => d.patienteId).filter(Boolean);
-  const patientes = new Map((await Patiente.find({ _id: { $in: ids } }).select('prenom nom numero photoCle espaceEnLigne'))
-    .map((p) => [p.id, p]));
-  res.json(await Promise.all(discussions.map(async (d) => resume(d, moi, d.patienteId
-    ? await profilPatiente(patientes.get(String(d.patienteId)))
-    : profil(d.participants.find((p) => !p._id.equals(moi)))))));
+  res.json(await listerPour(req.soignant._id, { participants: req.soignant._id }));
 };
 
-/** Ouvre (ou crée) la discussion avec un autre soignant actif, ou avec une patiente ({ patienteId }). */
+/**
+ * Ouvre (ou crée) la discussion avec un autre soignant actif, une patiente ({ patienteId }) ou un
+ * RECO de l'établissement de connexion ({ recoId }).
+ */
 exports.ouvrir = async (req, res) => {
   if (req.body?.patienteId !== undefined) return ouvrirAvecPatiente(req, res);
+  if (req.body?.recoId !== undefined) return ouvrirAvecReco(req, res);
   const autreId = String(req.body?.soignantId || '');
   if (!mongoose.isValidObjectId(autreId)) throw erreur(400, 'Soignant invalide.');
   if (autreId === req.soignant.id) throw erreur(400, 'Vous ne pouvez pas discuter avec vous-même.');
   const autre = await Soignant.findById(autreId).select(CHAMPS_PROFIL);
   if (!autre || autre.statut !== 'Actif') throw erreur(404, 'Soignant introuvable ou suspendu.');
-  const cle = Discussion.cleDe(req.soignant._id, autre._id);
-  let d = await Discussion.findOne({ cle });
-  if (!d) {
-    try {
-      d = await Discussion.create({ participants: [req.soignant._id, autre._id], cle });
-    } catch (err) {
-      if (err.code !== 11000) throw err;
-      d = await Discussion.findOne({ cle }); // créée au même instant par l'autre soignant
-    }
-  }
+  const d = await ouvrirOuCreer(req.soignant._id, autre._id);
   res.status(201).json({ id: d.id, interlocuteur: profil(autre), dernierMessage: null, nonLus: 0, dernierMessageLe: d.dernierMessageLe });
 };
 
@@ -135,11 +200,8 @@ exports.envoyer = async (req, res) => {
   if (!texte) throw erreur(400, 'Message vide.');
   if (texte.length > TAILLE_MAX) throw erreur(400, `Message trop long (${TAILLE_MAX} caractères au maximum).`);
   const autre = d.participants.find((p) => !p.equals(moi));
-  if (d.patienteId?.equals(autre)) {
-    if (!(await Patiente.exists({ _id: autre, espaceEnLigne: 'Activé' }))) throw erreur(409, 'Cette patiente n’a plus d’accès actif.');
-  } else if (!(await Soignant.exists({ _id: autre, statut: 'Actif' }))) {
-    throw erreur(409, 'Ce soignant n’a plus d’accès actif.');
-  }
+  const nature = natureDe(d, autre);
+  if (!(await toujoursActif(nature, autre))) throw erreur(409, INACTIF[nature]);
   verifierDebit(String(moi));
 
   const m = await MessageDiscussion.create({
@@ -194,17 +256,17 @@ async function ouvrirAvecPatiente(req, res) {
   if (!p || !req.etablissementId || p.etablissementId !== req.etablissementId) throw erreur(404, 'Patiente introuvable.');
   if (p.espaceEnLigne !== 'Activé') throw erreur(409, 'Cette patiente n’a pas encore activé son application : elle ne peut pas recevoir de message.');
   const moi = req.soignant._id;
-  const cle = Discussion.cleDe(moi, p._id);
-  let d = await Discussion.findOne({ cle });
-  if (!d) {
-    try {
-      d = await Discussion.create({ participants: [moi, p._id], patienteId: p._id, cle });
-    } catch (err) {
-      if (err.code !== 11000) throw err;
-      d = await Discussion.findOne({ cle });
-    }
-  }
+  const d = await ouvrirOuCreer(moi, p._id, { patienteId: p._id });
   res.status(201).json(await resume(d, moi, await profilPatiente(p)));
+}
+
+/** Le soignant écrit à un RECO actif de son établissement de connexion. */
+async function ouvrirAvecReco(req, res) {
+  const r = mongoose.isValidObjectId(req.body.recoId) ? await Reco.findOne({ _id: req.body.recoId, ...filtreRecos(req) }) : null;
+  if (!r || r.statut !== 'Actif') throw erreur(404, 'RECO introuvable ou suspendu.');
+  const moi = req.soignant._id;
+  const d = await ouvrirOuCreer(moi, r._id, { recoId: r._id });
+  res.status(201).json(await resume(d, moi, await profilReco(r)));
 }
 
 /** Patientes joignables par l'application (espace activé), par nom, prénom ou numéro. */
@@ -219,10 +281,13 @@ exports.patientes = async (req, res) => {
   res.json(await Promise.all(liste.map(profilPatiente)));
 };
 
-/** Annuaire : soignants actifs avec qui démarrer une discussion. */
+/** Annuaire : soignants actifs, puis RECO actifs de l'établissement de connexion (rôle « RECO »). */
 exports.annuaire = async (req, res) => {
-  const soignants = await Soignant.find({ statut: 'Actif', _id: { $ne: req.soignant._id } }).select(CHAMPS_PROFIL).sort({ prenom: 1 });
-  res.json(soignants.map(profil));
+  const [soignants, recos] = await Promise.all([
+    Soignant.find({ statut: 'Actif', _id: { $ne: req.soignant._id } }).select(CHAMPS_PROFIL).sort({ prenom: 1 }),
+    Reco.find({ ...filtreRecos(req), statut: 'Actif' }).sort({ prenom: 1 }),
+  ]);
+  res.json([...soignants.map(profil), ...(await Promise.all(recos.map(profilReco)))]);
 };
 
 // --- Application mobile : la patiente écrit au soignant de son choix -------------------------
@@ -255,15 +320,63 @@ exports.ouvrirPatiente = async (req, res) => {
   const s = await Soignant.findOne({ _id: soignantId, ...filtreSoignantsDe(req.patiente) }).select(`${CHAMPS_PROFIL} photoCle`);
   if (!s) throw erreur(404, 'Soignant introuvable ou suspendu.');
   const p = req.patiente;
-  const cle = Discussion.cleDe(s._id, p._id);
-  let d = await Discussion.findOne({ cle });
-  if (!d) {
-    try {
-      d = await Discussion.create({ participants: [s._id, p._id], patienteId: p._id, cle });
-    } catch (err) {
-      if (err.code !== 11000) throw err;
-      d = await Discussion.findOne({ cle });
-    }
-  }
+  const d = await ouvrirOuCreer(s._id, p._id, { patienteId: p._id });
   res.status(201).json(await resume(d, p._id, await profilPourPatiente(s)));
+};
+
+// --- Application RECO : le relais écrit aux soignants et aux chauffeurs de son établissement ---
+
+/** Soignants affectés à l'établissement du RECO et chauffeurs employés par lui, actifs. Sans établissement, aucun. */
+exports.contactsReco = async (req, res) => {
+  const etablissementId = req.reco.etablissementId || { $in: [] };
+  const [soignants, chauffeurs] = await Promise.all([
+    Soignant.find({ statut: 'Actif', 'affectations.etablissementId': etablissementId }).select(`${CHAMPS_PROFIL} photoCle`).sort({ prenom: 1 }),
+    Chauffeur.find({ statut: 'Actif', etablissementId }).sort({ prenom: 1 }),
+  ]);
+  res.json([...(await Promise.all(soignants.map(profilPourPatiente))), ...(await Promise.all(chauffeurs.map(profilChauffeur)))]);
+};
+
+exports.listerReco = async (req, res) => {
+  res.json(await listerPour(req.reco._id, { recoId: req.reco._id }));
+};
+
+/** Ouvre (ou crée) la discussion du RECO avec un soignant ({ soignantId }) ou un chauffeur ({ chauffeurId }) de son établissement. */
+exports.ouvrirReco = async (req, res) => {
+  const r = req.reco;
+  const etablissementId = r.etablissementId || { $in: [] };
+  if (req.body?.chauffeurId !== undefined) {
+    const id = String(req.body.chauffeurId || '');
+    const c = mongoose.isValidObjectId(id) ? await Chauffeur.findOne({ _id: id, statut: 'Actif', etablissementId }) : null;
+    if (!c) throw erreur(404, 'Chauffeur introuvable ou suspendu.');
+    const d = await ouvrirOuCreer(r._id, c._id, { recoId: r._id, chauffeurId: c._id });
+    return res.status(201).json(await resume(d, r._id, await profilChauffeur(c)));
+  }
+  const id = String(req.body?.soignantId || '');
+  const s = mongoose.isValidObjectId(id)
+    ? await Soignant.findOne({ _id: id, statut: 'Actif', 'affectations.etablissementId': etablissementId }).select(`${CHAMPS_PROFIL} photoCle`)
+    : null;
+  if (!s) throw erreur(404, 'Soignant introuvable ou suspendu.');
+  const d = await ouvrirOuCreer(s._id, r._id, { recoId: r._id });
+  res.status(201).json(await resume(d, r._id, await profilPourPatiente(s)));
+};
+
+// --- Application chauffeur : discussions avec les RECO de son établissement ---
+
+/** RECO actifs de l'établissement employeur du chauffeur. */
+exports.contactsChauffeur = async (req, res) => {
+  const recos = await Reco.find({ statut: 'Actif', etablissementId: req.chauffeur.etablissementId || { $in: [] } }).sort({ prenom: 1 });
+  res.json(await Promise.all(recos.map(profilReco)));
+};
+
+exports.listerChauffeur = async (req, res) => {
+  res.json(await listerPour(req.chauffeur._id, { chauffeurId: req.chauffeur._id }));
+};
+
+exports.ouvrirChauffeur = async (req, res) => {
+  const c = req.chauffeur;
+  const id = String(req.body?.recoId || '');
+  const r = mongoose.isValidObjectId(id) ? await Reco.findOne({ _id: id, statut: 'Actif', etablissementId: c.etablissementId || { $in: [] } }) : null;
+  if (!r) throw erreur(404, 'RECO introuvable ou suspendu.');
+  const d = await ouvrirOuCreer(r._id, c._id, { recoId: r._id, chauffeurId: c._id });
+  res.status(201).json(await resume(d, c._id, await profilReco(r)));
 };

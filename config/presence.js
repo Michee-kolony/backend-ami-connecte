@@ -8,16 +8,20 @@
 // (« presence:soignants ») — des identifiants seulement, les noms viennent de l'API.
 // L'application ami-connecte-chauffeur se connecte aussi : le personnel reçoit les identifiants
 // des chauffeurs en ligne (« presence:chauffeurs ») et leurs positions GPS (suiviAmbulances.js).
+// L'application RECO se connecte aussi (messagerie) : le personnel reçoit les identifiants des RECO
+// en ligne (« presence:recos ») ; les RECO, ceux des soignants et chauffeurs en ligne (« presence:ids »).
 const jwt = require('jsonwebtoken');
 const Soignant = require('../models/Soignant');
 const Patiente = require('../models/Patiente');
 const Etablissement = require('../models/Etablissement');
 const Discussion = require('../models/Discussion');
 const Chauffeur = require('../models/Chauffeur');
+const Reco = require('../models/Reco');
 const suiviAmbulances = require('./suiviAmbulances');
 
 const SALLE = 'personnel';
 const SALLE_PATIENTES = 'patientes';
+const SALLE_RECOS = 'recos';
 /** Personnel connecté sans établissement : liste détaillée limitée à ce groupe. */
 const SALLE_SANS_ETABLISSEMENT = 'personnel:sans-etablissement';
 
@@ -30,6 +34,8 @@ const connectes = new Map();
 const patientesConnectees = new Map();
 /** id du chauffeur → ses connexions (application chauffeur). */
 const chauffeursConnectes = new Map();
+/** id du RECO → ses connexions (application RECO). */
+const recosConnectes = new Map();
 let io = null;
 
 const salleEtablissement = (etablissementId) => (etablissementId ? `etablissement:${etablissementId}` : SALLE_SANS_ETABLISSEMENT);
@@ -51,6 +57,16 @@ function diffuser(etablissementIds) {
   for (const e of new Set(etablissementIds)) io?.to(salleEtablissement(e)).emit('presence', enLigneDans(e));
   io?.to(SALLE).emit('presence:ids', [...connectes.keys()]);
   io?.to(SALLE_PATIENTES).emit('presence:soignants', [...connectes.keys()]);
+  diffuserAuxRecos();
+}
+
+/** Les RECO voient qui, parmi leurs contacts (soignants, chauffeurs), est en ligne. */
+function diffuserAuxRecos() {
+  io?.to(SALLE_RECOS).emit('presence:ids', [...connectes.keys(), ...chauffeursConnectes.keys()]);
+}
+
+function diffuserRecos() {
+  io?.to(SALLE).emit('presence:recos', [...recosConnectes.keys()]);
 }
 
 function diffuserPatientes() {
@@ -59,6 +75,7 @@ function diffuserPatientes() {
 
 function diffuserChauffeurs() {
   io?.to(SALLE).emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
+  diffuserAuxRecos();
 }
 
 const profilDe = (soignant) => ({
@@ -84,6 +101,15 @@ function initialiser(serveur) {
         socket.data.chauffeurId = chauffeur.id;
         return next();
       }
+      if (typ === 'reco') {
+        // Même contrôle que l'API : compte actif, jeton émis après la dernière révocation.
+        const { iat } = jwt.decode(String(socket.handshake.auth?.jeton || ''));
+        const reco = await Reco.findById(sub).select('statut sessionsRevoqueesLe');
+        if (!reco || reco.statut !== 'Actif') return next(new Error('Compte inactif ou introuvable.'));
+        if (reco.sessionsRevoqueesLe && iat * 1000 < reco.sessionsRevoqueesLe.getTime()) return next(new Error('Session révoquée, reconnectez-vous.'));
+        socket.data.recoId = reco.id;
+        return next();
+      }
       if (typ === 'patiente') {
         const patiente = await Patiente.findById(sub).select('espaceEnLigne');
         if (!patiente || patiente.espaceEnLigne !== 'Activé') return next(new Error('Compte inactif ou introuvable.'));
@@ -103,6 +129,7 @@ function initialiser(serveur) {
   io.on('connection', async (socket) => {
     if (socket.data.patienteId) return connecterPatiente(socket);
     if (socket.data.chauffeurId) return connecterChauffeur(socket);
+    if (socket.data.recoId) return connecterReco(socket);
     const { soignant } = socket.data;
     const etablissementId = socket.data.etablissementId ?? null;
     const id = soignant.id;
@@ -125,12 +152,34 @@ function initialiser(serveur) {
     diffuser([etablissementId]);
     socket.emit('presence:patientes', [...patientesConnectees.keys()]);
     socket.emit('presence:chauffeurs', [...chauffeursConnectes.keys()]);
+    socket.emit('presence:recos', [...recosConnectes.keys()]);
   });
+}
+
+/** RECO (application RECO) : messagerie avec les soignants et les chauffeurs de son établissement. */
+function connecterReco(socket) {
+  const id = socket.data.recoId;
+  socket.on('discussion:ecrit', (donnees) => relayerEcriture(socket, id, donnees));
+  socket.on('disconnect', () => {
+    const s = recosConnectes.get(id);
+    if (!s?.delete(socket.id)) return;
+    if (!s.size) {
+      recosConnectes.delete(id);
+      diffuserRecos();
+    }
+  });
+  socket.join([SALLE_RECOS, `reco:${id}`]);
+  const s = recosConnectes.get(id) ?? new Set();
+  s.add(socket.id);
+  recosConnectes.set(id, s);
+  socket.emit('presence:ids', [...connectes.keys(), ...chauffeursConnectes.keys()]);
+  diffuserRecos();
 }
 
 /** Chauffeur (application ami-connecte-chauffeur) : envoie sa position GPS chaque seconde. */
 function connecterChauffeur(socket) {
   const id = socket.data.chauffeurId;
+  socket.on('discussion:ecrit', (donnees) => relayerEcriture(socket, id, donnees));
   socket.on('position', (donnees, accuse) => {
     suiviAmbulances.enregistrerPosition(id, donnees)
       .then((m) => typeof accuse === 'function' && accuse({ ok: !!m }))
@@ -185,9 +234,9 @@ async function relayerEcriture(socket, id, donnees) {
   }
 }
 
-/** Événement temps réel adressé à toutes les connexions d'un participant (soignant ou patiente). */
+/** Événement temps réel adressé à toutes les connexions d'un participant (soignant, patiente, RECO ou chauffeur). */
 function emettre(id, evenement, donnees) {
-  io?.to([`soignant:${id}`, `patiente:${id}`]).emit(evenement, donnees);
+  io?.to([`soignant:${id}`, `patiente:${id}`, `reco:${id}`, `chauffeur:${id}`]).emit(evenement, donnees);
 }
 
 /** Événement adressé à tout le personnel connecté (urgences, flotte). */
@@ -217,6 +266,11 @@ function expulserChauffeur(id) {
   io?.in(`chauffeur:${id}`).disconnectSockets(true);
 }
 
+/** Ferme les connexions d'un RECO (compte suspendu, sessions révoquées ou supprimé). */
+function expulserReco(id) {
+  io?.in(`reco:${id}`).disconnectSockets(true);
+}
+
 /** Ferme toutes les connexions d'un soignant (compte suspendu ou supprimé). */
 function expulser(id) {
   io?.in(`soignant:${id}`).disconnectSockets(true);
@@ -231,5 +285,5 @@ async function actualiser(soignant) {
 }
 
 module.exports = {
-  initialiser, expulser, actualiser, emettre, emettrePersonnel, emettreEtablissement, emettrePatiente, emettreChauffeur, expulserChauffeur,
+  initialiser, expulser, actualiser, emettre, emettrePersonnel, emettreEtablissement, emettrePatiente, emettreChauffeur, expulserChauffeur, expulserReco,
 };
