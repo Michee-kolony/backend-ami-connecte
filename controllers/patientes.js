@@ -260,11 +260,12 @@ exports.creer = async (req, res) => {
   if (!champs.nom) throw erreur(400, 'Le nom est obligatoire.');
   if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge déclaré obligatoire.');
   if (!PROVINCES_RDC.includes(champs.adresse?.province)) throw erreur(400, 'Choisissez la province de résidence parmi les 26 provinces de la RDC.');
-  // Espace patiente (application mobile) : e-mail et mot de passe choisis par la patiente, obligatoires.
-  if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide.');
+  // Espace patiente (application mobile) : mot de passe choisi par la patiente, obligatoire ;
+  // e-mail facultatif (sans e-mail, elle se connecte avec son matricule).
+  if (champs.email && !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente invalide.');
   const motDePasse = d.compte?.motDePasse;
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la patiente trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
-  const memeEmail = await Patiente.findOne({ email: champs.email });
+  const memeEmail = champs.email && await Patiente.findOne({ email: champs.email });
   if (memeEmail) {
     return res.status(409).json({
       message: `Cette patiente est déjà inscrite (dossier ${memeEmail.numero}). Pour une nouvelle grossesse, ouvrez son dossier : elle garde le même compte et tout son historique.`,
@@ -428,11 +429,8 @@ exports.modifier = async (req, res) => {
     if (!Patiente.STATUTS_PATIENTE.includes(req.body.statut)) throw erreur(400, 'Statut inconnu.');
     champs.statut = req.body.statut;
   }
-  // L'e-mail est l'identifiant de l'espace patiente : il ne peut pas être effacé.
-  if ('email' in champs && (!champs.email || !EMAIL.test(champs.email))) {
-    if (patiente.email || champs.email) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide.');
-    delete champs.email;
-  }
+  // L'e-mail peut être effacé : la patiente garde la connexion par matricule.
+  if (champs.email && !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente invalide.');
   if (champs.email && champs.email !== patiente.email && await Patiente.exists({ email: champs.email, _id: { $ne: patiente._id } })) {
     throw erreur(409, 'Cette adresse e-mail est déjà liée à un autre dossier.');
   }

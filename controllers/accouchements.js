@@ -218,8 +218,8 @@ exports.alertes = async (req, res) => {
 
 /**
  * Admission directe : femme venue accoucher sans aucun dossier dans la plateforme (pas de CPN).
- * Dossier patiente minimal (identité, âge, contact) et compte de l'application patiente (e-mail et
- * mot de passe choisis par elle, comme à l'enregistrement CPN) pour suivre son bébé ; la photo
+ * Dossier patiente minimal (identité, âge, contact) et compte de l'application patiente (mot de
+ * passe choisi par elle, e-mail facultatif, comme à l'enregistrement CPN) pour suivre son bébé ; la photo
  * d'identification est obligatoire, comme à l'enregistrement CPN. Renvoie null après avoir répondu
  * 409 si des dossiers possiblement identiques existent et que le soignant n'a pas confirmé.
  */
@@ -233,10 +233,10 @@ async function patienteAdmissionDirecte(req, res, corps) {
   if (!req.file) throw erreur(400, 'La photo de la patiente est obligatoire.');
   if (!champs.nom) throw erreur(400, 'Le nom de la patiente est obligatoire.');
   if (!champs.dateNaissance && champs.ageDeclare == null) throw erreur(400, 'Date de naissance ou âge de la patiente obligatoire.');
-  if (!champs.email || !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente obligatoire et valide (application patiente).');
+  if (champs.email && !EMAIL.test(champs.email)) throw erreur(400, 'Adresse e-mail de la patiente invalide (application patiente).');
   const motDePasse = objet(corps.compte).motDePasse;
   if (!motDePasseValide(motDePasse)) throw erreur(400, 'Mot de passe de la patiente trop faible : 8 caractères au moins, avec des lettres et des chiffres.');
-  const memeEmail = await Patiente.findOne({ email: champs.email });
+  const memeEmail = champs.email && await Patiente.findOne({ email: champs.email });
   if (memeEmail) {
     res.status(409).json({
       message: `Cette adresse e-mail appartient déjà au dossier ${memeEmail.numero} : si c’est la même patiente, choisissez son dossier.`,

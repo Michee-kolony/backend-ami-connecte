@@ -431,14 +431,14 @@ test('AC-15 : journal d’audit en ajout seul, sans contenu clinique ni secret',
   assert.equal((await appel('chef', 'GET', '/journal')).status, 200);
 });
 
-test('photo et compte patiente obligatoires ; mot de passe haché, jamais renvoyé ; photo par lien signé', async () => {
+test('photo et mot de passe patiente obligatoires ; mot de passe haché, jamais renvoyé ; photo par lien signé', async () => {
   const base = { patiente: { nom: 'Compte', prenom: 'Essai', ageDeclare: 26, adresse: { province: 'Kinshasa' } } };
   const sansPhoto = await creer('medecinA', base, { photo: false });
   assert.equal(sansPhoto.status, 400);
   assert.match(sansPhoto.corps.message, /photo/i);
-  const sansEmail = await creer('medecinA', { ...base, patiente: { ...base.patiente, email: '' } });
-  assert.equal(sansEmail.status, 400);
-  assert.match(sansEmail.corps.message, /e-mail/i);
+  const emailInvalide = await creer('medecinA', { ...base, patiente: { ...base.patiente, email: 'pas-un-email' } });
+  assert.equal(emailInvalide.status, 400);
+  assert.match(emailInvalide.corps.message, /e-mail/i);
   for (const motDePasse of ['court1', 'sanschiffre', '12345678', undefined]) {
     const r = await creer('medecinA', { ...base, compte: { motDePasse } });
     assert.equal(r.status, 400, String(motDePasse));
@@ -459,10 +459,45 @@ test('photo et compte patiente obligatoires ; mot de passe haché, jamais renvoy
   const Patiente = require('../models/Patiente');
   const enBase = await Patiente.findOne({ numero: ok.corps.numero }).select('+motDePasse');
   assert.ok(enBase.motDePasse.startsWith('$2') && enBase.motDePasse !== 'Grossesse2026', 'mot de passe haché (bcrypt)');
-  const effacer = await appel('medecinA', 'PATCH', `/patientes/${ok.corps.numero}`, { email: '' });
-  assert.equal(effacer.status, 400, 'l’e-mail de connexion ne peut pas être effacé');
+  const emailRefuse = await appel('medecinA', 'PATCH', `/patientes/${ok.corps.numero}`, { email: 'pas-un-email' });
+  assert.equal(emailRefuse.status, 400);
   const liste = await appel('medecinA', 'GET', `/patientes?q=${ok.corps.numero}`);
   assert.ok(liste.corps.resultats[0].photoUrl.startsWith('https://signe.invalid/'));
+});
+
+test('patiente sans e-mail : enregistrée puis connectée avec son matricule ; e-mail ajouté puis effacé', async () => {
+  const patiente = { nom: 'Sansmail', prenom: 'Esther', ageDeclare: 26, adresse: { province: 'Kinshasa' } };
+  const r1 = await creer('medecinA', { patiente: { ...patiente, email: '' }, compte: { motDePasse: 'Matricule2026' } });
+  assert.equal(r1.status, 201, JSON.stringify(r1.corps));
+  // Plusieurs dossiers sans e-mail : aucun conflit sur l'index unique.
+  const r2 = await creer('medecinA', { patiente: { ...patiente, nom: 'Sansmail2', prenom: 'Ruth', email: '' }, compte: { motDePasse: 'Matricule2026' } });
+  assert.equal(r2.status, 201, JSON.stringify(r2.corps));
+
+  const connexion = (corps) => appel(null, 'POST', '/espace-patiente/connexion', corps);
+  const c = await connexion({ identifiant: r1.corps.numero, motDePasse: 'Matricule2026' });
+  assert.equal(c.status, 200, JSON.stringify(c.corps));
+  assert.equal(c.corps.patiente.numero, r1.corps.numero);
+  assert.equal((await connexion({ identifiant: ` ${r1.corps.numero.toLowerCase()} `, motDePasse: 'Matricule2026' })).status, 200, 'minuscules et espaces tolérés');
+  assert.equal((await connexion({ email: r1.corps.numero, motDePasse: 'Matricule2026' })).status, 200, 'application déjà installée : champ email');
+  const refus = await connexion({ identifiant: r1.corps.numero, motDePasse: 'Faux2026000' });
+  const inconnu = await connexion({ identifiant: 'AC-PAT-999999', motDePasse: 'Matricule2026' });
+  assert.equal(refus.status, 401);
+  assert.equal(inconnu.status, 401);
+  assert.equal(refus.corps.message, inconnu.corps.message, 'ne révèle pas quels matricules existent');
+  assert.equal((await connexion({ identifiant: { $ne: null }, motDePasse: 'Matricule2026' })).status, 401, 'objet refusé');
+
+  // E-mail ajouté plus tard : les deux identifiants fonctionnent.
+  const ajout = await appel('medecinA', 'PATCH', `/patientes/${r1.corps.numero}`, { email: 'esther.sansmail@essai.test' });
+  assert.equal(ajout.status, 200, JSON.stringify(ajout.corps));
+  assert.equal((await connexion({ identifiant: 'esther.sansmail@essai.test', motDePasse: 'Matricule2026' })).status, 200);
+  assert.equal((await connexion({ identifiant: r1.corps.numero, motDePasse: 'Matricule2026' })).status, 200);
+
+  // E-mail effacé : le matricule reste valable.
+  const effacer = await appel('medecinA', 'PATCH', `/patientes/${r1.corps.numero}`, { email: '' });
+  assert.equal(effacer.status, 200, JSON.stringify(effacer.corps));
+  assert.ok(!effacer.corps.email);
+  assert.equal((await connexion({ identifiant: 'esther.sansmail@essai.test', motDePasse: 'Matricule2026' })).status, 401);
+  assert.equal((await connexion({ identifiant: r1.corps.numero, motDePasse: 'Matricule2026' })).status, 200);
 });
 
 test('suppression d’un dossier : médecin chef seulement, numéro à retaper, journal conservé', async () => {

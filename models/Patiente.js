@@ -13,7 +13,7 @@ const CANAUX = ['sms', 'appel', 'whatsapp'];
 
 /** Le dossier appartient à la patiente : aucun médecin n'en est « propriétaire ». */
 const patienteSchema = new mongoose.Schema({
-  /** Identifiant public interne AC-PAT-000001, distinct de l'identifiant MongoDB. */
+  /** Matricule AC-PAT-000001 (aussi identifiant de connexion), distinct de l'identifiant MongoDB. */
   numero: { type: String, required: true, unique: true },
 
   // Identité
@@ -44,8 +44,7 @@ const patienteSchema = new mongoose.Schema({
   /** Chiffres seuls des numéros (recherche et doublons, quel que soit le format saisi). */
   telephoneChiffres: { type: String, default: '', index: true },
   telephone2Chiffres: { type: String, default: '' },
-  /** Facultatif : servira à activer l'espace patiente (application mobile, plus tard). */
-  /** Identifiant de connexion de l'espace patiente (application mobile). */
+  /** Facultatif : identifiant de connexion de l'espace patiente, à défaut le matricule (numero). */
   email: {
     type: String, trim: true, lowercase: true, unique: true, sparse: true,
     set: (v) => (v && String(v).trim() ? v : undefined),

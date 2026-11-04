@@ -1,4 +1,4 @@
-// Espace patiente (application mobile) : la patiente se connecte avec l'e-mail et le mot de passe
+// Espace patiente (application mobile) : la patiente se connecte avec son e-mail ou son matricule et le mot de passe
 // choisis à son enregistrement, et ne lit que ses propres données et celles de ses enfants :
 // grossesse en cours (datation, fiches CPN), rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
 // accouchements, conseils de l'équipe soignante. Aucune donnée n'y est modifiable, sauf son mot de passe.
@@ -29,13 +29,15 @@ const { STATUTS_ACTIFS } = RendezVous;
 const soignant = (a) => (a ? { nom: a.nom, role: a.role } : null);
 
 exports.connexion = async (req, res) => {
-  const email = texte(req.body?.email, 200).toLowerCase();
+  // « email » : champ envoyé par les versions de l'application déjà installées.
+  const identifiant = texte(req.body?.identifiant ?? req.body?.email, 200);
   const motDePasse = String(req.body?.motDePasse || '');
-  if (!email || !motDePasse) throw erreur(400, 'E-mail et mot de passe requis.');
-  const patiente = await Patiente.findOne({ email }).select('+motDePasse');
-  // Même message dans tous les cas pour ne pas révéler quels e-mails existent.
+  if (!identifiant || !motDePasse) throw erreur(400, 'E-mail ou matricule et mot de passe requis.');
+  const recherche = identifiant.includes('@') ? { email: identifiant.toLowerCase() } : { numero: identifiant.toUpperCase() };
+  const patiente = await Patiente.findOne(recherche).select('+motDePasse');
+  // Même message dans tous les cas pour ne pas révéler quels comptes existent.
   if (!patiente?.motDePasse || !(await bcrypt.compare(motDePasse, patiente.motDePasse))) {
-    throw erreur(401, 'E-mail ou mot de passe incorrect.');
+    throw erreur(401, 'Identifiant ou mot de passe incorrect.');
   }
   if (patiente.espaceEnLigne !== 'Activé') throw erreur(403, 'Votre espace n’est pas encore activé : adressez-vous à votre centre de santé.');
   const jeton = jwt.sign({ sub: patiente.id, typ: 'patiente' }, process.env.JWT_SECRET, {

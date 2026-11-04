@@ -698,7 +698,7 @@ test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et 
   assert.match(sansPhoto.corps.message, /photo/i);
   assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, nom: '' } })).status, 400, 'nom obligatoire');
   assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, ageDeclare: null } })).status, 400, 'âge obligatoire');
-  assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, email: 'pas-un-email' } })).status, 400, 'e-mail obligatoire et valide');
+  assert.equal((await admettre({ nouvellePatiente: { ...nouvelle, email: 'pas-un-email' } })).status, 400, 'e-mail valide s’il est saisi');
   assert.equal((await admettre({ nouvellePatiente: nouvelle, compte: { motDePasse: 'court' } })).status, 400, 'mot de passe robuste');
 
   const a = await admettre({ nouvellePatiente: nouvelle, admission: { admiseLe: ilYaH(1), motif: 'Contractions', provenance: 'AS' } });
@@ -729,6 +729,24 @@ test('admission directe : femme venue accoucher sans dossier ni CPN, dossier et 
   const homonyme = await admettre({ nouvellePatiente: { ...nouvelle, telephone: '', email: 'grace2@essai.test' }, confirmerMalgreDoublons: true });
   assert.equal(homonyme.status, 201, JSON.stringify(homonyme.corps));
   assert.notEqual(homonyme.corps.patiente.id, a.corps.patiente.id);
+});
+
+test('admission directe et mère d’un enfant sans e-mail : connexion avec le matricule', async () => {
+  const a = await admissionDirecte('sageFemme', {
+    nouvellePatiente: { nom: 'Sansmail', prenom: 'Bijou', ageDeclare: 23, email: '' }, compte: { motDePasse: 'Bebe2026ok' },
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.corps));
+  const c = await appel(null, 'POST', '/espace-patiente/connexion', { identifiant: a.corps.patiente.numero, motDePasse: 'Bebe2026ok' });
+  assert.equal(c.status, 200, JSON.stringify(c.corps));
+
+  const r = await enregistrerEnfant('infirmiere', {
+    enfant: { prenom: 'Joie', sexe: 'Féminin', dateNaissance: '2026-01-15', lieuNaissance: 'CS Fictif de Lemba', naissance: { poidsG: 3000 } },
+    nouvelleMere: { nom: 'Sansmail', prenom: 'Mireille', ageDeclare: 30 }, compte: { motDePasse: 'Vaccin2026ok' },
+  }, { photoMere: true });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const dossier = await appel('infirmiere', 'GET', `/enfants/${r.corps.numero}`);
+  const m = await appel(null, 'POST', '/espace-patiente/connexion', { identifiant: dossier.corps.mere.numero, motDePasse: 'Vaccin2026ok' });
+  assert.equal(m.status, 200, JSON.stringify(m.corps));
 });
 
 test('partogramme : BCF, dilatation et effacement de l’examen clinique d’entrée tracés en premier point', async () => {
