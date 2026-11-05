@@ -28,8 +28,21 @@ function genererMotDePasse() {
   return car.join('');
 }
 
+/** Personnel de l'établissement de connexion ; médecin chef sans établissement : tout le personnel. */
+function perimetre(req) {
+  return req.etablissementId ? { 'affectations.etablissementId': req.etablissementId } : {};
+}
+
+/** Routes /:id : un soignant d'un autre établissement n'est ni consultable ni modifiable. */
+exports.verifierPerimetre = async (req, res, next, id) => {
+  if (!mongoose.isValidObjectId(id) || !(await Soignant.exists({ _id: id, ...perimetre(req) }))) {
+    return res.status(404).json({ message: 'Soignant introuvable.' });
+  }
+  next();
+};
+
 exports.lister = async (req, res) => {
-  const soignants = await Soignant.find().sort({ createdAt: -1 }).populate('creePar', Soignant.CHAMPS_AUTEUR);
+  const soignants = await Soignant.find(perimetre(req)).sort({ createdAt: -1 }).populate('creePar', Soignant.CHAMPS_AUTEUR);
   res.json(soignants);
 };
 

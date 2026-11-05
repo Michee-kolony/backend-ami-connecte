@@ -7,6 +7,7 @@ const ctrl = require('../controllers/soignants');
 const router = express.Router();
 
 router.use(authentifier);
+router.param('id', ctrl.verifierPerimetre);
 
 router.get('/', ctrl.lister);
 router.get('/:id', ctrl.obtenir);

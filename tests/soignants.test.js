@@ -153,3 +153,32 @@ test('connexion : un médecin affecté à plusieurs établissements choisit le s
   assert.equal((await appel('multiA', 'GET', '/patientes/AC-PAT-991001')).status, 200, 'connecté au Centre A : dossier du Centre A accessible');
   assert.equal((await appel('multiB', 'GET', '/patientes/AC-PAT-991001')).status, 403, 'connecté au Centre B : dossier du Centre A refusé');
 });
+
+test('gestion des soignants : seul le personnel de l’établissement de connexion est visible', async () => {
+  const jwt = require('jsonwebtoken');
+  const Soignant = require('../models/Soignant');
+  await Soignant.updateOne({ _id: comptes.chef.id }, { affectations: [{ etablissementId: etablissements.a.id }] });
+  await Soignant.updateOne({ _id: comptes.medecin.id }, { affectations: [{ etablissementId: etablissements.a.id }, { etablissementId: etablissements.b.id }] });
+  await Soignant.updateOne({ _id: comptes.infirmiere.id }, { affectations: [{ etablissementId: etablissements.b.id }] });
+  const jeton = (compte, etablissement) => jwt.sign({ sub: compte.id, role: compte.role, etablissement }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  jetons.chefA = jeton(comptes.chef, etablissements.a.id);
+  jetons.chefSansEtablissement = jeton(comptes.chef, null);
+  jetons.medecinB = jeton(comptes.medecin, etablissements.b.id);
+  const matricules = async (qui) => (await appel(qui, 'GET', '/soignants')).corps.map((s) => s.matricule);
+
+  const dansA = await matricules('chefA');
+  assert.ok(dansA.includes('MED-9101') && dansA.includes('MED-9102'), 'personnel du Centre A');
+  assert.equal(dansA.includes('INF-9101'), false, 'personnel du seul Centre B masqué');
+  const dansB = await matricules('medecinB');
+  assert.ok(dansB.includes('INF-9101') && dansB.includes('MED-9102'), 'un soignant affecté aux deux centres figure dans les deux');
+  assert.equal(dansB.includes('MED-9101'), false);
+  assert.ok((await matricules('chefSansEtablissement')).includes('INF-9101'), 'médecin chef sans établissement : tout le personnel');
+
+  // Un lien direct ne contourne pas la liste, ni en lecture ni en modification.
+  assert.equal((await appel('chefA', 'GET', `/soignants/${comptes.infirmiere.id}`)).status, 404);
+  assert.equal((await appel('chefA', 'PATCH', `/soignants/${comptes.infirmiere.id}`, { telephone: '1' })).status, 404);
+  assert.equal((await appel('chefA', 'PATCH', `/soignants/${comptes.infirmiere.id}/statut`)).status, 404);
+  assert.equal((await appel('chefA', 'GET', '/soignants/invalide')).status, 404);
+  assert.equal((await appel('chefA', 'GET', `/soignants/${comptes.medecin.id}`)).status, 200);
+  assert.equal((await appel('medecinB', 'PATCH', `/soignants/${comptes.infirmiere.id}`, { telephone: '1' })).status, 403, 'droits de gestion inchangés');
+});
