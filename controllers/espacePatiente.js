@@ -506,9 +506,32 @@ function rubriquesDossier(p) {
     .filter((r) => r.lignes.length);
 }
 
-/** Dossier d'enregistrement : la patiente relit ce qui a été saisi, sans pouvoir le modifier. */
+const ESSAIS_DOSSIER_MAX = 5;
+const BLOCAGE_DOSSIER_MS = 15 * 60000;
+/** Essais manqués par patiente (en mémoire : remis à zéro au redémarrage du serveur). */
+const essaisDossier = new Map();
+
+/** Mauvais mot de passe : 400 et non 401, qui déconnecterait l'application. */
+async function refuserDossier(req, essais) {
+  const p = req.patiente;
+  const echecs = (essais?.bloqueJusquA ? 0 : essais?.echecs ?? 0) + 1;
+  essaisDossier.set(p.id, { echecs, bloqueJusquA: echecs >= ESSAIS_DOSSIER_MAX ? Date.now() + BLOCAGE_DOSSIER_MS : 0 });
+  await journaliser(req, { action: 'acces.refuse', resultat: 'refusé', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'dossier', echecs } });
+  throw erreur(400, 'Mot de passe incorrect.');
+}
+
+/**
+ * Dossier d'enregistrement : la patiente relit ce qui a été saisi, sans pouvoir le modifier.
+ * Données confidentielles : son mot de passe est redemandé à chaque ouverture, même connectée,
+ * pour qu'un téléphone déverrouillé ne suffise pas.
+ */
 exports.dossier = async (req, res) => {
   const p = req.patiente;
+  const essais = essaisDossier.get(p.id);
+  if (essais?.bloqueJusquA > Date.now()) throw erreur(429, 'Trop d’essais : réessayez dans 15 minutes.');
+  const { motDePasse } = await Patiente.findById(p._id).select('+motDePasse');
+  if (!(await bcrypt.compare(String(req.body?.motDePasse || ''), motDePasse || ''))) await refuserDossier(req, essais);
+  essaisDossier.delete(p.id);
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'dossier' } });
   res.json({ enregistreeLe: p.createdAt, rubriques: rubriquesDossier(p) });
 };

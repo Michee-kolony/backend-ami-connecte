@@ -937,7 +937,14 @@ test('espace patiente : elle relit son enregistrement CPN, sans VIH ni donnée d
   assert.equal(r.status, 201, JSON.stringify(r.corps));
   const { jeton } = (await appel(null, 'POST', '/espace-patiente/connexion', { email: 'lydie@essai.test', motDePasse: 'Bebe2026ok' })).corps;
 
-  const d = await appel(jeton, 'GET', '/espace-patiente/dossier');
+  // Connectée, elle doit quand même redonner son mot de passe.
+  assert.equal((await appel(jeton, 'GET', '/espace-patiente/dossier')).status, 404, 'aucune lecture sans mot de passe');
+  assert.equal((await appel(jeton, 'POST', '/espace-patiente/dossier', {})).status, 400);
+  const mauvais = await appel(jeton, 'POST', '/espace-patiente/dossier', { motDePasse: 'Faux2026ok' });
+  assert.equal(mauvais.status, 400, 'pas 401 : la patiente reste connectée');
+  assert.equal(mauvais.corps.rubriques, undefined);
+
+  const d = await appel(jeton, 'POST', '/espace-patiente/dossier', { motDePasse: 'Bebe2026ok' });
   assert.equal(d.status, 200, JSON.stringify(d.corps));
   const ligne = (rubrique, libelle) => d.corps.rubriques.find((x) => x.titre === rubrique)?.lignes.find((l) => l.libelle === libelle)?.valeur;
   assert.equal(ligne('Mon identité', 'Date de naissance'), '04/03/1992');
@@ -951,6 +958,11 @@ test('espace patiente : elle relit son enregistrement CPN, sans VIH ni donnée d
   assert.deepEqual(medical.lignes.find((l) => l.libelle === 'Allergies'), { libelle: 'Allergies', valeur: 'Pénicilline', alerte: true });
   assert.deepEqual(medical.lignes.find((l) => l.libelle === 'Antécédents médicaux').valeurs, ['Hypertension artérielle (HTA)'], 'liste, sans VIH ni viol');
   assert.doesNotMatch(JSON.stringify(d.corps), /VIH|Viol|motDePasse|photoCle/);
-  assert.equal((await appel('medecin', 'GET', '/espace-patiente/dossier')).status, 403, 'jeton de soignant refusé');
-  assert.equal((await appel(null, 'GET', '/espace-patiente/dossier')).status, 401);
+  assert.equal((await appel('medecin', 'POST', '/espace-patiente/dossier', { motDePasse: 'Bebe2026ok' })).status, 403, 'jeton de soignant refusé');
+  assert.equal((await appel(null, 'POST', '/espace-patiente/dossier', { motDePasse: 'Bebe2026ok' })).status, 401);
+
+  // 5 échecs : blocage, même avec le bon mot de passe.
+  for (let i = 0; i < 5; i++) assert.equal((await appel(jeton, 'POST', '/espace-patiente/dossier', { motDePasse: 'Faux2026ok' })).status, 400);
+  assert.equal((await appel(jeton, 'POST', '/espace-patiente/dossier', { motDePasse: 'Bebe2026ok' })).status, 429);
+  assert.equal((await appel(jeton, 'GET', '/espace-patiente/moi')).status, 200, 'le reste de l’espace reste accessible');
 });

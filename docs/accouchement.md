@@ -10,6 +10,9 @@ rattaché au compte de sa mère : elle voit dans son espace son carnet, ses vacc
 et `rappelPrenatal.medicaments` sont retirés de la vue et ignorés en écriture ; elle garde les antécédents obstétricaux et les
 points d'attention (allergies, VIH+, utérus cicatriciel…), nécessaires à la sécurité de l'accouchement.
 
+**Dossier d'enregistrement de la patiente** (`POST /api/espace-patiente/dossier` `{ motDePasse }`) : mot de passe redemandé à
+chaque ouverture, même connectée ; 5 échecs bloquent cette lecture 15 minutes (429), sans déconnecter la patiente.
+
 | Rôle | Dossier d'accouchement (`/api/accouchements`) | Dossier de l'enfant (`/api/enfants`) |
 |---|---|---|
 | Médecins | Tout | Tout |
