@@ -23,6 +23,7 @@ router.delete('/appareils', ctrl.retirerAppareil);
 router.get('/accueil', ctrl.accueil);
 router.get('/rendez-vous', ctrl.rendezVous);
 router.get('/grossesse', ctrl.grossesse);
+router.get('/dossier', ctrl.dossier);
 router.get('/enfants', ctrl.enfants);
 router.get('/enfants/:id', ctrl.enfant);
 router.get('/accouchements', ctrl.accouchements);

@@ -258,6 +258,20 @@ test('ouverture du dossier : données du suivi prénatal pré-remplies et points
   assert.match(adm.antecedents.medicoChirurgicaux, /Allergies : Pénicilline/);
   assert.match(adm.antecedents.gynecoObstetricaux.autres, /Dystocie/);
 
+  // Antécédents médicaux : médecin seulement ; la sage-femme garde l'obstétrique et les alertes.
+  const vueSf = (await appel('sageFemme', 'GET', `/accouchements/${a.corps.id}`)).corps;
+  assert.equal(vueSf.admission.antecedents.medicoChirurgicaux, undefined);
+  assert.equal(vueSf.preRemplissage.admission.antecedents.medicoChirurgicaux, undefined);
+  assert.equal(vueSf.rappelPrenatal.medicaments, undefined);
+  assert.equal(vueSf.rappelPrenatal.allergies, undefined);
+  assert.match(vueSf.admission.antecedents.gynecoObstetricaux.autres, /Dystocie/);
+  assert.ok(vueSf.rappelPrenatal.points.some((p) => /Allergies : Pénicilline/.test(p.texte)), 'alerte de sécurité conservée');
+  const ecrasement = await appel('sageFemme', 'PATCH', `/accouchements/${a.corps.id}/admission`, { antecedents: { medicoChirurgicaux: 'Remplacé' } });
+  assert.equal(ecrasement.status, 200, JSON.stringify(ecrasement.corps));
+  const vueMedecin = (await appel('medecin', 'GET', `/accouchements/${a.corps.id}`)).corps;
+  assert.match(vueMedecin.admission.antecedents.medicoChirurgicaux, /Allergies : Pénicilline/, 'non modifiable par la sage-femme');
+  assert.equal(vueMedecin.rappelPrenatal.allergies, 'Pénicilline');
+
   // Examen d'entrée : données durables proposées, mesures du jour laissées vides.
   const ex = a.corps.preRemplissage.examen;
   assert.equal(ex.physique.tailleCm, 158);
@@ -907,4 +921,32 @@ test('partogramme : tableau de la phase de latence (heures depuis l’arrivée, 
   assert.equal((await appel('sageFemme', 'PUT', `/accouchements/${id}/evacuation`, { le: ilYaH(0.5) })).status, 400, 'motif obligatoire');
   const retrait = await appel('sageFemme', 'PUT', `/accouchements/${id}/evacuation`, { le: '', motif: '' });
   assert.equal(retrait.corps.partogramme.latence.evacuation, null);
+});
+
+test('espace patiente : elle relit son enregistrement CPN, sans VIH ni donnée d’une autre patiente', async () => {
+  const r = await creerPatiente({
+    patiente: {
+      nom: 'Dossier', prenom: 'Lydie', dateNaissance: '1992-03-04', telephone: '+243 81 777 8899', email: 'lydie@essai.test',
+      groupeSanguin: 'B', rhesus: 'Positif', tailleCm: 162, adresse: { province: 'Kinshasa', quartier: 'Matonge' },
+      contactUrgence: { nom: 'Paul Dossier', lien: 'Époux', telephone: '+243 81 111 2222' },
+      antecedents: { gestite: 2, parite: 0, allergies: 'Pénicilline', atcdMedicaux: ['Hypertension artérielle (HTA)', 'VIH/SIDA', 'Viol'], testVihConnuLe: ilYaJ(10) },
+    },
+    compte: { motDePasse: 'Bebe2026ok' },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYaJ(100) } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const { jeton } = (await appel(null, 'POST', '/espace-patiente/connexion', { email: 'lydie@essai.test', motDePasse: 'Bebe2026ok' })).corps;
+
+  const d = await appel(jeton, 'GET', '/espace-patiente/dossier');
+  assert.equal(d.status, 200, JSON.stringify(d.corps));
+  const ligne = (rubrique, libelle) => d.corps.rubriques.find((x) => x.titre === rubrique)?.lignes.find((l) => l.libelle === libelle)?.valeur;
+  assert.equal(ligne('Mon identité', 'Date de naissance'), '04/03/1992');
+  assert.equal(ligne('Profil biologique', 'Groupe sanguin'), 'B');
+  assert.equal(ligne('Personne à prévenir', 'Nom'), 'Paul Dossier');
+  assert.equal(ligne('Antécédents médicaux et chirurgicaux', 'Allergies'), 'Pénicilline');
+  assert.equal(ligne('Antécédents médicaux et chirurgicaux', 'Antécédents médicaux'), 'Hypertension artérielle (HTA)');
+  assert.equal(ligne('Antécédents obstétricaux', 'Accouchements (parité)'), '0', 'zéro affiché, pas masqué');
+  assert.doesNotMatch(JSON.stringify(d.corps), /VIH|Viol|motDePasse|photoCle/);
+  assert.equal((await appel('medecin', 'GET', '/espace-patiente/dossier')).status, 403, 'jeton de soignant refusé');
+  assert.equal((await appel(null, 'GET', '/espace-patiente/dossier')).status, 401);
 });

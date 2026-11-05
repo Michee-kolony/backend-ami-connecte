@@ -1,7 +1,8 @@
 // Espace patiente (application mobile) : la patiente se connecte avec son e-mail ou son matricule et le mot de passe
 // choisis à son enregistrement, et ne lit que ses propres données et celles de ses enfants :
 // grossesse en cours (datation, fiches CPN), rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
-// accouchements, conseils de l'équipe soignante. Aucune donnée n'y est modifiable, sauf son mot de passe.
+// accouchements, données de son enregistrement CPN, conseils de l'équipe soignante. Aucune donnée n'y
+// est modifiable, sauf son mot de passe.
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -448,6 +449,64 @@ exports.grossesse = async (req, res) => {
     consultations: consultations.map(fichePourPatiente),
     rendezVous: rendezVous.map((r) => rdvPourPatiente(r, new Map())),
   });
+};
+
+/** Antécédents jamais affichés sur le téléphone, qui peut être vu par l'entourage (comme le PTME). */
+const ATCD_NON_AFFICHES = ['VIH/SIDA', 'Viol'];
+
+/** Données saisies à l'enregistrement CPN, par rubrique (lignes renseignées seulement). */
+function rubriquesDossier(p) {
+  const a = p.adresse ?? {};
+  const u = p.contactUrgence ?? {};
+  const atcd = p.antecedents ?? {};
+  const c = p.consentements ?? {};
+  const date = (d) => (d ? d.split('-').reverse().join('/') : '');
+  const liste = (l) => (l ?? []).join(', ');
+  const rubriques = [
+    ['Mon identité', [
+      ['Matricule', p.numero], ['Nom complet', [p.prenom, p.nom, p.postnom].filter(Boolean).join(' ')],
+      ['Date de naissance', date(p.dateNaissance)], ['Âge', p.age() != null ? `${p.age()} ans` : ''],
+      ['Pièce d’identité', p.pieceIdentite], ['État civil', p.etatCivil], ['Occupation', p.occupation],
+      ['Partenaire', p.nomPartenaire], ['Occupation du partenaire', p.occupationPartenaire],
+    ]],
+    ['Mes coordonnées', [
+      ['Téléphone', p.telephone], ['Autre téléphone', p.telephone2], ['E-mail', p.email],
+      ['Province', a.province], ['Commune', a.commune], ['Quartier', a.quartier], ['Avenue', a.avenue],
+      ['Repère', a.repere], ['Aire de santé', a.aireSante],
+    ]],
+    ['Personne à prévenir', [['Nom', u.nom], ['Lien', u.lien], ['Téléphone', u.telephone], ['Adresse', u.adresse]]],
+    ['Profil biologique', [
+      ['Groupe sanguin', p.groupeSanguin], ['Rhésus', p.rhesus], ['Électrophorèse de l’hémoglobine', p.electrophoreseHb],
+      ['Taille', p.tailleCm != null ? `${p.tailleCm} cm` : ''],
+    ]],
+    ['Antécédents médicaux et chirurgicaux', [
+      ['Antécédents médicaux', liste(atcd.atcdMedicaux?.filter((x) => !ATCD_NON_AFFICHES.includes(x)))], ['Autres antécédents médicaux', atcd.medicaux],
+      ['Antécédents gynécologiques et chirurgicaux', liste(atcd.atcdGynecoChirurgicaux)], ['Autres antécédents chirurgicaux', atcd.chirurgicaux],
+      ['Allergies', atcd.allergies], ['Médicaments en cours', atcd.medicaments],
+    ]],
+    ['Antécédents obstétricaux', [
+      ['Grossesses (gestité)', atcd.gestite], ['Accouchements (parité)', atcd.parite], ['Enfants vivants', atcd.enfantsVivants],
+      ['Avortements', atcd.avortements], ['Césariennes', atcd.cesariennes], ['Antécédents obstétricaux', liste(atcd.atcdObstetricaux)],
+      ['Complications', atcd.complicationsObstetricales], ['Dernier accouchement', date(atcd.dernierAccouchement)],
+      ['Plus gros poids de naissance', atcd.plusGrosPoidsNaissanceG != null ? `${atcd.plusGrosPoidsNaissanceG} g` : ''],
+    ]],
+    ['Contact par le centre de santé', [
+      ['Canaux acceptés', [['SMS', c.sms], ['Appel', c.appel], ['WhatsApp', c.whatsapp]].filter(([, ok]) => ok === true).map(([canal]) => canal).join(', ')],
+    ]],
+  ];
+  return rubriques
+    .map(([titre, lignes]) => ({
+      titre,
+      lignes: lignes.filter(([, v]) => v != null && v !== '').map(([libelle, valeur]) => ({ libelle, valeur: String(valeur) })),
+    }))
+    .filter((r) => r.lignes.length);
+}
+
+/** Dossier d'enregistrement : la patiente relit ce qui a été saisi, sans pouvoir le modifier. */
+exports.dossier = async (req, res) => {
+  const p = req.patiente;
+  await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'dossier' } });
+  res.json({ enregistreeLe: p.createdAt, rubriques: rubriquesDossier(p) });
 };
 
 /** Téléphone de la patiente : jeton Firebase pour recevoir les notifications push. */

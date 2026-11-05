@@ -25,6 +25,7 @@ const { STATUTS_ACTIFS } = RendezVous;
 const codes = (liste) => liste.map((x) => x.code);
 const HEURE = 3600000;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const estMedecin = (req) => Soignant.ROLES_MEDECIN.includes(req.soignant.role);
 const heuresEntre = (debut, fin) => (debut ? Math.round(((fin - debut) / HEURE) * 100) / 100 : null);
 
 // Spécifications des formulaires (liste blanche des champs, convertis).
@@ -89,6 +90,26 @@ const SPEC_MESURES = {
   nouveauNe: Object.fromEntries(acc.MESURES_SORTIE_NOUVEAU_NE.map(({ code }) => [code, B])),
 };
 
+/**
+ * Antécédents médicaux réservés aux médecins : la sage-femme garde les antécédents obstétricaux
+ * et les points d'attention, nécessaires à la sécurité de l'accouchement.
+ */
+function masquerAntecedentsMedicaux(json) {
+  delete json.admission.antecedents?.medicoChirurgicaux;
+  delete json.preRemplissage?.admission?.antecedents?.medicoChirurgicaux;
+  if (json.rappelPrenatal) {
+    delete json.rappelPrenatal.allergies;
+    delete json.rappelPrenatal.medicaments;
+  }
+}
+
+/** Formulaire d'admission : seul un médecin renseigne les antécédents médicaux. */
+function lireAdmission(req, corps) {
+  const saisie = lire(SPEC_ADMISSION, corps);
+  if (!estMedecin(req)) delete saisie.antecedents?.medicoChirurgicaux;
+  return saisie;
+}
+
 async function trouver(req, id) {
   const a = /^AC-ACC-\d+$/.test(id) ? await Accouchement.findOne({ numero: id })
     : mongoose.isValidObjectId(id) ? await Accouchement.findById(id) : null;
@@ -133,7 +154,7 @@ function manquantsCloture(a, nouveauNes) {
 }
 
 /** Dossier complet : partogramme, temps écoulés, planning post-partum et nouveau-nés. */
-async function vue(a) {
+async function vue(a, req) {
   const [patiente, grossesse, nouveauNes] = await Promise.all([
     Patiente.findById(a.patienteId),
     Grossesse.findById(a.grossesseId),
@@ -165,6 +186,7 @@ async function vue(a) {
     };
   }
   json.manquantsCloture = a.statut === 'Clôturé' ? [] : manquantsCloture(a, nouveauNes);
+  if (!estMedecin(req)) masquerAntecedentsMedicaux(json);
   return json;
 }
 
@@ -290,7 +312,7 @@ exports.admettre = async (req, res) => {
     const existant = await Accouchement.findOne({ grossesseId: g._id }).select('numero');
     if (existant) throw erreur(409, `Un dossier d’accouchement existe déjà pour cette grossesse (${existant.numero}).`, { accouchementId: existant.id });
   }
-  const saisie = lire(SPEC_ADMISSION, corps.admission);
+  const saisie = lireAdmission(req, corps.admission);
   const admiseLe = pasDansLeFutur(instant(objet(corps.admission).admiseLe, 'Heure d’admission') ?? new Date(), 'L’admission');
   const admission = { ...fusionner(suiviPrenatal.admission(p, g, await suiviPrenatal.charger(g)), saisie), admiseLe, admisePar: auteur };
   if (!g) {
@@ -325,13 +347,13 @@ exports.admettre = async (req, res) => {
   if (nouvellePatiente) await journaliser(req, { action: 'patiente.creation', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { via: 'Admission directe' } });
   if (nouvelleGrossesse) await journaliser(req, { action: 'grossesse.creation', patienteId: p._id, ressource: { type: 'grossesse', id: g.id } });
   await journaliser(req, { action: 'accouchement.admission', patienteId: p._id, ressource: { type: 'accouchement', id: a.numero } });
-  res.status(201).json(await vue(a));
+  res.status(201).json(await vue(a, req));
 };
 
 exports.obtenir = async (req, res) => {
   const a = await trouver(req, req.params.id);
   await journaliser(req, { action: 'accouchement.lecture', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /** Correction de l'identité ou de l'anamnèse (champs modifiés journalisés, sans valeurs). */
@@ -339,14 +361,14 @@ exports.modifierAdmission = async (req, res) => {
   const a = await trouver(req, req.params.id);
   verifierOuvert(a);
   verifierVersion(req, a, 'le dossier d’accouchement');
-  const saisie = lire(SPEC_ADMISSION, req.body);
+  const saisie = lireAdmission(req, req.body);
   const champs = Object.keys(saisie);
   if (!champs.length) throw erreur(400, 'Aucun champ à modifier.');
   a.admission = fusionner(a.admission.toObject(), saisie);
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.modification', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { champs } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /** Module 2 — Examen clinique d'entrée (enregistré ou remplacé ; l'examinateur est le soignant connecté). */
@@ -371,7 +393,7 @@ exports.examiner = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.examen', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /** Médecins à notifier : ceux de l'établissement du dossier, sinon tous les médecins actifs. */
@@ -462,7 +484,7 @@ exports.evacuer = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.evacuation', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { evacuee: Boolean(a.evacuation) } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 exports.partogramme = async (req, res) => {
@@ -535,7 +557,7 @@ exports.accoucher = async (req, res) => {
   await a.save();
   await journaliser(req, { action: 'accouchement.accouchement', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { mode: donnees.mode } });
   await synchroniserGrossesse(a, req);
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /**
@@ -583,7 +605,7 @@ exports.surveillerPostPartum = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.postpartum', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero }, details: { creneau } });
-  res.status(201).json(await vue(a));
+  res.status(201).json(await vue(a, req));
 };
 
 /** Traitement prévu ou administré (mère ou nouveau-né). */
@@ -612,7 +634,7 @@ exports.ajouterTraitement = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.traitement', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.status(201).json(await vue(a));
+  res.status(201).json(await vue(a, req));
 };
 
 /** Traitement prévu → administré (heure et soignant conservés). */
@@ -627,7 +649,7 @@ exports.administrerTraitement = async (req, res) => {
   t.auteur = auteurDe(req.soignant);
   await a.save();
   await journaliser(req, { action: 'accouchement.traitement', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /**
@@ -682,7 +704,7 @@ exports.sortir = async (req, res) => {
   await valider(a);
   await a.save();
   await journaliser(req, { action: 'accouchement.sortie', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /**
@@ -720,7 +742,7 @@ exports.cloturer = async (req, res) => {
   a.cloture = { par: auteur, le: new Date() };
   await a.save();
   await journaliser(req, { action: 'accouchement.cloture', patienteId: a.patienteId, ressource: { type: 'accouchement', id: a.numero } });
-  res.json(await vue(a));
+  res.json(await vue(a, req));
 };
 
 /**

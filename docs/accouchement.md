@@ -6,6 +6,10 @@ rattaché au compte de sa mère : elle voit dans son espace son carnet, ses vacc
 
 ## Règles d'accès
 
+**Antécédents médicaux et chirurgicaux** : réservés aux médecins. Pour une sage-femme, `medicoChirurgicaux`, `rappelPrenatal.allergies`
+et `rappelPrenatal.medicaments` sont retirés de la vue et ignorés en écriture ; elle garde les antécédents obstétricaux et les
+points d'attention (allergies, VIH+, utérus cicatriciel…), nécessaires à la sécurité de l'accouchement.
+
 | Rôle | Dossier d'accouchement (`/api/accouchements`) | Dossier de l'enfant (`/api/enfants`) |
 |---|---|---|
 | Médecins | Tout | Tout |
