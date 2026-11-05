@@ -966,3 +966,39 @@ test('espace patiente : elle relit son enregistrement CPN, sans VIH ni donnée d
   assert.equal((await appel(jeton, 'POST', '/espace-patiente/dossier', { motDePasse: 'Bebe2026ok' })).status, 429);
   assert.equal((await appel(jeton, 'GET', '/espace-patiente/moi')).status, 200, 'le reste de l’espace reste accessible');
 });
+
+test('espace patiente : un rendez-vous raté est signalé, jamais si elle a été vue depuis', async () => {
+  const RendezVous = require('../models/RendezVous');
+  const Consultation = require('../models/Consultation');
+  const Grossesse = require('../models/Grossesse');
+  const r = await creerPatiente({
+    patiente: { nom: 'Rate', prenom: 'Nadine', dateNaissance: '1993-03-03', telephone: '+243 81 555 6677', email: 'nadine@essai.test', adresse: { province: 'Kinshasa' } },
+    compte: { motDePasse: 'Bebe2026ok' },
+    grossesse: { datation: { methode: 'DDR', ddr: ilYaJ(120) } },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const { jeton } = (await appel(null, 'POST', '/espace-patiente/connexion', { email: 'nadine@essai.test', motDePasse: 'Bebe2026ok' })).corps;
+  const g = await Grossesse.findOne({ patienteId: r.corps.id });
+  const auteur = { id: comptes.medecin.id, nom: 'Marie MEDECIN', role: 'Médecin' };
+  const rdv = (jours, motif, statut = 'Planifié') => RendezVous.create({
+    patienteId: g.patienteId, grossesseId: g._id, date: new Date(Date.now() - jours * 86400000), motif, statut, creePar: auteur,
+  });
+  await rdv(20, 'Noté absente', 'Absent');
+  await rdv(10, 'Venue plus tard');
+  await rdv(-2, 'À venir');
+  const manque = async () => Object.fromEntries((await appel(jeton, 'GET', '/espace-patiente/rendez-vous')).corps.map((x) => [x.motif, x.manque]));
+
+  assert.deepEqual(await manque(), { 'À venir': false, 'Venue plus tard': true, 'Noté absente': true });
+  assert.equal((await appel(jeton, 'GET', '/espace-patiente/accueil')).corps.rendezVousManque, null, 'un nouveau rendez-vous est déjà prévu');
+
+  // Vue un autre jour que prévu : pas de reproche ; l'absence notée par le centre reste.
+  await Consultation.create({ patienteId: g.patienteId, grossesseId: g._id, type: 'Suivi prénatal', auteur, statut: 'Finalisée', date: new Date(Date.now() - 5 * 86400000) });
+  assert.deepEqual(await manque(), { 'À venir': false, 'Venue plus tard': false, 'Noté absente': true });
+
+  await rdv(2, 'Raté récent');
+  await RendezVous.deleteOne({ patienteId: g.patienteId, motif: 'À venir' });
+  const accueil = await appel(jeton, 'GET', '/espace-patiente/accueil');
+  assert.equal(accueil.corps.rendezVousManque.motif, 'Raté récent', 'rappel sur l’accueil');
+  assert.equal(accueil.corps.prochainsRendezVous.length, 0, 'un rendez-vous passé n’est plus « prochain »');
+  assert.equal((await appel(jeton, 'GET', '/espace-patiente/grossesse')).corps.rendezVous.find((x) => x.motif === 'Raté récent').manque, true);
+});

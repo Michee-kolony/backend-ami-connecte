@@ -19,6 +19,7 @@ const { journaliser } = require('../config/audit');
 const notifications = require('../config/notifications');
 const { urlSignee } = require('../config/r2');
 const acc = require('../config/accouchement');
+const { jourKinshasa } = require('../config/vaccination');
 const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const { motDePasseValide } = require('./patientes');
@@ -26,6 +27,10 @@ const carte = require('./carte');
 const { erreur, texte } = require('./saisie');
 
 const { STATUTS_ACTIFS } = RendezVous;
+const JOUR = 86400000;
+/** Durée pendant laquelle un rendez-vous raté est rappelé sur l'accueil. */
+const RAPPEL_RDV_MANQUE_JOURS = 30;
+const debutDuJour = () => new Date(`${jourKinshasa()}T00:00:00+01:00`);
 /** Soignant figé dans un acte : nom et fonction seulement (ni identifiant ni matricule). */
 const soignant = (a) => (a ? { nom: a.nom, role: a.role } : null);
 
@@ -102,16 +107,37 @@ exports.changerMotDePasse = async (req, res) => {
   res.json({ message: 'Mot de passe modifié.' });
 };
 
+/**
+ * Rendez-vous ratés parmi ceux donnés : absence notée par le centre, ou jour passé sans suite.
+ * Même prudence que la relance (config/moteurRelance.js) : on ne dit pas à une maman qu'elle a raté
+ * un rendez-vous si elle a été vue depuis la veille de celui-ci, un autre jour que prévu. Pour un
+ * enfant, la vaccination clôt déjà tous les rendez-vous passés.
+ */
+async function rdvManques(patiente, rdvs) {
+  const aujourdhui = debutDuJour();
+  const passes = rdvs.filter((r) => r.statut === 'Absent' || (STATUTS_ACTIFS.includes(r.statut) && r.date < aujourdhui));
+  if (!passes.length) return new Set();
+  const [consultations, effectues] = await Promise.all([
+    Consultation.find({ patienteId: patiente._id, statut: { $ne: 'Annulée' } }).select('date'),
+    RendezVous.find({ patienteId: patiente._id, enfantId: null, statut: 'Effectué' }).select('date'),
+  ]);
+  const derniere = (liste) => Math.max(0, ...liste.map((x) => x.date.getTime()));
+  const consultee = derniere(consultations);
+  const honore = derniere(effectues);
+  const vueDepuis = (r) => !r.enfantId && (consultee >= r.date.getTime() - JOUR || honore > r.date.getTime());
+  return new Set(passes.filter((r) => r.statut === 'Absent' || !vueDepuis(r)).map((r) => r.id));
+}
+
 /** Rendez-vous lisibles par la patiente (consignes publiables, sans détail clinique). */
-function rdvPourPatiente(r, prenoms) {
+function rdvPourPatiente(r, prenoms, manques = new Set()) {
   return {
-    id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut,
+    id: r.id, date: r.date, motif: r.motif, lieu: r.lieu, consignes: r.consignes, statut: r.statut, manque: manques.has(r.id),
     enfant: r.enfantId ? { id: String(r.enfantId), prenom: prenoms.get(String(r.enfantId)) ?? '' } : null,
   };
 }
 
 /** Enfant vu par sa mère : identité, naissance (mensurations, APGAR), carnet, croissance, rendez-vous. */
-async function enfantPourPatiente(e, rendezVous, prenoms) {
+async function enfantPourPatiente(e, rendezVous, prenoms, manques) {
   const n = e.naissance ?? {};
   return {
     photoUrl: await urlSignee(e.photoCle),
@@ -127,7 +153,7 @@ async function enfantPourPatiente(e, rendezVous, prenoms) {
       date: s.date, poidsG: s.poidsG, tailleCm: s.tailleCm, perimetreCranienCm: s.perimetreCranienCm,
       perimetreBrachialCm: s.perimetreBrachialCm, alimentation: s.alimentation, observations: s.observations, soignant: soignant(s.auteur),
     })),
-    rendezVous: rendezVous.filter((r) => String(r.enfantId) === e.id).map((r) => rdvPourPatiente(r, prenoms)),
+    rendezVous: rendezVous.filter((r) => String(r.enfantId) === e.id).map((r) => rdvPourPatiente(r, prenoms, manques)),
   };
 }
 
@@ -146,12 +172,19 @@ async function donneesEnfants(patiente) {
  */
 exports.accueil = async (req, res) => {
   const p = req.patiente;
-  const debut = new Date(Date.now() - 86400000);
-  const [grossesse, prochains, { enfants, prenoms }] = await Promise.all([
+  const debut = debutDuJour();
+  const [grossesse, prochains, { enfants, prenoms }, recents] = await Promise.all([
     Grossesse.findOne({ patienteId: p._id, statut: 'En cours' }).sort({ numero: -1 }),
     RendezVous.find({ patienteId: p._id, statut: { $in: STATUTS_ACTIFS }, date: { $gte: debut } }).sort({ date: 1 }).limit(10),
     donneesEnfants(p),
+    RendezVous.find({
+      patienteId: p._id, statut: { $in: [...STATUTS_ACTIFS, 'Absent'] },
+      date: { $gte: new Date(debut - RAPPEL_RDV_MANQUE_JOURS * JOUR), $lt: debut },
+    }).sort({ date: -1 }),
   ]);
+  // Rappel du dernier rendez-vous raté, tant qu'aucun autre n'est prévu pour la même personne.
+  const manques = await rdvManques(p, recents);
+  const rate = recents.find((r) => manques.has(r.id) && !prochains.some((x) => String(x.enfantId) === String(r.enfantId)));
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'accueil' } });
   res.json({
     patiente: await profil(p),
@@ -159,6 +192,7 @@ exports.accueil = async (req, res) => {
       numero: grossesse.numero, agJours: grossesse.agJoursLe(), ddr: grossesse.datation?.ddr ?? null, dpa: grossesse.datation?.dpa ?? null,
     } : null,
     prochainsRendezVous: prochains.map((r) => rdvPourPatiente(r, prenoms)),
+    rendezVousManque: rate ? rdvPourPatiente(rate, prenoms, manques) : null,
     enfants: await Promise.all(enfants.map(async (e) => {
       const carnet = e.carnet();
       return {
@@ -179,13 +213,15 @@ exports.rendezVous = async (req, res) => {
   ]);
   const prenoms = new Map(enfants.map((e) => [e.id, e.prenom]));
   await journaliser(req, { action: 'espace.lecture', patienteId: p._id, ressource: { type: 'patiente', id: p.numero }, details: { page: 'rendez-vous' } });
-  res.json(rdvs.map((r) => rdvPourPatiente(r, prenoms)));
+  const manques = await rdvManques(p, rdvs);
+  res.json(rdvs.map((r) => rdvPourPatiente(r, prenoms, manques)));
 };
 
 exports.enfants = async (req, res) => {
   const { enfants, rendezVous, prenoms } = await donneesEnfants(req.patiente);
   await journaliser(req, { action: 'espace.lecture', patienteId: req.patiente._id, ressource: { type: 'patiente', id: req.patiente.numero }, details: { page: 'enfants' } });
-  res.json(await Promise.all(enfants.map((e) => enfantPourPatiente(e, rendezVous, prenoms))));
+  const manques = await rdvManques(req.patiente, rendezVous);
+  res.json(await Promise.all(enfants.map((e) => enfantPourPatiente(e, rendezVous, prenoms, manques))));
 };
 
 /** Un enfant de la patiente connectée (404 pour tout autre enfant : rien n'est révélé). */
@@ -194,7 +230,7 @@ exports.enfant = async (req, res) => {
   if (!e) throw erreur(404, 'Enfant introuvable.');
   const rendezVous = await RendezVous.find({ enfantId: e._id }).sort({ date: 1 });
   await journaliser(req, { action: 'espace.lecture', patienteId: req.patiente._id, ressource: { type: 'enfant', id: e.numero } });
-  res.json(await enfantPourPatiente(e, rendezVous, new Map([[e.id, e.prenom]])));
+  res.json(await enfantPourPatiente(e, rendezVous, new Map([[e.id, e.prenom]]), await rdvManques(req.patiente, rendezVous)));
 };
 
 /** Examen clinique d'entrée vu par la patiente : constantes, examen obstétrical, conclusion. */
@@ -439,6 +475,7 @@ exports.grossesse = async (req, res) => {
     RendezVous.find({ patienteId: p._id, enfantId: null, $or: [{ grossesseId: g._id }, { grossesseId: null }] }).sort({ date: 1 }),
   ]);
   const d = g.datation;
+  const manques = await rdvManques(p, rendezVous);
   res.json({
     grossesse: {
       id: g.id, numero: g.numero, statut: g.statut, grossesseMultiple: g.grossesseMultiple,
@@ -447,7 +484,7 @@ exports.grossesse = async (req, res) => {
       issue: g.issue ? { date: g.issue.date, issue: g.issue.issue, mode: g.issue.mode } : null,
     },
     consultations: consultations.map(fichePourPatiente),
-    rendezVous: rendezVous.map((r) => rdvPourPatiente(r, new Map())),
+    rendezVous: rendezVous.map((r) => rdvPourPatiente(r, new Map(), manques)),
   });
 };
 
