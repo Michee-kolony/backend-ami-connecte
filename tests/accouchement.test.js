@@ -945,7 +945,11 @@ test('espace patiente : elle relit son enregistrement CPN, sans VIH ni donnée d
   assert.equal(ligne('Personne à prévenir', 'Nom'), 'Paul Dossier');
   assert.equal(ligne('Antécédents médicaux et chirurgicaux', 'Allergies'), 'Pénicilline');
   assert.equal(ligne('Antécédents médicaux et chirurgicaux', 'Antécédents médicaux'), 'Hypertension artérielle (HTA)');
-  assert.equal(ligne('Antécédents obstétricaux', 'Accouchements (parité)'), '0', 'zéro affiché, pas masqué');
+  assert.equal(ligne('Antécédents obstétricaux', 'Accouchements'), '0', 'zéro affiché, pas masqué');
+  const medical = d.corps.rubriques[0];
+  assert.equal(medical.code, 'medical', 'antécédents en tête du dossier');
+  assert.deepEqual(medical.lignes.find((l) => l.libelle === 'Allergies'), { libelle: 'Allergies', valeur: 'Pénicilline', alerte: true });
+  assert.deepEqual(medical.lignes.find((l) => l.libelle === 'Antécédents médicaux').valeurs, ['Hypertension artérielle (HTA)'], 'liste, sans VIH ni viol');
   assert.doesNotMatch(JSON.stringify(d.corps), /VIH|Viol|motDePasse|photoCle/);
   assert.equal((await appel('medecin', 'GET', '/espace-patiente/dossier')).status, 403, 'jeton de soignant refusé');
   assert.equal((await appel(null, 'GET', '/espace-patiente/dossier')).status, 401);
