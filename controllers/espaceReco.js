@@ -1,7 +1,8 @@
 // Application RECO (espace /reco d'ami-sante) : connexion par matricule, tâches attribuées,
 // actions de relance (en ligne ou hors connexion), signalements.
 // Le RECO ne voit que le strict nécessaire : nom, quartier et repère, téléphone seulement pour
-// les canaux consentis, motif sans détail clinique (sections 11 et 14).
+// les canaux consentis, motif sans détail clinique (sections 11 et 14). Pour un rendez-vous manqué
+// d'une tâche qui lui est confiée, il voit aussi la photo de la patiente pour la reconnaître.
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -12,6 +13,7 @@ const Patiente = require('../models/Patiente');
 const Enfant = require('../models/Enfant');
 const Etablissement = require('../models/Etablissement');
 const { journaliser } = require('../config/audit');
+const { urlSignee } = require('../config/r2');
 const moteur = require('../config/moteurRelance');
 const r = require('../config/relance');
 const { motDePasseValide } = require('./flotte');
@@ -21,6 +23,9 @@ const OPERATION = /^[A-Za-z0-9_-]{8,80}$/;
 /** Tâches clôturées encore affichées au RECO (résultat de son travail). */
 const CLOTUREES_JOURS = 30;
 const MAX_OPERATIONS = 200;
+/** Durée du lien de la photo : l'écran du RECO reste ouvert entre deux synchronisations. */
+const DUREE_LIEN_PHOTO_S = 3600;
+const REGLE_RDV_MANQUE = 'CPN_RDV_MANQUE';
 
 function profil(reco, etablissement) {
   return {
@@ -73,13 +78,20 @@ function canauxAutorises(patiente) {
   return [...Object.entries(r.CONSENTEMENT_CANAL).filter(([, cle]) => c[cle] === true).map(([canal]) => canal), 'Visite à domicile'];
 }
 
+const rendezVousManque = (t) => t.motifs.some((m) => m.regleCode === REGLE_RDV_MANQUE);
+
 async function vuesTaches(reco, taches) {
   const patientes = new Map((await Patiente.find({ _id: { $in: taches.map((t) => t.patienteId).filter(Boolean) } })
-    .select('prenom nom postnom telephone telephonePartage consentements adresse')).map((p) => [p.id, p]));
+    .select('prenom nom postnom telephone telephonePartage consentements adresse photoCle')).map((p) => [p.id, p]));
   const enfants = new Map((await Enfant.find({ _id: { $in: taches.map((t) => t.enfantId).filter(Boolean) } })
     .select('prenom nom sexe')).map((e) => [e.id, e]));
   const structures = new Map((await Etablissement.find({ _id: { $in: [...new Set(taches.map((t) => t.etablissementId).filter((id) => mongoose.isValidObjectId(id)))] } })
     .select('nom telephone')).map((e) => [e.id, e]));
+  // Photo limitée aux rendez-vous manqués encore ouverts et confiés à ce RECO.
+  const avecPhoto = taches.filter((t) => rendezVousManque(t) && t.estOuverte() && String(t.recoId) === reco.id);
+  const photos = new Map(await Promise.all(avecPhoto.map(async (t) => [
+    t.numero, await urlSignee(patientes.get(String(t.patienteId))?.photoCle, DUREE_LIEN_PHOTO_S),
+  ])));
   const maintenant = new Date();
   return taches.map((t) => {
     const p = t.patienteId ? patientes.get(String(t.patienteId)) : null;
@@ -92,6 +104,7 @@ async function vuesTaches(reco, taches) {
       numero: t.numero, statut: t.statut, priorite: t.priorite, echeance: t.echeance, enRetard: t.enRetard(maintenant),
       // Pas de domaine (CPN, vaccination…) : seul le motif neutre est transmis au téléphone.
       parcoursCode: t.parcoursCode, motif: r.MOTIF_RECO[t.domaine],
+      rendezVousManque: rendezVousManque(t),
       attribueeAMoi: mienne,
       personne: t.personneType === 'Déclarée'
         ? { nom: t.declaree?.nom ?? '', quartier: t.declaree?.quartier ?? '', repere: t.declaree?.repere ?? '', telephone: t.declaree?.telephone ?? '' }
@@ -102,6 +115,7 @@ async function vuesTaches(reco, taches) {
           // Numéro seulement si un canal téléphonique est consenti ; téléphone partagé signalé.
           telephone: avecTelephone ? p?.telephone ?? '' : '',
           telephonePartage: !!p?.telephonePartage,
+          photoUrl: photos.get(t.numero) ?? null,
         },
       canauxAutorises: canaux,
       structure: structure ? { id: structure.id, nom: structure.nom, telephone: structure.telephone } : null,

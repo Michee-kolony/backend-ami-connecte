@@ -53,6 +53,7 @@ before(async () => {
     return { cle: `${dossier}/essai-${n}.png`, url: `https://public.invalid/${dossier}/essai-${n}.png` };
   };
   r2.supprimerFichier = async () => {};
+  r2.urlSignee = async (cle) => (cle ? `https://signe.invalid/${cle}` : null);
   const app = require('../app');
   moteur = require('../config/moteurRelance');
   mongoose = require('mongoose');
@@ -255,6 +256,14 @@ test('Visibilité : RECO, prestataire et autre structure ne voient que ce qui le
   assert.deepEqual(vue.canauxAutorises, ['Appel', 'SMS', 'Visite à domicile']);
   assert.equal(vue.personne.telephone, '+243 81 000 0001');
   assert.equal(vue.personne.quartier, 'Salongo');
+  assert.equal(vue.personne.avenue, 'Av. Essai 1');
+  // Rendez-vous manqué : la photo est transmise par lien signé, jamais par sa clé.
+  assert.equal(vue.rendezVousManque, true);
+  assert.equal(vue.personne.photoUrl, null, 'sans photo au dossier');
+  await mongoose.model('Patiente').updateOne({ _id: ids.patiente }, { photoCle: 'patientes/fictive.jpg' });
+  const avecPhoto = (await appel('reco', 'GET', '/reco/taches')).corps.taches[0];
+  assert.equal(avecPhoto.personne.photoUrl, 'https://signe.invalid/patientes/fictive.jpg');
+  assert.equal(avecPhoto.personne.photoCle, undefined);
   assert.equal(JSON.stringify(vue).includes('CPN'), false, 'aucune mention de la grossesse dans la vue RECO');
   assert.doesNotMatch(vue.messageNeutre, /grossesse|enceinte|vaccin|CPN|prénatal/i);
 

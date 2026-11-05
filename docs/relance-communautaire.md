@@ -22,7 +22,7 @@ Rien ne se déclenche tant que ces éléments ne sont pas saisis et validés dan
 
 | Rôle | Ce qu'il voit et fait |
 |---|---|
-| RECO (jeton `typ: reco`, espace `/reco`) | Ses tâches seulement ; contact, visite, orientation, refus / report, demande d'appui, urgence, signalement. Pas de domaine clinique (CPN, vaccination…) : un motif neutre. Téléphone visible seulement si un canal téléphonique est consenti. |
+| RECO (jeton `typ: reco`, espace `/reco`) | Ses tâches seulement ; contact, visite, orientation, refus / report, demande d'appui, urgence, signalement. Pas de domaine clinique (CPN, vaccination…) : un motif neutre. Téléphone visible seulement si un canal téléphonique est consenti. Pour un rendez-vous manqué (`CPN_RDV_MANQUE`) sur une tâche ouverte qui lui est confiée : photo de la patiente (lien signé d'une heure), en plus du téléphone consenti et de l'adresse. |
 | **Tout le personnel soignant** (médecins, sages-femmes, infirmier·ères, quel que soit le grade) | Tout le module, choix du projet : tableau de bord, tâches nominatives de sa structure (toutes les structures sans établissement choisi à la connexion), attribution, escalade, clôture, contrôle, confirmation des prestations, alertes, comptes RECO (ajout, modification, suspension, suppression) et paramétrage. |
 
 Les rôles sont dans `config/relance.js` (`ROLES_SUPERVISION`, `ROLES_RESPONSABLE`, `ROLES_PARAMETRAGE`) : remplacer `ROLES` par une liste
