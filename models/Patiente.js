@@ -44,7 +44,7 @@ const patienteSchema = new mongoose.Schema({
   /** Chiffres seuls des numéros (recherche et doublons, quel que soit le format saisi). */
   telephoneChiffres: { type: String, default: '', index: true },
   telephone2Chiffres: { type: String, default: '' },
-  /** Facultatif : identifiant de connexion de l'espace patiente, à défaut le matricule (numero). */
+  /** Facultatif : identifiant de connexion de l'espace patiente, comme le matricule (numero) ou le téléphone. */
   email: {
     type: String, trim: true, lowercase: true, unique: true, sparse: true,
     set: (v) => (v && String(v).trim() ? v : undefined),

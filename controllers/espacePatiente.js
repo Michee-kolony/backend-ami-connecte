@@ -1,4 +1,5 @@
-// Espace patiente (application mobile) : la patiente se connecte avec son e-mail ou son matricule et le mot de passe
+// Espace patiente (application mobile) : la patiente se connecte avec son e-mail, son matricule ou son numéro de
+// téléphone et le mot de passe
 // choisis à son enregistrement, et ne lit que ses propres données et celles de ses enfants :
 // grossesse en cours (datation, fiches CPN), rendez-vous (les siens et ceux de ses bébés), carnet vaccinal, croissance,
 // accouchements, données de son enregistrement CPN, conseils de l'équipe soignante. Aucune donnée n'y
@@ -38,13 +39,10 @@ exports.connexion = async (req, res) => {
   // « email » : champ envoyé par les versions de l'application déjà installées.
   const identifiant = texte(req.body?.identifiant ?? req.body?.email, 200);
   const motDePasse = String(req.body?.motDePasse || '');
-  if (!identifiant || !motDePasse) throw erreur(400, 'E-mail ou matricule et mot de passe requis.');
-  const recherche = identifiant.includes('@') ? { email: identifiant.toLowerCase() } : { numero: identifiant.toUpperCase() };
-  const patiente = await Patiente.findOne(recherche).select('+motDePasse');
+  if (!identifiant || !motDePasse) throw erreur(400, 'E-mail, matricule ou numéro de téléphone et mot de passe requis.');
+  const patiente = await patienteParIdentifiant(identifiant, motDePasse);
   // Même message dans tous les cas pour ne pas révéler quels comptes existent.
-  if (!patiente?.motDePasse || !(await bcrypt.compare(motDePasse, patiente.motDePasse))) {
-    throw erreur(401, 'Identifiant ou mot de passe incorrect.');
-  }
+  if (!patiente) throw erreur(401, 'Identifiant ou mot de passe incorrect.');
   if (patiente.espaceEnLigne !== 'Activé') throw erreur(403, 'Votre espace n’est pas encore activé : adressez-vous à votre centre de santé.');
   const jeton = jwt.sign({ sub: patiente.id, typ: 'patiente' }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_PATIENTE_EXPIRES_IN || '30d',
@@ -53,6 +51,34 @@ exports.connexion = async (req, res) => {
   await journaliser(req, { action: 'espace.connexion', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero } });
   res.json({ jeton, patiente: await profil(patiente) });
 };
+
+/** Nombre maximal de comptes essayés pour un même numéro de téléphone (téléphone partagé). */
+const MAX_COMPTES_PAR_TELEPHONE = 5;
+
+/**
+ * Patiente dont l'identifiant (e-mail, matricule AC-PAT-… ou numéro de téléphone) et le mot de passe
+ * correspondent, sinon null. Un téléphone peut être partagé par plusieurs patientes : on retient celle
+ * dont le mot de passe correspond, en priorité un espace activé.
+ */
+async function patienteParIdentifiant(identifiant, motDePasse) {
+  let candidates;
+  const chiffres = identifiant.replace(/\D/g, '');
+  if (identifiant.includes('@')) {
+    candidates = await Patiente.find({ email: identifiant.toLowerCase() }).select('+motDePasse').limit(1);
+  } else if (/^[\d\s+().-]+$/.test(identifiant) && chiffres.length >= 9) {
+    // Les 9 derniers chiffres suffisent : « 0812345678 », « +243 812 345 678 » et « 243812345678 » se valent.
+    const fin = new RegExp(`${chiffres.slice(-9)}$`);
+    candidates = await Patiente.find({ $or: [{ telephoneChiffres: fin }, { telephone2Chiffres: fin }] })
+      .select('+motDePasse').limit(MAX_COMPTES_PAR_TELEPHONE);
+  } else {
+    candidates = await Patiente.find({ numero: identifiant.toUpperCase() }).select('+motDePasse').limit(1);
+  }
+  const valides = [];
+  for (const p of candidates) {
+    if (p.motDePasse && (await bcrypt.compare(motDePasse, p.motDePasse))) valides.push(p);
+  }
+  return valides.find((p) => p.espaceEnLigne === 'Activé') ?? valides[0] ?? null;
+}
 
 async function profil(p) {
   const [etablissement] = p.etablissementId ? await Etablissement.actifsParIds([p.etablissementId]) : [];
