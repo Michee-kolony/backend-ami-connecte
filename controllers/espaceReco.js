@@ -308,6 +308,28 @@ async function appliquer(tache, reco, op) {
   return alertes;
 }
 
+const nomDe = (x) => [x?.prenom, x?.nom, x?.postnom].filter(Boolean).join(' ');
+
+/**
+ * Message aux administrateurs de l'établissement : « Jean KABEYA (RECO-123456) a pris en charge le
+ * dossier de la patiente Grâce MBUYI » (ou de l'enfant Joseph, enfant de Grâce MBUYI).
+ */
+async function messagePriseEnCharge(tache, reco) {
+  const qui = `${nomDe(reco)} (${reco.matricule})`;
+  let dossier;
+  if (tache.personneType === 'Déclarée') {
+    dossier = `de la personne signalée ${tache.declaree?.nom || 'sans nom'}`;
+  } else {
+    const [mere, enfant] = await Promise.all([
+      tache.patienteId ? Patiente.findById(tache.patienteId).select('prenom nom postnom') : null,
+      tache.enfantId ? Enfant.findById(tache.enfantId).select('prenom nom postnom') : null,
+    ]);
+    if (enfant) dossier = `de l’enfant ${nomDe(enfant) || 'sans prénom'}${mere ? `, enfant de ${nomDe(mere)}` : ''}`;
+    else dossier = `de la patiente ${nomDe(mere) || 'inconnue'}`;
+  }
+  return `${qui} a pris en charge le dossier ${dossier} (${tache.numero}).`;
+}
+
 /**
  * Traite une opération : jamais deux fois (operationId), et jamais au détriment d'une décision
  * plus récente. Une action reçue sur une tâche clôturée, réattribuée ou en supervision est
@@ -341,12 +363,22 @@ async function traiterOperation(req, brute) {
     tache.noter('Action reçue en conflit', reco.auteur(), { motif: motifConflit, details: { type: op.type, operationId: op.operationId } });
     alertes = ['conflit'];
   } else {
+    const prisesAvant = tache.historique.filter((h) => h.action === 'Prise en charge').length;
     alertes = await appliquer(tache, reco, op);
     tache.actions.push(action);
+    // « Je prends en charge » (ou première action sur une tâche attribuée) : les administrateurs
+    // de l'établissement sont prévenus, nominativement.
+    if (tache.historique.filter((h) => h.action === 'Prise en charge').length > prisesAvant) alertes.push('prise_en_charge');
   }
   await tache.save();
   const destinataires = { etablissementId: tache.etablissementId, taches: [tache.numero] };
   for (const type of alertes) {
+    if (type === 'prise_en_charge') {
+      await moteur.alerter(type, {
+        etablissementId: tache.etablissementId ?? reco.etablissementId, taches: [tache.numero], message: await messagePriseEnCharge(tache, reco),
+      });
+      continue;
+    }
     await moteur.alerter(type, destinataires);
     // Urgence : la structure d'orientation est aussi prévenue.
     if (type === 'urgence' && tache.orientation?.etablissementId && tache.orientation.etablissementId !== tache.etablissementId) {

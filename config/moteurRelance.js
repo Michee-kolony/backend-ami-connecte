@@ -66,13 +66,15 @@ async function reglesEnVigueur(jour) {
  * Ajoute des tâches à l'alerte ouverte du même type pour ce destinataire (regroupement), ou
  * l'ouvre. Le personnel connecté est prévenu en temps réel.
  */
-async function alerter(type, { recoId = null, etablissementId = null, taches = [] }, le = new Date()) {
+async function alerter(type, { recoId = null, etablissementId = null, taches = [], message = null }, le = new Date()) {
   const { destinataire } = r.ALERTES[type];
   const filtre = { type, destinataire, recoId: recoId ?? null, etablissementId: etablissementId ?? null, ouverte: true };
   const maj = {
     $addToSet: { taches: { $each: taches } },
     $set: { derniereLe: le },
     $setOnInsert: { premiereLe: le },
+    // Message nominatif de l'occurrence (les plus récents seulement).
+    ...(message ? { $push: { messages: { $each: [{ tache: taches[0] ?? null, texte: message, le }], $slice: -AlerteRelance.MESSAGES_MAX } } } : {}),
   };
   let alerte;
   try {
@@ -82,7 +84,7 @@ async function alerter(type, { recoId = null, etablissementId = null, taches = [
     if (err.code !== 11000) throw err;
     alerte = await AlerteRelance.findOneAndUpdate(filtre, { ...maj, $inc: { occurrences: 1 } }, { returnDocument: 'after' });
   }
-  if (destinataire !== 'reco') presence.emettreEtablissement(etablissementId, 'relance:alerte', { type, etablissementId, taches });
+  if (destinataire !== 'reco') presence.emettreEtablissement(etablissementId, 'relance:alerte', { type, libelle: r.ALERTES[type].libelle, etablissementId, taches, message });
   return alerte;
 }
 

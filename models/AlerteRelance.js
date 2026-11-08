@@ -15,6 +15,14 @@ const alerteSchema = new mongoose.Schema({
   etablissementId: { type: String, default: null, index: true },
   /** Numéros des tâches concernées (REL-…). */
   taches: { type: [String], default: [] },
+  /**
+   * Détail lisible de chaque occurrence (ex. « Jean KABEYA (RECO-123456) a pris en charge le dossier
+   * de la patiente Grâce MBUYI »), du plus ancien au plus récent ; limité aux derniers MESSAGES_MAX.
+   */
+  messages: {
+    type: [new mongoose.Schema({ tache: { type: String, default: null }, texte: { type: String, required: true }, le: { type: Date, required: true } }, { _id: false })],
+    default: [],
+  },
   occurrences: { type: Number, default: 1 },
   premiereLe: { type: Date, required: true },
   derniereLe: { type: Date, required: true },
@@ -31,3 +39,4 @@ alerteSchema.index(
 );
 
 module.exports = mongoose.model('AlerteRelance', alerteSchema, 'relance_alertes');
+module.exports.MESSAGES_MAX = 50;

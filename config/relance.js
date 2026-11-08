@@ -130,6 +130,7 @@ const BORNES_PARAMETRES = {
 const ALERTES = {
   attribution: { libelle: 'Nouvelles tâches attribuées', destinataire: 'reco' },
   echeance_proche: { libelle: 'Tâches arrivant à échéance', destinataire: 'reco' },
+  prise_en_charge: { libelle: 'Dossiers pris en charge par un RECO', destinataire: 'supervision' },
   non_attribuee: { libelle: 'Tâches sans RECO attribué', destinataire: 'supervision' },
   urgente_non_prise: { libelle: 'Tâches urgentes non prises en charge', destinataire: 'supervision' },
   retard: { libelle: 'Tâches en retard (échéance dépassée)', destinataire: 'supervision' },

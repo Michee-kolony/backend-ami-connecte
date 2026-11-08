@@ -289,6 +289,15 @@ test('Actions du RECO : canal non consenti refusé, tentatives tracées, opérat
   assert.equal(rejoue.corps.rejouee, true);
   assert.equal(rejoue.corps.tache.tentativesEchouees, 1, 'la tentative rejouée n’est pas comptée deux fois');
 
+  // Prise en charge : les administrateurs de l'établissement sont prévenus, nominativement, une seule fois.
+  const prises = (await appel('superviseur', 'GET', '/relance/alertes?ouvertes=1')).corps.filter((a) => a.type === 'prise_en_charge');
+  assert.equal(prises.length, 1);
+  assert.deepEqual(prises[0].taches, [numero]);
+  assert.equal(prises[0].messages.length, 1, 'opération rejouée : pas de second message');
+  assert.equal(prises[0].messages[0].texte, `Jean KABEYA (${ids.matricule}) a pris en charge le dossier de la patiente Grâce MBUYI (${numero}).`);
+  assert.equal((await appel('infirmiere', 'GET', '/relance/alertes')).corps.some((a) => a.type === 'prise_en_charge'), true, 'tout le personnel de la structure');
+  assert.equal((await appel('superviseurB', 'GET', '/relance/alertes')).corps.some((a) => a.type === 'prise_en_charge'), false, 'jamais une autre structure');
+
   // Orientation impossible sans contact établi.
   assert.equal((await appel('reco', 'POST', `/reco/taches/${numero}/actions`, { operationId: operationId(), type: 'orientation' })).status, 409);
 });
