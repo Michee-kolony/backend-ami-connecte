@@ -13,6 +13,8 @@ router.get('/moi', ctrl.moi);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 router.get('/referentiel', ctrl.referentiel);
 router.get('/taches', ctrl.taches);
+// Tableau de bord du RECO : ses tâches (résolues, non résolues, en retard…) et ses actions.
+router.get('/tableau-de-bord', ctrl.tableauDeBord);
 // Action sur une tâche (accepter, tentative, visite, orientation, refus/report, appui, urgence).
 router.post('/taches/:numero/actions', ctrl.agir);
 // Actions faites hors connexion, renvoyées ensemble à la reconnexion (sans doublon).

@@ -477,6 +477,67 @@ exports.signaler = async (req, res) => {
 };
 
 /** Référentiel de l'application RECO (listes de choix, structures d'orientation). */
+// --- Tableau de bord ----------------------------------------------------------------------
+
+/** Premier jour du mois en cours, heure de Kinshasa (UTC+1). */
+function debutDuMois(maintenant) {
+  const k = new Date(maintenant.getTime() + 3600000);
+  return new Date(Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), 1) - 3600000);
+}
+
+/**
+ * Tableau de bord du RECO : tâches qui lui sont confiées (à prendre en charge, en cours, chez le
+ * superviseur, en retard, résolues…) et actions qu'il a faites, sur tout son historique.
+ */
+exports.tableauDeBord = async (req, res) => {
+  const reco = req.reco;
+  const maintenant = new Date();
+  const mois = debutDuMois(maintenant);
+  const taches = await TacheRelance.find({
+    $or: [{ recoId: reco._id }, { 'historique.details.reco': reco.matricule }, { source: 'RECO', 'creePar.id': reco.id }],
+  }).select('statut echeance recoId source creePar actions.type actions.resultat actions.par.id actions.le actions.conflit resolution.le');
+
+  const miennes = taches.filter((t) => String(t.recoId) === reco.id);
+  const ouvertes = miennes.filter((t) => !r.STATUTS_FINAUX.includes(t.statut));
+  const compter = (liste, statuts) => liste.filter((t) => statuts.includes(t.statut)).length;
+  const reintegrees = miennes.filter((t) => t.statut === 'Réintégration confirmée');
+  const sansReintegration = compter(miennes, ['Clôturée sans réintégration']);
+  const actions = taches.flatMap((t) => t.actions.filter((a) => a.par?.id === reco.id && !a.conflit));
+  const nb = (type, f = () => true) => actions.filter((a) => a.type === type && f(a)).length;
+
+  res.json({
+    calculeLe: maintenant,
+    taches: {
+      confiees: miennes.length,
+      nonResolues: ouvertes.length,
+      aPrendreEnCharge: compter(miennes, ['Attribuée']),
+      enCours: compter(miennes, r.STATUTS_RECO.filter((s) => s !== 'Attribuée')),
+      chezLeSuperviseur: compter(miennes, r.STATUTS_SUPERVISION),
+      enRetard: ouvertes.filter((t) => t.echeance < maintenant).length,
+      resolues: reintegrees.length,
+      clotureesSansReintegration: sansReintegration,
+      // Tâches sur lesquelles le RECO a agi au moins une fois (y compris réattribuées depuis).
+      traitees: taches.filter((t) => t.actions.some((a) => a.par?.id === reco.id && !a.conflit)).length,
+      tauxReintegration: reintegrees.length + sansReintegration ? Math.round((100 * reintegrees.length) / (reintegrees.length + sansReintegration)) : null,
+    },
+    actions: {
+      total: actions.length,
+      prisesEnCharge: nb('accepter'),
+      tentatives: nb('tentative'),
+      contactsEtablis: nb('tentative', (a) => r.RESULTATS_CONTACT.includes(a.resultat)) + nb('visite_realisee', (a) => r.RESULTATS_CONTACT.includes(a.resultat)),
+      visites: nb('visite_realisee'),
+      orientations: nb('orientation'),
+      appuisEtUrgences: nb('demande_appui') + nb('urgence'),
+      signalements: taches.filter((t) => t.source === 'RECO' && t.creePar?.id === reco.id).length,
+    },
+    ceMois: {
+      depuis: mois,
+      actions: actions.filter((a) => a.le >= mois).length,
+      resolues: reintegrees.filter((t) => t.resolution?.le >= mois).length,
+    },
+  });
+};
+
 exports.referentiel = async (req, res) => {
   const structures = await Etablissement.find({ statut: 'Actif' }).select('nom zoneSante aireSante').sort({ nom: 1 });
   res.json({

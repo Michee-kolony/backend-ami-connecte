@@ -298,6 +298,21 @@ test('Actions du RECO : canal non consenti refusé, tentatives tracées, opérat
   assert.equal((await appel('infirmiere', 'GET', '/relance/alertes')).corps.some((a) => a.type === 'prise_en_charge'), true, 'tout le personnel de la structure');
   assert.equal((await appel('superviseurB', 'GET', '/relance/alertes')).corps.some((a) => a.type === 'prise_en_charge'), false, 'jamais une autre structure');
 
+  // Tableau de bord du RECO : ses propres chiffres seulement.
+  const tdb = await appel('reco', 'GET', '/reco/tableau-de-bord');
+  assert.equal(tdb.status, 200, JSON.stringify(tdb.corps));
+  assert.equal(tdb.corps.taches.confiees, 1);
+  assert.equal(tdb.corps.taches.nonResolues, 1);
+  assert.equal(tdb.corps.taches.enCours, 1);
+  assert.equal(tdb.corps.taches.aPrendreEnCharge, 0);
+  assert.equal(tdb.corps.taches.traitees, 1);
+  assert.equal(tdb.corps.actions.tentatives, 1, 'opération rejouée comptée une fois');
+  assert.equal(tdb.corps.ceMois.actions, 1);
+  const tdb2 = await appel('reco2', 'GET', '/reco/tableau-de-bord');
+  assert.equal(tdb2.corps.taches.confiees, 0);
+  assert.equal(tdb2.corps.actions.total, 0);
+  assert.equal((await appel('superviseur', 'GET', '/reco/tableau-de-bord')).status, 403, 'réservé aux RECO');
+
   // Orientation impossible sans contact établi.
   assert.equal((await appel('reco', 'POST', `/reco/taches/${numero}/actions`, { operationId: operationId(), type: 'orientation' })).status, 409);
 });
