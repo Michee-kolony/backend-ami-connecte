@@ -270,6 +270,41 @@ exports.supprimerEtablissement = async (req, res) => {
   res.status(204).end();
 };
 
+// --- Personnel soignant (lecture seule) ---------------------------------------------------
+
+/** Champs professionnels montrés au comité (ni pièce d'identité, ni date de naissance, ni adresse). */
+const CHAMPS_PERSONNEL = 'matricule prenom nom postnom sexe photo numeroOrdre grade specialite affectations email telephone role statut derniereConnexion doitChangerMotDePasse createdAt auteurAjout creePar';
+
+/**
+ * Tout le personnel soignant de la plateforme, avec le ou les établissements où chacun est
+ * affecté (le premier est l'établissement principal). Lecture seule : les comptes sont gérés par
+ * le médecin chef de chaque établissement.
+ */
+exports.listerSoignants = async (req, res) => {
+  const [soignants, etablissements] = await Promise.all([
+    Soignant.find().select(CHAMPS_PERSONNEL).sort({ nom: 1, prenom: 1 }).populate('creePar', Soignant.CHAMPS_AUTEUR),
+    Etablissement.find().select('code nom province type statut'),
+  ]);
+  const etab = new Map(etablissements.map((e) => [e.id, e]));
+  res.json(soignants.map((s) => {
+    const j = s.toJSON();
+    return {
+      id: j.id, matricule: j.matricule, prenom: j.prenom, nom: j.nom, postnom: j.postnom, sexe: j.sexe,
+      photo: j.photo ?? null, numeroOrdre: j.numeroOrdre ?? '', grade: j.grade, specialite: j.specialite,
+      email: j.email, telephone: j.telephone, role: j.role, statut: j.statut,
+      derniereConnexion: j.derniereConnexion, doitChangerMotDePasse: j.doitChangerMotDePasse,
+      creeLe: j.createdAt, ajoutePar: j.ajoutePar ? { nom: j.ajoutePar.nom, role: j.ajoutePar.role } : null,
+      affectations: j.affectations.map((a) => {
+        const e = etab.get(a.etablissementId);
+        return {
+          etablissementId: a.etablissementId, service: a.service,
+          code: e?.code ?? '', nom: e?.nom ?? 'Établissement supprimé', province: e?.province ?? '', type: e?.type ?? '', statut: e?.statut ?? null,
+        };
+      }),
+    };
+  }));
+};
+
 // --- Indicateurs consolidés ---------------------------------------------------------------
 
 /** Clés des listes nominatives (patientes, enfants, tâches) retirées des réponses du comité. */

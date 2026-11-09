@@ -202,3 +202,16 @@ test('suppression : refusée avec des patientes ; sinon l’établissement part 
   const Soignant = require('../models/Soignant');
   assert.equal(await Soignant.exists({ email: 'chef.eps@essai.test' }), null);
 });
+
+test('le comité voit tout le personnel de la plateforme et ses établissements d’affectation (lecture seule)', async () => {
+  const r = await appel('comite', 'GET', '/comite/soignants');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  const delta = r.corps.find((s) => s.email === 'chef.delta@essai.test');
+  assert.ok(delta, 'médecin chef d’un autre établissement visible');
+  assert.equal(delta.affectations[0].nom, 'Centre Delta');
+  assert.match(delta.affectations[0].code, /^ETS-KIN-/);
+  assert.ok(r.corps.some((s) => s.email === 'chef.alpha@essai.test'));
+  for (const champ of ['motDePasse', 'pieceNumero', 'dateNaissance', 'adresse']) assert.ok(!(champ in delta), `${champ} non exposé`);
+  assert.equal((await appel('chefAlpha', 'GET', '/comite/soignants')).status, 403, 'jeton soignant refusé');
+  assert.equal((await appel('comite', 'POST', '/comite/soignants', {})).status, 404, 'aucune création depuis le comité');
+});

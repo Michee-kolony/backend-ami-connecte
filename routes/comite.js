@@ -27,6 +27,9 @@ router.post('/etablissements/:id/medecin-chef', ctrl.designerMedecinChef);
 router.patch('/etablissements/:id/medecin-chef/:chefId/statut', ctrl.basculerMedecinChef);
 router.post('/etablissements/:id/medecin-chef/:chefId/mot-de-passe', ctrl.reinitialiserMedecinChef);
 
+// Personnel soignant de toute la plateforme, avec ses établissements d'affectation (lecture seule).
+router.get('/soignants', ctrl.listerSoignants);
+
 // Indicateurs consolidés de tous les établissements (mêmes calculs que le tableau de bord du
 // personnel, réponses anonymisées : agrégats seulement).
 const s = ctrl.statistiques;
