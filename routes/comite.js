@@ -36,6 +36,23 @@ router.post('/etablissements/:id/medecin-chef/:chefId/mot-de-passe', ctrl.reinit
 
 // Personnel soignant de toute la plateforme, avec ses établissements d'affectation (lecture seule).
 router.get('/soignants', ctrl.listerSoignants);
+// Messagerie : discussions privées avec les médecins chefs, et groupe de pilotage commun.
+const discussions = require('../controllers/discussions');
+const groupe = require('../controllers/groupePilotage');
+router.get('/discussions', discussions.listerComite);
+router.get('/discussions/annuaire', discussions.annuaireComite);
+router.post('/discussions', discussions.ouvrirComite);
+router.get('/discussions/:id/messages', discussions.messages);
+router.post('/discussions/:id/messages', discussions.envoyer);
+router.post('/discussions/:id/lu', discussions.marquerLu);
+router.get('/groupe-pilotage', groupe.resume);
+router.get('/groupe-pilotage/messages', groupe.messages);
+router.post('/groupe-pilotage/messages', groupe.envoyer);
+router.post('/groupe-pilotage/lu', groupe.marquerLu);
+
+// Patientes de toute la plateforme : identité et enfants seulement (aucune donnée médicale).
+router.get('/patientes', ctrl.listerPatientes);
+
 // Relais communautaires (RECO) de toute la plateforme (lecture seule).
 router.get('/recos', ctrl.listerRecos);
 // Ambulances et chauffeurs de toute la plateforme, avec leur établissement (lecture seule).

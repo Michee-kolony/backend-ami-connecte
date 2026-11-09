@@ -17,9 +17,13 @@ const Etablissement = require('../models/Etablissement');
 const Discussion = require('../models/Discussion');
 const Chauffeur = require('../models/Chauffeur');
 const Reco = require('../models/Reco');
+const MembreComite = require('../models/MembreComite');
 const suiviAmbulances = require('./suiviAmbulances');
 
 const SALLE = 'personnel';
+/** Groupe de pilotage : médecins chefs et membres du comité (messages du groupe). */
+const SALLE_PILOTAGE = 'pilotage';
+const ROLE_CHEF = 'Médecin chef de service';
 const SALLE_PATIENTES = 'patientes';
 const SALLE_RECOS = 'recos';
 /** Personnel connecté sans établissement : liste détaillée limitée à ce groupe. */
@@ -110,6 +114,12 @@ function initialiser(serveur) {
         socket.data.recoId = reco.id;
         return next();
       }
+      if (typ === 'comite') {
+        const membre = await MembreComite.findById(sub).select('statut');
+        if (!membre || membre.statut !== 'Actif') return next(new Error('Compte inactif ou introuvable.'));
+        socket.data.comiteId = membre.id;
+        return next();
+      }
       if (typ === 'patiente') {
         const patiente = await Patiente.findById(sub).select('espaceEnLigne');
         if (!patiente || patiente.espaceEnLigne !== 'Activé') return next(new Error('Compte inactif ou introuvable.'));
@@ -130,11 +140,17 @@ function initialiser(serveur) {
     if (socket.data.patienteId) return connecterPatiente(socket);
     if (socket.data.chauffeurId) return connecterChauffeur(socket);
     if (socket.data.recoId) return connecterReco(socket);
+    if (socket.data.comiteId) return connecterComite(socket);
     const { soignant } = socket.data;
     const etablissementId = socket.data.etablissementId ?? null;
     const id = soignant.id;
 
     socket.on('discussion:ecrit', (donnees) => relayerEcriture(socket, id, donnees));
+    // Médecin chef : membre du groupe de pilotage (avec le comité).
+    if (soignant.role === ROLE_CHEF) {
+      socket.join(SALLE_PILOTAGE);
+      socket.on('groupe:ecrit', () => relayerEcritureGroupe(socket, id));
+    }
 
     socket.on('disconnect', () => {
       const c = connectes.get(id);
@@ -220,6 +236,31 @@ function connecterPatiente(socket) {
   diffuserPatientes();
 }
 
+/**
+ * Membre du comité de pilotage : reçoit ses messages privés (avec les médecins chefs) et ceux du
+ * groupe de pilotage ; voit quels soignants sont en ligne (identifiants seulement).
+ */
+function connecterComite(socket) {
+  const id = socket.data.comiteId;
+  socket.on('discussion:ecrit', (donnees) => relayerEcriture(socket, id, donnees));
+  socket.on('groupe:ecrit', () => relayerEcritureGroupe(socket, id));
+  socket.join([`comite:${id}`, SALLE_PILOTAGE]);
+  socket.emit('presence:ids', [...connectes.keys()]);
+}
+
+/** « En train d'écrire » dans le groupe de pilotage : relayé aux autres membres du groupe. */
+function relayerEcritureGroupe(socket, id) {
+  const maintenant = Date.now();
+  if (maintenant - (socket.data.dernierEcritGroupe || 0) < 1500) return;
+  socket.data.dernierEcritGroupe = maintenant;
+  socket.to(SALLE_PILOTAGE).emit('groupe:ecrit', { auteurId: id });
+}
+
+/** Événement adressé à tout le groupe de pilotage (médecins chefs et comité connectés). */
+function emettrePilotage(evenement, donnees) {
+  io?.to(SALLE_PILOTAGE).emit(evenement, donnees);
+}
+
 /** « En train d'écrire » : relayé seulement à l'autre participant de la discussion. */
 async function relayerEcriture(socket, id, donnees) {
   const discussionId = String(donnees?.discussionId || '');
@@ -236,7 +277,7 @@ async function relayerEcriture(socket, id, donnees) {
 
 /** Événement temps réel adressé à toutes les connexions d'un participant (soignant, patiente, RECO ou chauffeur). */
 function emettre(id, evenement, donnees) {
-  io?.to([`soignant:${id}`, `patiente:${id}`, `reco:${id}`, `chauffeur:${id}`]).emit(evenement, donnees);
+  io?.to([`soignant:${id}`, `patiente:${id}`, `reco:${id}`, `chauffeur:${id}`, `comite:${id}`]).emit(evenement, donnees);
 }
 
 /** Événement adressé à tout le personnel connecté (urgences, flotte). */
@@ -286,4 +327,10 @@ async function actualiser(soignant) {
 
 module.exports = {
   initialiser, expulser, actualiser, emettre, emettrePersonnel, emettreEtablissement, emettrePatiente, emettreChauffeur, expulserChauffeur, expulserReco,
+  emettrePilotage, expulserComite,
 };
+
+/** Ferme les connexions d'un membre du comité (compte retiré). */
+function expulserComite(id) {
+  io?.in(`comite:${id}`).disconnectSockets(true);
+}

@@ -325,3 +325,91 @@ test('le comité voit toutes les ambulances et tous les chauffeurs, avec leur é
   assert.ok(!('motDePasse' in didier));
   assert.equal((await appel('chefAlpha', 'GET', '/comite/flotte')).status, 403);
 });
+
+test('messagerie : le médecin chef discute avec un membre du comité ; un simple soignant ne peut pas', async () => {
+  const MembreComite = require('../models/MembreComite');
+  const paul = await MembreComite.findOne({ email: 'comite@essai.test' });
+  // Annuaire du médecin chef : le comité y figure.
+  const annuaire = await appel('chefAlpha', 'GET', '/discussions/annuaire');
+  assert.ok(annuaire.corps.some((x) => x.id === paul.id && x.role === 'Comité de pilotage'));
+  // Ouverture par le médecin chef, puis message.
+  const d = await appel('chefAlpha', 'POST', '/discussions', { membreComiteId: paul.id });
+  assert.equal(d.status, 201, JSON.stringify(d.corps));
+  assert.equal(d.corps.interlocuteur.role, 'Comité de pilotage');
+  const m = await appel('chefAlpha', 'POST', `/discussions/${d.corps.id}/messages`, { texte: 'Bonjour au comité' });
+  assert.equal(m.status, 201);
+  // Le comité retrouve la discussion, lit et répond.
+  const liste = await appel('comite', 'GET', '/comite/discussions');
+  const vue = liste.corps.find((x) => x.id === d.corps.id);
+  assert.ok(vue, 'discussion visible côté comité');
+  assert.equal(vue.interlocuteur.prenom, 'Clarisse');
+  assert.equal(vue.nonLus, 1);
+  const hist = await appel('comite', 'GET', `/comite/discussions/${d.corps.id}/messages`);
+  assert.equal(hist.corps.messages[0].texte, 'Bonjour au comité');
+  assert.equal((await appel('comite', 'POST', `/comite/discussions/${d.corps.id}/messages`, { texte: 'Bien reçu' })).status, 201);
+  assert.equal((await appel('comite', 'POST', `/comite/discussions/${d.corps.id}/lu`)).status, 200);
+  // Annuaire du comité : les médecins chefs actifs.
+  const chefs = await appel('comite', 'GET', '/comite/discussions/annuaire');
+  assert.ok(chefs.corps.some((c) => c.prenom === 'Clarisse' && c.etablissement === 'Centre Alpha'));
+  // Le comité ne lit pas une discussion entre soignants.
+  const Discussion = require('../models/Discussion');
+  const autre = await Discussion.create({ participants: ['64b000000000000000000011', '64b000000000000000000012'], cle: 'x:y' });
+  assert.equal((await appel('comite', 'GET', `/comite/discussions/${autre.id}/messages`)).status, 404);
+  // Un soignant qui n'est pas médecin chef ne peut pas ouvrir de discussion avec le comité.
+  const Soignant = require('../models/Soignant');
+  const jwt = require('jsonwebtoken');
+  const nadine = await Soignant.findOne({ email: 'nadine@essai.test' });
+  jetons.nadine = jwt.sign({ sub: nadine.id, role: nadine.role, etablissement: jetons.etabAlpha }, process.env.JWT_SECRET, { expiresIn: '10m' });
+  assert.equal((await appel('nadine', 'POST', '/discussions', { membreComiteId: paul.id })).status, 403);
+  assert.ok(!(await appel('nadine', 'GET', '/discussions/annuaire')).corps.some((x) => x.role === 'Comité de pilotage'));
+});
+
+test('groupe de pilotage : médecins chefs et comité échangent ; les autres soignants n’y ont pas accès', async () => {
+  const g = await appel('comite', 'GET', '/comite/groupe-pilotage');
+  assert.equal(g.status, 200);
+  assert.ok(g.corps.membres.some((m) => m.type === 'comite') && g.corps.membres.some((m) => m.type === 'soignant'));
+  assert.equal((await appel('comite', 'POST', '/comite/groupe-pilotage/messages', { texte: 'Réunion lundi 9 h' })).status, 201);
+  const vuChef = await appel('chefAlpha', 'GET', '/discussions/groupe-pilotage');
+  assert.equal(vuChef.status, 200);
+  assert.equal(vuChef.corps.nonLus, 1);
+  assert.equal(vuChef.corps.dernierMessage.texte, 'Réunion lundi 9 h');
+  assert.equal((await appel('chefAlpha', 'POST', '/discussions/groupe-pilotage/messages', { texte: 'Présent' })).status, 201);
+  const hist = await appel('comite', 'GET', '/comite/groupe-pilotage/messages');
+  assert.deepEqual(hist.corps.messages.map((m) => m.texte), ['Réunion lundi 9 h', 'Présent']);
+  assert.equal(hist.corps.messages[1].auteurType, 'soignant');
+  assert.equal((await appel('chefAlpha', 'POST', '/discussions/groupe-pilotage/lu')).status, 200);
+  assert.equal((await appel('chefAlpha', 'GET', '/discussions/groupe-pilotage')).corps.nonLus, 0);
+  assert.equal((await appel('nadine', 'GET', '/discussions/groupe-pilotage')).status, 403);
+  assert.equal((await appel('nadine', 'POST', '/discussions/groupe-pilotage/messages', { texte: 'x' })).status, 403);
+  const MessageGroupe = require('../models/MessageGroupe');
+  const brut = await MessageGroupe.findOne({}).lean();
+  assert.ok(!JSON.stringify(brut).includes('Réunion'), 'texte chiffré au repos');
+});
+
+test('patientes : le comité voit l’identité et les enfants de toutes les patientes, sans données médicales', async () => {
+  const Patiente = require('../models/Patiente');
+  const Enfant = require('../models/Enfant');
+  const alpha = await Patiente.findOne({ numero: 'AC-PAT-880001' });
+  await Patiente.updateOne({ _id: alpha._id }, { dateNaissance: '1995-03-10', telephone: '0810000001', adresse: { province: 'Kinshasa', commune: 'Ngaliema', quartier: 'Kintambo' } });
+  await Enfant.collection.insertOne({ numero: 'AC-ENF-990001', mereId: alpha._id, prenom: 'Petit', nom: 'UNE', postnom: '', sexe: 'Masculin', dateNaissance: '2026-01-15', etablissementId: jetons.etabAlpha, vaccinations: [], statut: 'Suivi', createdAt: new Date() });
+  const r = await appel('comite', 'GET', '/comite/patientes');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.total, 2, 'patientes de tous les établissements');
+  const p = r.corps.patientes.find((x) => x.numero === 'AC-PAT-880001');
+  assert.ok(p.age >= 30);
+  assert.equal(p.residence.commune, 'Ngaliema');
+  assert.equal(p.etablissement.nom, 'Centre Alpha');
+  assert.equal(p.enfants.length, 1);
+  assert.equal(p.enfants[0].prenom, 'Petit');
+  const texte = JSON.stringify(r.corps);
+  for (const interdit of ['0810000001', 'telephone', 'statut', 'grossesse', 'vaccinations', 'groupeSanguin']) {
+    assert.ok(!texte.includes(interdit), `${interdit} non exposé`);
+  }
+  // Recherche par prénom d'enfant : on retrouve la mère.
+  const re = await appel('comite', 'GET', '/comite/patientes?q=Petit');
+  assert.deepEqual(re.corps.patientes.map((x) => x.numero), ['AC-PAT-880001']);
+  // Consultation journalisée.
+  const JournalAudit = require('../models/JournalAudit');
+  assert.ok(await JournalAudit.exists({ action: 'comite.patientes.consultation', 'acteur.role': 'Comité de pilotage' }));
+  assert.equal((await appel('chefAlpha', 'GET', '/comite/patientes')).status, 403);
+});

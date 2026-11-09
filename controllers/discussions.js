@@ -10,6 +10,7 @@ const Soignant = require('../models/Soignant');
 const Patiente = require('../models/Patiente');
 const Reco = require('../models/Reco');
 const Chauffeur = require('../models/Chauffeur');
+const MembreComite = require('../models/MembreComite');
 const { urlSignee } = require('../config/r2');
 const { chiffrer, dechiffrer } = require('../config/chiffrement');
 const presence = require('../config/presence');
@@ -61,14 +62,25 @@ async function profilChauffeur(c) {
   } : null;
 }
 
-/** Participant connecté : soignant (espace administrateur), patiente, RECO ou chauffeur (applications). */
-const moiDe = (req) => req.soignant?._id ?? req.patiente?._id ?? req.reco?._id ?? req.chauffeur._id;
+/** Membre du comité vu par le médecin chef (rôle « Comité de pilotage », fonction à la place du matricule). */
+function profilComite(m) {
+  return m ? {
+    id: m.id, prenom: m.prenom, nom: m.nom, role: 'Comité de pilotage', photo: m.photo ?? null,
+    matricule: m.fonction || 'Membre du comité', statut: m.statut,
+  } : null;
+}
+
+const ROLE_CHEF = 'Médecin chef de service';
+
+/** Participant connecté : soignant ou membre du comité (espaces web), patiente, RECO ou chauffeur (applications). */
+const moiDe = (req) => req.soignant?._id ?? req.membreComite?._id ?? req.patiente?._id ?? req.reco?._id ?? req.chauffeur._id;
 
 /** Nature d'un participant de la discussion. */
 function natureDe(d, id) {
   if (d.patienteId?.equals(id)) return 'patiente';
   if (d.recoId?.equals(id)) return 'reco';
   if (d.chauffeurId?.equals(id)) return 'chauffeur';
+  if (d.membreComiteId?.equals(id)) return 'comite';
   return 'soignant';
 }
 
@@ -82,9 +94,10 @@ async function interlocuteurDe(d, moi) {
     case 'patiente': return profilPatiente(await Patiente.findById(autre).select('prenom nom numero photoCle espaceEnLigne'));
     case 'reco': return profilReco(await Reco.findById(autre));
     case 'chauffeur': return profilChauffeur(await Chauffeur.findById(autre));
+    case 'comite': return profilComite(await MembreComite.findById(autre));
     default: {
       const s = await Soignant.findById(autre).select(`${CHAMPS_PROFIL} photoCle`);
-      return natureDe(d, moi) === 'soignant' ? profil(s) : profilPourPatiente(s);
+      return ['soignant', 'comite'].includes(natureDe(d, moi)) ? profil(s) : profilPourPatiente(s);
     }
   }
 }
@@ -92,12 +105,13 @@ async function interlocuteurDe(d, moi) {
 const INACTIF = {
   patiente: 'Cette patiente n’a plus d’accès actif.', reco: 'Ce RECO n’a plus d’accès actif.',
   chauffeur: 'Ce chauffeur n’a plus d’accès actif.', soignant: 'Ce soignant n’a plus d’accès actif.',
+  comite: 'Ce membre du comité n’a plus d’accès actif.',
 };
 
 /** L'autre participant a-t-il toujours un accès actif ? (sinon, message refusé) */
 async function toujoursActif(nature, id) {
   if (nature === 'patiente') return !!(await Patiente.exists({ _id: id, espaceEnLigne: 'Activé' }));
-  const modele = { reco: Reco, chauffeur: Chauffeur, soignant: Soignant }[nature];
+  const modele = { reco: Reco, chauffeur: Chauffeur, soignant: Soignant, comite: MembreComite }[nature];
   return !!(await modele.exists({ _id: id, statut: 'Actif' }));
 }
 
@@ -162,6 +176,7 @@ exports.lister = async (req, res) => {
 exports.ouvrir = async (req, res) => {
   if (req.body?.patienteId !== undefined) return ouvrirAvecPatiente(req, res);
   if (req.body?.recoId !== undefined) return ouvrirAvecReco(req, res);
+  if (req.body?.membreComiteId !== undefined) return ouvrirAvecComite(req, res);
   const autreId = String(req.body?.soignantId || '');
   if (!mongoose.isValidObjectId(autreId)) throw erreur(400, 'Soignant invalide.');
   if (autreId === req.soignant.id) throw erreur(400, 'Vous ne pouvez pas discuter avec vous-même.');
@@ -281,13 +296,52 @@ exports.patientes = async (req, res) => {
   res.json(await Promise.all(liste.map(profilPatiente)));
 };
 
-/** Annuaire : soignants actifs, puis RECO actifs de l'établissement de connexion (rôle « RECO »). */
+/**
+ * Annuaire : soignants actifs, RECO actifs de l'établissement de connexion (rôle « RECO ») et,
+ * pour le médecin chef, les membres actifs du comité de pilotage (rôle « Comité de pilotage »).
+ */
 exports.annuaire = async (req, res) => {
-  const [soignants, recos] = await Promise.all([
+  const chef = req.soignant.role === ROLE_CHEF;
+  const [soignants, recos, comite] = await Promise.all([
     Soignant.find({ statut: 'Actif', _id: { $ne: req.soignant._id } }).select(CHAMPS_PROFIL).sort({ prenom: 1 }),
     Reco.find({ ...filtreRecos(req), statut: 'Actif' }).sort({ prenom: 1 }),
+    chef ? MembreComite.find({ statut: 'Actif' }).sort({ prenom: 1 }) : [],
   ]);
-  res.json([...soignants.map(profil), ...(await Promise.all(recos.map(profilReco)))]);
+  res.json([...comite.map(profilComite), ...soignants.map(profil), ...(await Promise.all(recos.map(profilReco)))]);
+};
+
+/** Le médecin chef ouvre (ou crée) la discussion avec un membre actif du comité de pilotage. */
+async function ouvrirAvecComite(req, res) {
+  if (req.soignant.role !== ROLE_CHEF) throw erreur(403, 'Seul le médecin chef discute avec le comité de pilotage.');
+  const id = String(req.body.membreComiteId || '');
+  const membre = mongoose.isValidObjectId(id) && await MembreComite.findById(id);
+  if (!membre || membre.statut !== 'Actif') throw erreur(404, 'Membre du comité introuvable ou suspendu.');
+  const d = await ouvrirOuCreer(req.soignant._id, membre._id, { membreComiteId: membre._id });
+  res.status(201).json(await resume(d, req.soignant._id, profilComite(membre)));
+}
+
+// --- Espace du comité de pilotage : discussions avec les médecins chefs -----------------------
+
+/** Discussions du membre du comité connecté. */
+exports.listerComite = async (req, res) => {
+  res.json(await listerPour(req.membreComite._id, { participants: req.membreComite._id, membreComiteId: req.membreComite._id }));
+};
+
+/** Médecins chefs actifs, avec leur établissement principal (annuaire du comité). */
+exports.annuaireComite = async (req, res) => {
+  const Etablissement = require('../models/Etablissement');
+  const chefs = await Soignant.find({ statut: 'Actif', role: ROLE_CHEF }).select(`${CHAMPS_PROFIL} affectations`).sort({ prenom: 1 });
+  const etabs = new Map((await Etablissement.find({ _id: { $in: chefs.flatMap((c) => c.affectations.map((a) => a.etablissementId)).filter((x) => mongoose.isValidObjectId(x)) } }).select('nom')).map((e) => [e.id, e.nom]));
+  res.json(chefs.map((c) => ({ ...profil(c), etablissement: etabs.get(c.affectations[0]?.etablissementId) ?? '' })));
+};
+
+/** Le membre du comité ouvre (ou crée) la discussion avec un médecin chef actif. */
+exports.ouvrirComite = async (req, res) => {
+  const id = String(req.body?.soignantId || '');
+  const chef = mongoose.isValidObjectId(id) && await Soignant.findById(id).select(CHAMPS_PROFIL);
+  if (!chef || chef.statut !== 'Actif' || chef.role !== ROLE_CHEF) throw erreur(404, 'Médecin chef introuvable ou suspendu.');
+  const d = await ouvrirOuCreer(chef._id, req.membreComite._id, { membreComiteId: req.membreComite._id });
+  res.status(201).json(await resume(d, req.membreComite._id, profil(chef)));
 };
 
 // --- Application mobile : la patiente écrit au soignant de son choix -------------------------

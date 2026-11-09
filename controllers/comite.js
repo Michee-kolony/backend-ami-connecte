@@ -100,6 +100,7 @@ exports.supprimerMembre = async (req, res) => {
     return res.status(400).json({ message: 'Vous ne pouvez pas retirer votre propre compte.' });
   }
   await membre.deleteOne();
+  presence.expulserComite(membre.id);
   if (membre.photoCle) await supprimerFichier(membre.photoCle).catch(() => {});
   res.status(204).end();
 };
@@ -383,6 +384,75 @@ exports.listerSoignants = async (req, res) => {
       }),
     };
   }));
+};
+
+// --- Patientes : identité et enfants seulement --------------------------------------------
+
+const PATIENTES_PAR_PAGE = 30;
+const echapper = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Âge en années révolues à partir d'une date AAAA-MM-JJ (ou de l'âge déclaré). */
+function ageDe(dateNaissance, ageDeclare) {
+  if (!dateNaissance) return ageDeclare ?? null;
+  const [a, m, j] = String(dateNaissance).split('-').map(Number);
+  const auj = new Date();
+  let age = auj.getFullYear() - a;
+  if (auj.getMonth() + 1 < m || (auj.getMonth() + 1 === m && auj.getDate() < j)) age--;
+  return age;
+}
+
+/**
+ * Toutes les patientes de la plateforme, pour le comité : identité seulement (numéro AMI, noms,
+ * âge, lieu de résidence, établissement de suivi, date d'inscription) et leurs enfants (identité).
+ * Aucune donnée médicale ni coordonnée : ni grossesse, ni consultation, ni téléphone, ni statut
+ * de suivi. Recherche ?q (nom ou numéro), filtre ?etablissement, pagination ?page. Consultation
+ * inscrite au journal d'audit.
+ */
+exports.listerPatientes = async (req, res) => {
+  const { urlSignee } = require('../config/r2');
+  const { journaliser } = require('../config/audit');
+  const Enfant = require('../models/Enfant');
+  const filtre = {};
+  const q = String(req.query.q || '').trim().slice(0, 80);
+  if (q) {
+    const re = new RegExp(echapper(q), 'i');
+    const enfantsTrouves = await Enfant.distinct('mereId', { $or: [{ nom: re }, { prenom: re }, { postnom: re }, { numero: re }] });
+    filtre.$or = [{ nom: re }, { prenom: re }, { postnom: re }, { numero: re }, { _id: { $in: enfantsTrouves } }];
+  }
+  if (req.query.etablissement && mongoose.isValidObjectId(req.query.etablissement)) filtre.etablissementId = String(req.query.etablissement);
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+  const [total, patientes, etablissements, totalEnfants] = await Promise.all([
+    Patiente.countDocuments(filtre),
+    Patiente.find(filtre).select('numero nom postnom prenom dateNaissance ageDeclare adresse.province adresse.commune adresse.quartier etablissementId photoCle createdAt')
+      .sort({ createdAt: -1 }).skip((page - 1) * PATIENTES_PAR_PAGE).limit(PATIENTES_PAR_PAGE).lean(),
+    Etablissement.find().select('code nom province').lean(),
+    Enfant.countDocuments(),
+  ]);
+  const enfants = await Enfant.find({ mereId: { $in: patientes.map((p) => p._id) } })
+    .select('numero prenom nom postnom sexe dateNaissance mereId').sort({ dateNaissance: 1 }).lean();
+  const etab = new Map(etablissements.map((e) => [String(e._id), e]));
+
+  await journaliser(req, { action: 'comite.patientes.consultation', details: { page, recherche: !!q, nombre: patientes.length } });
+  res.json({
+    total, page, parPage: PATIENTES_PAR_PAGE, pages: Math.max(1, Math.ceil(total / PATIENTES_PAR_PAGE)), totalEnfants,
+    etablissements: etablissements.map((e) => ({ id: String(e._id), nom: e.nom })).sort((a, b) => a.nom.localeCompare(b.nom, 'fr')),
+    patientes: await Promise.all(patientes.map(async (p) => {
+      const e = etab.get(p.etablissementId);
+      return {
+        id: String(p._id), numero: p.numero, nom: p.nom, postnom: p.postnom, prenom: p.prenom,
+        dateNaissance: p.dateNaissance ?? null, age: ageDe(p.dateNaissance, p.ageDeclare),
+        photo: p.photoCle ? await urlSignee(p.photoCle).catch(() => null) : null,
+        residence: { province: p.adresse?.province ?? '', commune: p.adresse?.commune ?? '', quartier: p.adresse?.quartier ?? '' },
+        etablissement: e ? { id: String(e._id), code: e.code, nom: e.nom, province: e.province } : null,
+        inscriteLe: p.createdAt,
+        enfants: enfants.filter((x) => String(x.mereId) === String(p._id)).map((x) => ({
+          numero: x.numero, prenom: x.prenom, nom: x.nom, postnom: x.postnom, sexe: x.sexe,
+          dateNaissance: x.dateNaissance ?? null,
+        })),
+      };
+    })),
+  });
 };
 
 // --- Relais communautaires (lecture seule) -----------------------------------------------

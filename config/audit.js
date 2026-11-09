@@ -129,6 +129,7 @@ async function journaliser(req, { action, patienteId = null, ressource = null, r
         : req.patiente ? { id: req.patiente.id, nom: `${req.patiente.prenom} ${req.patiente.nom}`.trim(), role: 'Patiente', matricule: req.patiente.numero }
         : req.chauffeur ? { id: req.chauffeur.id, nom: `${req.chauffeur.prenom} ${req.chauffeur.nom}`.trim(), role: 'Chauffeur', matricule: req.chauffeur.matricule }
         : req.reco ? req.reco.auteur()
+        : req.membreComite ? { id: req.membreComite.id, nom: `${req.membreComite.prenom} ${req.membreComite.nom}`.trim(), role: 'Comité de pilotage', matricule: '' }
         : undefined,
       action,
       resultat,

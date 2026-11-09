@@ -15,6 +15,8 @@ const discussionSchema = new mongoose.Schema({
   patienteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Patiente', default: null, index: true },
   recoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Reco', default: null, index: true },
   chauffeurId: { type: mongoose.Schema.Types.ObjectId, ref: 'Chauffeur', default: null, index: true },
+  /** Membre du comité de pilotage, en discussion avec un médecin chef. */
+  membreComiteId: { type: mongoose.Schema.Types.ObjectId, ref: 'MembreComite', default: null, index: true },
   /** « idA:idB » trié : une seule discussion par paire de participants. */
   cle: { type: String, required: true, unique: true },
   dernierMessageLe: { type: Date, default: null, index: true },
