@@ -32,6 +32,7 @@ async function vues(liste) {
   const parReco = new Map(charge.map((c) => [String(c._id), c]));
   return liste.map((x) => ({ ...x.toJSON(), ouvertes: parReco.get(x.id)?.ouvertes ?? 0, enRetard: parReco.get(x.id)?.enRetard ?? 0 }));
 }
+exports.vues = vues;
 
 /** Champs modifiables du compte. */
 async function lireChamps(req, d, { creation }) {

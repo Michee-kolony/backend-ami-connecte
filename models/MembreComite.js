@@ -9,8 +9,16 @@ const mongoose = require('mongoose');
 const membreComiteSchema = new mongoose.Schema({
   prenom: { type: String, required: true, trim: true },
   nom: { type: String, required: true, trim: true, uppercase: true },
+  sexe: { type: String, enum: ['F', 'M', ''], default: '' },
   fonction: { type: String, default: '', trim: true },
+  /** Institution représentée au comité (ministère, partenaire, hôpital…). */
+  organisation: { type: String, default: '', trim: true },
   telephone: { type: String, default: '', trim: true },
+  photo: { type: String, default: null },
+  photoCle: { type: String, default: null },
+  /** Membre du comité qui a créé ce compte (absent pour le premier compte, créé par script). */
+  creePar: { type: mongoose.Schema.Types.ObjectId, ref: 'MembreComite', default: null },
+  ajoutePar: { type: new mongoose.Schema({ nom: String }, { _id: false }), default: undefined },
   email: { type: String, required: true, unique: true, trim: true, lowercase: true },
   motDePasse: { type: String, required: true, select: false },
   statut: { type: String, enum: ['Actif', 'Suspendu'], default: 'Actif' },
@@ -24,6 +32,9 @@ const membreComiteSchema = new mongoose.Schema({
       delete ret._id;
       delete ret.__v;
       delete ret.motDePasse;
+      delete ret.photoCle;
+      ret.creePar = ret.creePar ? String(ret.creePar) : null;
+      ret.creeLe = ret.createdAt ?? null;
       return ret;
     },
   },

@@ -1,6 +1,6 @@
 const express = require('express');
 const { authentifierComite } = require('../middleware/comite');
-const { televerserPhotosEtablissement } = require('../middleware/upload');
+const { televerserPhoto, televerserPhotosEtablissement } = require('../middleware/upload');
 const etablissements = require('../controllers/etablissements');
 const statistiques = require('../controllers/statistiques');
 const synthese = require('../controllers/synthese');
@@ -14,7 +14,12 @@ router.post('/connexion', ctrl.connexion);
 router.use(authentifierComite);
 
 router.get('/moi', ctrl.moi);
+router.patch('/moi', televerserPhoto, ctrl.modifierProfil);
 router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
+
+// Membres du comité : chacun peut consulter la liste et ajouter un nouveau membre.
+router.get('/membres', ctrl.listerMembres);
+router.post('/membres', ctrl.ajouterMembre);
 
 // Établissements sanitaires et leur médecin chef (superadmin de l'établissement).
 router.get('/etablissements', ctrl.listerEtablissements);
@@ -29,6 +34,8 @@ router.post('/etablissements/:id/medecin-chef/:chefId/mot-de-passe', ctrl.reinit
 
 // Personnel soignant de toute la plateforme, avec ses établissements d'affectation (lecture seule).
 router.get('/soignants', ctrl.listerSoignants);
+// Relais communautaires (RECO) de toute la plateforme (lecture seule).
+router.get('/recos', ctrl.listerRecos);
 
 // Indicateurs consolidés de tous les établissements (mêmes calculs que le tableau de bord du
 // personnel, réponses anonymisées : agrégats seulement).

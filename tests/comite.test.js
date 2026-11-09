@@ -215,3 +215,45 @@ test('le comité voit tout le personnel de la plateforme et ses établissements 
   assert.equal((await appel('chefAlpha', 'GET', '/comite/soignants')).status, 403, 'jeton soignant refusé');
   assert.equal((await appel('comite', 'POST', '/comite/soignants', {})).status, 404, 'aucune création depuis le comité');
 });
+
+test('un membre complète son profil ; il ajoute un autre membre, qui se connecte avec le mot de passe temporaire', async () => {
+  const p = await appel('comite', 'PATCH', '/comite/moi', { fonction: 'Président', organisation: 'Ministère de la Santé', telephone: '+243 81 000 1111', sexe: 'M', email: 'pirate@essai.test' });
+  assert.equal(p.status, 200, JSON.stringify(p.corps));
+  assert.equal(p.corps.organisation, 'Ministère de la Santé');
+  assert.equal(p.corps.email, 'comite@essai.test', 'l’e-mail ne se change pas depuis le profil');
+  assert.ok(!('photoCle' in p.corps) && !('motDePasse' in p.corps));
+
+  assert.equal((await appel('comite', 'POST', '/comite/membres', { prenom: 'Sans', nom: 'Email' })).status, 400);
+  const n = await appel('comite', 'POST', '/comite/membres', { prenom: 'Aline', nom: 'Bisimwa', email: 'Aline@Essai.test', fonction: 'Secrétaire' });
+  assert.equal(n.status, 201, JSON.stringify(n.corps));
+  assert.equal(n.corps.membre.email, 'aline@essai.test');
+  assert.equal(n.corps.membre.ajoutePar.nom, 'Paul PILOTE');
+  assert.ok(n.corps.motDePasseTemporaire);
+  assert.equal((await appel('comite', 'POST', '/comite/membres', { prenom: 'X', nom: 'Y', email: 'aline@essai.test' })).status, 409);
+
+  const c = await appel(null, 'POST', '/comite/connexion', { email: 'aline@essai.test', motDePasse: n.corps.motDePasseTemporaire });
+  assert.equal(c.status, 200);
+  assert.equal(c.corps.membre.doitChangerMotDePasse, true);
+  const liste = await appel('comite', 'GET', '/comite/membres');
+  assert.deepEqual(liste.corps.map((m) => m.email).sort(), ['aline@essai.test', 'comite@essai.test']);
+  assert.equal((await appel('chefAlpha', 'GET', '/comite/membres')).status, 403);
+});
+
+test('le comité voit tous les RECO de la plateforme, avec leur structure (lecture seule)', async () => {
+  const Reco = require('../models/Reco');
+  const Etablissement = require('../models/Etablissement');
+  const gamma = await Etablissement.findOne({ nom: 'Centre Gamma' });
+  const auteur = { id: '64b000000000000000000001', nom: 'Clarisse CHEF', role: 'Médecin chef de service' };
+  await Reco.create({ matricule: 'RECO-100001', prenom: 'Jean', nom: 'Mpiana', sexe: 'M', telephone: '+243 81 000 2222', etablissementId: jetons.etabAlpha, zones: ['Kilimani'], motDePasse: 'x', creePar: auteur });
+  await Reco.create({ matricule: 'RECO-100002', prenom: 'Odette', nom: 'Lusamba', sexe: 'F', telephone: '+243 81 000 3333', etablissementId: gamma.id, motDePasse: 'x', creePar: auteur, statut: 'Suspendu' });
+  const r = await appel('comite', 'GET', '/comite/recos');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.length, 2, 'RECO de tous les établissements');
+  const jean = r.corps.find((x) => x.matricule === 'RECO-100001');
+  assert.equal(jean.etablissement.nom, 'Centre Alpha');
+  assert.deepEqual(jean.zones, ['Kilimani']);
+  assert.equal(jean.taches.ouvertes, 0);
+  assert.ok(!('motDePasse' in jean));
+  assert.equal((await appel('chefAlpha', 'GET', '/comite/recos')).status, 403);
+  assert.equal((await appel('comite', 'POST', '/comite/recos', {})).status, 404, 'aucune création depuis le comité');
+});

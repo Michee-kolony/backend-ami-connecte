@@ -16,7 +16,7 @@ const Urgence = require('../models/Urgence');
 const etab = require('./etablissements');
 const { motDePasseValide, genererMotDePasse } = require('./soignants');
 const { messageValidation } = require('../config/erreursFr');
-const { supprimerFichier } = require('../config/r2');
+const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const presence = require('../config/presence');
 
 const ROLE_CHEF = 'Médecin chef de service';
@@ -53,6 +53,68 @@ exports.changerMotDePasse = async (req, res) => {
   membre.doitChangerMotDePasse = false;
   await membre.save();
   res.json(membre);
+};
+
+/** Champs que chaque membre renseigne lui-même dans son profil (ni e-mail, ni statut). */
+const CHAMPS_PROFIL_COMITE = ['prenom', 'nom', 'sexe', 'fonction', 'organisation', 'telephone'];
+
+/** Profil du membre connecté, avec une nouvelle photo facultative (multipart, champ « photo »). */
+exports.modifierProfil = async (req, res) => {
+  const membre = await MembreComite.findById(req.membreComite._id).select('+photoCle');
+  for (const c of CHAMPS_PROFIL_COMITE) {
+    if (req.body[c] !== undefined) membre[c] = String(req.body[c]).trim();
+  }
+  try {
+    await membre.validate();
+  } catch (err) {
+    return res.status(400).json({ message: messageValidation(err) });
+  }
+  const ancienneCle = membre.photoCle;
+  if (req.file) {
+    const { cle, url } = await envoyerFichier(req.file, 'comite');
+    membre.photo = url;
+    membre.photoCle = cle;
+  } else if (req.body.retirerPhoto === 'true') {
+    membre.photo = null;
+    membre.photoCle = null;
+  }
+  await membre.save();
+  // L'ancienne photo quitte le stockage une fois la nouvelle enregistrée.
+  if (ancienneCle && ancienneCle !== membre.photoCle) await supprimerFichier(ancienneCle).catch(() => {});
+  res.json(membre);
+};
+
+// --- Membres du comité ---------------------------------------------------------------------
+
+exports.listerMembres = async (req, res) => {
+  res.json(await MembreComite.find().sort({ nom: 1, prenom: 1 }));
+};
+
+/**
+ * Un membre du comité en ajoute un autre. Un mot de passe temporaire est généré : il est renvoyé
+ * une seule fois, à remettre au nouveau membre, qui le change à sa première connexion.
+ */
+exports.ajouterMembre = async (req, res) => {
+  const d = req.body || {};
+  const email = String(d.email || '').trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Adresse e-mail invalide.' });
+  if (await MembreComite.exists({ email })) return res.status(409).json({ message: 'Un membre du comité utilise déjà cet e-mail.' });
+  const motDePasse = genererMotDePasse();
+  const membre = new MembreComite({
+    email,
+    motDePasse: await bcrypt.hash(motDePasse, 12),
+    doitChangerMotDePasse: true,
+    creePar: req.membreComite._id,
+    ajoutePar: { nom: `${req.membreComite.prenom} ${req.membreComite.nom}` },
+  });
+  for (const c of CHAMPS_PROFIL_COMITE) if (d[c] !== undefined) membre[c] = String(d[c]).trim();
+  try {
+    await membre.save();
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: 'Un membre du comité utilise déjà cet e-mail.' });
+    return res.status(400).json({ message: messageValidation(err) });
+  }
+  res.status(201).json({ membre, motDePasseTemporaire: motDePasse });
 };
 
 // --- Médecin chef --------------------------------------------------------------------------
@@ -301,6 +363,44 @@ exports.listerSoignants = async (req, res) => {
           code: e?.code ?? '', nom: e?.nom ?? 'Établissement supprimé', province: e?.province ?? '', type: e?.type ?? '', statut: e?.statut ?? null,
         };
       }),
+    };
+  }));
+};
+
+// --- Relais communautaires (lecture seule) -----------------------------------------------
+
+/**
+ * Tous les RECO de la plateforme, avec leur structure de rattachement, leur superviseur et leur
+ * charge active (tâches ouvertes, en retard). Lecture seule : ils sont gérés par les superviseurs
+ * de chaque établissement.
+ */
+exports.listerRecos = async (req, res) => {
+  const { vues } = require('./recos');
+  const Reco = require('../models/Reco');
+  const recos = await Reco.find().sort({ nom: 1, prenom: 1 });
+  const [lignes, etablissements, superviseurs, relances] = await Promise.all([
+    vues(recos),
+    Etablissement.find().select('code nom province type statut'),
+    Soignant.find({ _id: { $in: recos.map((r) => r.superviseurId).filter(Boolean) } }).select('prenom nom role'),
+    require('../models/TacheRelance').aggregate([
+      { $match: { recoId: { $in: recos.map((r) => r._id) } } },
+      { $group: { _id: '$recoId', total: { $sum: 1 }, terminees: { $sum: { $cond: ['$ouverte', 0, 1] } } } },
+    ]),
+  ]);
+  const etab = new Map(etablissements.map((e) => [e.id, e]));
+  const sup = new Map(superviseurs.map((s) => [s.id, s]));
+  const tot = new Map(relances.map((t) => [String(t._id), t]));
+  res.json(lignes.map((r) => {
+    const e = etab.get(r.etablissementId);
+    const s = r.superviseurId ? sup.get(r.superviseurId) : null;
+    return {
+      id: r.id, matricule: r.matricule, prenom: r.prenom, nom: r.nom, postnom: r.postnom, sexe: r.sexe,
+      telephone: r.telephone, photo: r.photo ?? null, aireSante: r.aireSante, zones: r.zones,
+      statut: r.statut, derniereConnexion: r.derniereConnexion, derniereSynchronisation: r.derniereSynchronisation,
+      doitChangerMotDePasse: r.doitChangerMotDePasse, creeLe: r.createdAt, ajoutePar: r.creePar ? { nom: r.creePar.nom, role: r.creePar.role } : null,
+      etablissement: e ? { id: e.id, code: e.code, nom: e.nom, province: e.province, type: e.type, statut: e.statut } : { id: r.etablissementId, code: '', nom: 'Établissement supprimé', province: '', type: '', statut: null },
+      superviseur: s ? { nom: `${s.prenom} ${s.nom}`, role: s.role } : null,
+      taches: { ouvertes: r.ouvertes, enRetard: r.enRetard, total: tot.get(r.id)?.total ?? 0, terminees: tot.get(r.id)?.terminees ?? 0 },
     };
   }));
 };
