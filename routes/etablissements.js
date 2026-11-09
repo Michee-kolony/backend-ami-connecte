@@ -1,18 +1,14 @@
 const express = require('express');
-const { authentifier, exigerRole } = require('../middleware/auth');
-const { televerserPhotosEtablissement } = require('../middleware/upload');
-const { ROLES_GESTION } = require('../models/Soignant');
+const { authentifier } = require('../middleware/auth');
 const ctrl = require('../controllers/etablissements');
 
 const router = express.Router();
 
+// Personnel soignant : consultation seulement. L'enregistrement, la modification, la suspension et
+// la suppression des établissements sont réservés au comité de pilotage (routes/comite.js).
 router.use(authentifier);
 
 router.get('/', ctrl.lister);
 router.get('/:id', ctrl.obtenir);
-router.post('/', exigerRole(...ROLES_GESTION), televerserPhotosEtablissement, ctrl.creer);
-router.patch('/:id', exigerRole(...ROLES_GESTION), televerserPhotosEtablissement, ctrl.modifier);
-router.patch('/:id/statut', exigerRole(...ROLES_GESTION), ctrl.basculerStatut);
-router.delete('/:id', exigerRole(...ROLES_GESTION), ctrl.supprimer);
 
 module.exports = router;

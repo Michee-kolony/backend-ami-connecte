@@ -31,6 +31,8 @@ app.get('/', (req, res) => {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/soignants', require('./routes/soignants'));
 app.use('/api/etablissements', require('./routes/etablissements'));
+// Comité de pilotage : établissements, médecins chefs et indicateurs consolidés.
+app.use('/api/comite', require('./routes/comite'));
 
 // Suivi prénatal (CPN)
 const suivi = require('./routes/suivi');

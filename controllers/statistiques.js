@@ -45,7 +45,8 @@ function debutMois(n = 0) {
 }
 
 exports.patientes = async (req, res) => {
-  const estMedecin = ROLES_MEDECIN.includes(req.soignant.role);
+  // Comité de pilotage : le nombre de grossesses à risque (agrégat) lui est aussi utile.
+  const estMedecin = req.vueGlobale || ROLES_MEDECIN.includes(req.soignant.role);
   const maintenant = new Date();
   const aujourdhui = minuitKinshasa(maintenant);
   const SEMAINES = 8;

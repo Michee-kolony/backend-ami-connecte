@@ -28,9 +28,27 @@ function genererMotDePasse() {
   return car.join('');
 }
 
-/** Personnel de l'établissement de connexion ; médecin chef sans établissement : tout le personnel. */
+exports.genererMotDePasse = genererMotDePasse;
+
+/** Personnel de l'établissement de connexion (sans établissement de connexion : personne). */
 function perimetre(req) {
-  return req.etablissementId ? { 'affectations.etablissementId': req.etablissementId } : {};
+  return req.etablissementId ? { 'affectations.etablissementId': req.etablissementId } : { _id: { $in: [] } };
+}
+
+const ROLE_CHEF = 'Médecin chef de service';
+
+/**
+ * Le médecin chef administre son ou ses établissements : il n'affecte du personnel qu'aux
+ * établissements où il exerce lui-même. Le rôle de médecin chef est attribué par le comité de
+ * pilotage (à l'enregistrement de l'établissement). Renvoie un message d'erreur, sinon null.
+ */
+function horsDeSonPerimetre(req, affectations, role) {
+  if (role === ROLE_CHEF) return 'Le médecin chef d’un établissement est désigné par le comité de pilotage.';
+  const siens = new Set(req.soignant.affectations.map((a) => a.etablissementId));
+  if (affectations && affectations.some((a) => !siens.has(String(a.etablissementId)))) {
+    return 'Vous ne pouvez affecter du personnel qu’à votre établissement.';
+  }
+  return null;
 }
 
 /** Routes /:id : un soignant d'un autre établissement n'est ni consultable ni modifiable. */
@@ -70,6 +88,8 @@ exports.creer = async (req, res) => {
   }
   const probleme = await Etablissement.verifierAffectations(affectations);
   if (probleme) return res.status(400).json({ message: probleme });
+  const interdit = horsDeSonPerimetre(req, affectations, d.role);
+  if (interdit) return res.status(403).json({ message: interdit });
 
   const email = String(d.email || '').trim().toLowerCase();
   const numeroOrdre = String(d.numeroOrdre || '').trim().toUpperCase();
@@ -135,6 +155,10 @@ exports.modifier = async (req, res) => {
   if (d.role !== undefined && d.role !== soignant.role) {
     // Évite qu'un médecin chef se retire lui-même ses droits de gestion.
     if (soignant.id === req.soignant.id) return res.status(400).json({ message: 'Vous ne pouvez pas modifier votre propre rôle.' });
+    // Le rôle de médecin chef n'est ni donné ni retiré ici : c'est le comité de pilotage qui le gère.
+    if (d.role === ROLE_CHEF || soignant.role === ROLE_CHEF) {
+      return res.status(403).json({ message: 'Le médecin chef d’un établissement est désigné par le comité de pilotage.' });
+    }
     soignant.role = d.role;
   }
   if (d.email !== undefined) {
@@ -154,6 +178,13 @@ exports.modifier = async (req, res) => {
     }
     const probleme = await Etablissement.verifierAffectations(affectations);
     if (probleme) return res.status(400).json({ message: probleme });
+    // Seuls les établissements ajoutés ou retirés doivent être ceux du médecin chef : un soignant
+    // qui exerce aussi ailleurs garde ses autres affectations.
+    const avant = new Set(soignant.affectations.map((a) => a.etablissementId));
+    const apres = new Set(affectations.map((a) => String(a.etablissementId)));
+    const changes = [...apres].filter((x) => !avant.has(x)).concat([...avant].filter((x) => !apres.has(x)));
+    const interdit = horsDeSonPerimetre(req, changes.map((etablissementId) => ({ etablissementId })), null);
+    if (interdit) return res.status(403).json({ message: interdit });
     soignant.affectations = affectations.map((a) => ({ etablissementId: String(a.etablissementId), service: String(a.service || '').trim() }));
   }
   if (soignant.isModified('numeroOrdre') && soignant.numeroOrdre
@@ -183,6 +214,7 @@ exports.basculerStatut = async (req, res) => {
   const soignant = await Soignant.findById(req.params.id);
   if (!soignant) return res.status(404).json({ message: 'Soignant introuvable.' });
   if (soignant.id === req.soignant.id) return res.status(400).json({ message: 'Vous ne pouvez pas suspendre votre propre compte.' });
+  if (soignant.role === ROLE_CHEF) return res.status(403).json({ message: 'Le compte d’un médecin chef est géré par le comité de pilotage.' });
   soignant.statut = soignant.statut === 'Actif' ? 'Suspendu' : 'Actif';
   await soignant.save();
   // Un compte suspendu quitte aussitôt la liste des soignants en ligne.
@@ -209,6 +241,7 @@ exports.supprimer = async (req, res) => {
   const soignant = await Soignant.findById(req.params.id).select('+photoCle');
   if (!soignant) return res.status(404).json({ message: 'Soignant introuvable.' });
   if (soignant.id === req.soignant.id) return res.status(400).json({ message: 'Vous ne pouvez pas supprimer votre propre compte.' });
+  if (soignant.role === ROLE_CHEF) return res.status(403).json({ message: 'Le compte d’un médecin chef est géré par le comité de pilotage.' });
   await soignant.deleteOne();
   presence.expulser(soignant.id);
   // La photo est retirée du bucket en même temps que le compte.

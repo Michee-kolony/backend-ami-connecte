@@ -22,7 +22,7 @@ const { verifierAccesPatiente } = require('./patientes');
 /** Échéance d'une tâche rouverte. */
 const REPRISE_JOURS = 3;
 
-const estSuperviseur = (req) => r.ROLES_SUPERVISION.includes(req.soignant.role);
+const estSuperviseur = (req) => r.ROLES_SUPERVISION.includes(req.soignant?.role);
 
 /** Filtre de territoire : la structure choisie à la connexion (aucune : toutes). */
 function filtreTerritoire(req) {
@@ -34,6 +34,7 @@ function filtreTerritoire(req) {
  * connexion, aucun (comme les dossiers des patientes : voir filtrePatientes).
  */
 function filtreRecos(req) {
+  if (req.vueGlobale) return {};
   return req.etablissementId ? { etablissementId: req.etablissementId } : { _id: { $in: [] } };
 }
 

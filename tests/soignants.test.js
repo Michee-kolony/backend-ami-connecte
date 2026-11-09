@@ -52,12 +52,14 @@ before(async () => {
     specialite: 'Médecine générale', affectations: [{ etablissementId: etablissements.a.id }], motDePasse: 'x',
   };
   for (const [cle, d] of Object.entries({
-    chef: { prenom: 'Alain', nom: 'CHEF', role: 'Médecin chef de service', matricule: 'MED-9101' },
+    // Médecin chef des deux centres : il peut y affecter son personnel.
+    chef: { prenom: 'Alain', nom: 'CHEF', role: 'Médecin chef de service', matricule: 'MED-9101', affectations: [{ etablissementId: etablissements.a.id }, { etablissementId: etablissements.b.id }] },
     medecin: { prenom: 'Aimée', nom: 'AMANI', role: 'Médecin', matricule: 'MED-9102' },
     infirmiere: { prenom: 'Inès', nom: 'ILUNGA', role: 'Infirmier(ère)', matricule: 'INF-9101', grade: 'Diplômé(e) (A2)', specialite: 'Soins infirmiers généraux' },
   })) {
     comptes[cle] = await Soignant.create({ ...base, ...d, email: `${cle}@essai.test` });
-    jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    // Jeton de session : établissement de connexion (Centre A), comme après une vraie connexion.
+    jetons[cle] = jwt.sign({ sub: comptes[cle].id, role: d.role, etablissement: etablissements.a.id }, process.env.JWT_SECRET, { expiresIn: '10m' });
   }
 
   http = app.listen(0);
@@ -172,7 +174,7 @@ test('gestion des soignants : seul le personnel de l’établissement de connexi
   const dansB = await matricules('medecinB');
   assert.ok(dansB.includes('INF-9101') && dansB.includes('MED-9102'), 'un soignant affecté aux deux centres figure dans les deux');
   assert.equal(dansB.includes('MED-9101'), false);
-  assert.ok((await matricules('chefSansEtablissement')).includes('INF-9101'), 'médecin chef sans établissement : tout le personnel');
+  assert.deepEqual(await matricules('chefSansEtablissement'), [], 'sans établissement de connexion : personne (les établissements relèvent du comité)');
 
   // Un lien direct ne contourne pas la liste, ni en lecture ni en modification.
   assert.equal((await appel('chefA', 'GET', `/soignants/${comptes.infirmiere.id}`)).status, 404);

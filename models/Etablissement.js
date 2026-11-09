@@ -38,6 +38,8 @@ const etablissementSchema = new mongoose.Schema({
   photos: { type: [photoSchema], default: [] },
   statut: { type: String, enum: ['Actif', 'Suspendu'], default: 'Actif' },
   creePar: { type: mongoose.Schema.Types.ObjectId, ref: 'Soignant' },
+  /** Membre du comité de pilotage qui a enregistré l'établissement. */
+  creeParComite: { type: mongoose.Schema.Types.ObjectId, ref: 'MembreComite' },
 }, {
   timestamps: true,
   toJSON: {

@@ -51,6 +51,8 @@ function supprimerPhotos(photos) {
     .catch((err) => console.error(`Photo ${p.cle} non supprimée de R2 :`, err.message))));
 }
 
+Object.assign(exports, { appliquer, nomDejaPris, envoyerPhotos, supprimerPhotos, MAX_PHOTOS });
+
 exports.lister = async (req, res) => {
   res.json(await Etablissement.find().sort({ createdAt: -1 }));
 };

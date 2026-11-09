@@ -34,9 +34,14 @@ exports.connexion = async (req, res) => {
     etablissement = etablissements[0];
   } else if (etablissements.length > 1) {
     return res.json({ choixEtablissement: true, etablissements: etablissements.map((e) => e.resume()) });
-  } else if (!ROLES_GESTION.includes(soignant.role)) {
-    // Le médecin chef peut entrer sans établissement pour pouvoir en créer.
-    return res.status(403).json({ message: 'Aucun établissement actif n’est rattaché à votre compte. Contactez le médecin chef.' });
+  } else {
+    // Les établissements sont enregistrés par le comité de pilotage : sans établissement actif,
+    // personne n'entre (pas même le médecin chef).
+    return res.status(403).json({
+      message: ROLES_GESTION.includes(soignant.role)
+        ? 'Aucun établissement actif n’est rattaché à votre compte. Contactez le comité de pilotage.'
+        : 'Aucun établissement actif n’est rattaché à votre compte. Contactez le médecin chef.',
+    });
   }
 
   soignant.derniereConnexion = new Date();
@@ -60,18 +65,8 @@ exports.modifierProfil = async (req, res) => {
   for (const champ of CHAMPS_PROFIL) {
     if (req.body[champ] !== undefined) soignant[champ] = req.body[champ];
   }
-  // Seul le médecin chef choisit lui-même ses établissements ; les autres sont affectés par lui.
-  if (req.body.affectations !== undefined && ROLES_GESTION.includes(soignant.role)) {
-    let affectations;
-    try {
-      affectations = JSON.parse(req.body.affectations);
-    } catch {
-      return res.status(400).json({ message: 'Affectations invalides.' });
-    }
-    const probleme = await Etablissement.verifierAffectations(affectations);
-    if (probleme) return res.status(400).json({ message: probleme });
-    soignant.affectations = affectations;
-  }
+  // Les établissements d'affectation ne se modifient pas depuis son propre profil : le médecin
+  // chef est rattaché par le comité de pilotage, le personnel par son médecin chef.
   if (soignant.isModified('numeroOrdre') && soignant.numeroOrdre
       && await Soignant.exists({ numeroOrdre: soignant.numeroOrdre, _id: { $ne: soignant._id } })) {
     return res.status(409).json({ message: 'Ce numéro d’Ordre est déjà enregistré.' });

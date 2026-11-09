@@ -110,7 +110,7 @@ exports.synthese = async (req, res) => {
   const jourDansPeriode = (iso) => iso && iso >= periode.du && iso <= periode.au;
   const province = q.province ? texte(q.province, 80) : '';
   const aire = q.aire ? texte(q.aire, 120) : '';
-  const maternite = ROLES_MATERNITE.includes(req.soignant.role);
+  const maternite = !req.vueGlobale && ROLES_MATERNITE.includes(req.soignant.role);
   const il12Mois = new Date(maintenant - 365 * JOUR);
   const il6Mois = new Date(Date.UTC(+auj.slice(0, 4), +auj.slice(5, 7) - 6, 1) - 60 * 60000);
   const depuisRdv = new Date(Math.min(periode.debut, il6Mois));
