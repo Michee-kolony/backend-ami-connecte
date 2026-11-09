@@ -57,6 +57,10 @@ app.use('/api/chauffeur', require('./routes/chauffeur'));
 app.use('/api/relance', require('./routes/relance'));
 app.use('/api/reco', require('./routes/reco'));
 
+// Module Épidémiologie (dix sous-fenêtres : démographie, cibles, planification, surveillance,
+// morbidité-mortalité, couvertures, alertes, rapports, traçabilité)
+app.use('/api/epidemiologie', require('./routes/epidemiologie'));
+
 // Espace patiente (application mobile)
 app.use('/api/espace-patiente', require('./routes/espacePatiente'));
 
