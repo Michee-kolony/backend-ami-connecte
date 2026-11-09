@@ -22,6 +22,11 @@ const membreComiteSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, trim: true, lowercase: true },
   motDePasse: { type: String, required: true, select: false },
   statut: { type: String, enum: ['Actif', 'Suspendu'], default: 'Actif' },
+  /**
+   * Président du comité : seul à pouvoir retirer un membre. Un seul président à la fois, désigné
+   * par script (scripts/designer-president-comite.js).
+   */
+  estPresident: { type: Boolean, default: false },
   derniereConnexion: { type: Date, default: null },
   doitChangerMotDePasse: { type: Boolean, default: true },
 }, {

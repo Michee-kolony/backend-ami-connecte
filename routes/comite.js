@@ -20,6 +20,8 @@ router.put('/moi/mot-de-passe', ctrl.changerMotDePasse);
 // Membres du comité : chacun peut consulter la liste et ajouter un nouveau membre.
 router.get('/membres', ctrl.listerMembres);
 router.post('/membres', ctrl.ajouterMembre);
+// Seul le président du comité peut retirer un membre (vérifié par le contrôleur).
+router.delete('/membres/:id', ctrl.supprimerMembre);
 
 // Établissements sanitaires et leur médecin chef (superadmin de l'établissement).
 router.get('/etablissements', ctrl.listerEtablissements);
@@ -36,6 +38,8 @@ router.post('/etablissements/:id/medecin-chef/:chefId/mot-de-passe', ctrl.reinit
 router.get('/soignants', ctrl.listerSoignants);
 // Relais communautaires (RECO) de toute la plateforme (lecture seule).
 router.get('/recos', ctrl.listerRecos);
+// Ambulances et chauffeurs de toute la plateforme, avec leur établissement (lecture seule).
+router.get('/flotte', ctrl.listerFlotte);
 
 // Indicateurs consolidés de tous les établissements (mêmes calculs que le tableau de bord du
 // personnel, réponses anonymisées : agrégats seulement).

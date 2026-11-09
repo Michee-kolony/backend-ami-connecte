@@ -257,3 +257,71 @@ test('le comité voit tous les RECO de la plateforme, avec leur structure (lectu
   assert.equal((await appel('chefAlpha', 'GET', '/comite/recos')).status, 403);
   assert.equal((await appel('comite', 'POST', '/comite/recos', {})).status, 404, 'aucune création depuis le comité');
 });
+
+test('seul le président du comité retire un membre ; il ne peut pas se retirer lui-même', async () => {
+  const MembreComite = require('../models/MembreComite');
+  const aline = await MembreComite.findOne({ email: 'aline@essai.test' });
+  // Paul n'est pas président : refus.
+  assert.equal((await appel('comite', 'DELETE', `/comite/membres/${aline.id}`)).status, 403);
+  await MembreComite.updateOne({ email: 'comite@essai.test' }, { estPresident: true });
+  const moi = await appel('comite', 'GET', '/comite/moi');
+  assert.equal(moi.corps.estPresident, true);
+  assert.equal((await appel('comite', 'DELETE', `/comite/membres/${moi.corps.id}`)).status, 400, 'pas de retrait de soi-même');
+  assert.equal((await appel('comite', 'DELETE', '/comite/membres/64b000000000000000000009')).status, 404);
+  // L'ancien membre ne peut plus se connecter une fois retiré.
+  assert.equal((await appel('comite', 'DELETE', `/comite/membres/${aline.id}`)).status, 204);
+  assert.equal(await MembreComite.exists({ email: 'aline@essai.test' }), null);
+  // Un membre ne se nomme pas président depuis son profil.
+  await MembreComite.updateOne({ email: 'comite@essai.test' }, { estPresident: false });
+  const p = await appel('comite', 'PATCH', '/comite/moi', { estPresident: 'true' });
+  assert.equal(p.corps.estPresident, false);
+});
+
+test('le médecin chef rattache un soignant à plusieurs établissements, dont au moins le sien ; le soignant choisit à la connexion', async () => {
+  const bcrypt = require('bcrypt');
+  const Soignant = require('../models/Soignant');
+  const Etablissement = require('../models/Etablissement');
+  const gamma = await Etablissement.findOne({ nom: 'Centre Gamma' });
+  const motDePasse = 'Infirmier#2026x';
+  const inf = await Soignant.create({
+    matricule: 'INF-7701', prenom: 'Nadine', nom: 'KABEYA', sexe: 'F', dateNaissance: '1990-01-01', lieuNaissance: 'Kinshasa',
+    nationalite: 'Congolaise', pieceType: 'Passeport', adresse: 'Fictive', telephone: '000', grade: 'Gradué(e) (A1)',
+    specialite: 'Soins infirmiers généraux', role: 'Infirmier(ère)', email: 'nadine@essai.test', motDePasse: await bcrypt.hash(motDePasse, 4),
+    affectations: [{ etablissementId: jetons.etabAlpha }], doitChangerMotDePasse: false,
+  });
+  // Ajout d'un second établissement (pas celui du médecin chef) : accepté.
+  const r = await appel('chefAlpha', 'PATCH', `/soignants/${inf.id}`, { affectations: [{ etablissementId: jetons.etabAlpha, service: 'CPN' }, { etablissementId: gamma.id, service: 'Urgences' }] });
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.deepEqual(r.corps.affectations.map((a) => a.etablissementId), [jetons.etabAlpha, gamma.id]);
+  // Retirer l'établissement du médecin chef (ne garder qu'un autre) : refusé.
+  assert.equal((await appel('chefAlpha', 'PATCH', `/soignants/${inf.id}`, { affectations: [{ etablissementId: gamma.id }] })).status, 403);
+  // À la connexion, la soignante choisit l'établissement où elle travaille.
+  const c1 = await fetch(`${api}/auth/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'nadine@essai.test', motDePasse }) }).then((x) => x.json());
+  assert.equal(c1.choixEtablissement, true);
+  assert.deepEqual(c1.etablissements.map((e) => e.nom).sort(), ['Centre Alpha', 'Centre Gamma']);
+  const c2 = await fetch(`${api}/auth/connexion`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'nadine@essai.test', motDePasse, etablissementId: gamma.id }) }).then((x) => x.json());
+  assert.equal(c2.etablissement.nom, 'Centre Gamma');
+});
+
+test('le comité voit toutes les ambulances et tous les chauffeurs, avec leur établissement (lecture seule)', async () => {
+  const Ambulance = require('../models/Ambulance');
+  const Chauffeur = require('../models/Chauffeur');
+  const Etablissement = require('../models/Etablissement');
+  const gamma = await Etablissement.findOne({ nom: 'Centre Gamma' });
+  const auteur = { id: '64b000000000000000000001', nom: 'Clarisse CHEF', role: 'Médecin chef de service' };
+  const chf = await Chauffeur.create({ matricule: 'CHF-100001', prenom: 'Didier', nom: 'Mbala', telephone: '+243 81 000 4444', etablissementId: jetons.etabAlpha, motDePasse: 'x', creePar: auteur });
+  await Ambulance.create({ code: 'AMB-01', immatriculation: 'kin-1234', modele: 'Toyota Land Cruiser', type: 'Type B — soins d’urgence', etablissementId: jetons.etabAlpha, chauffeurId: chf._id, creePar: auteur });
+  await Ambulance.create({ code: 'AMB-02', immatriculation: 'KIN-5678', modele: 'Nissan Patrol', type: 'Type A — transport', etablissementId: gamma.id, statut: 'Maintenance', creePar: auteur, position: { lat: -4.3, lng: 15.3, le: new Date() } });
+  const r = await appel('comite', 'GET', '/comite/flotte');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.ambulances.length, 2, 'ambulances de tous les établissements');
+  const amb1 = r.corps.ambulances.find((a) => a.code === 'AMB-01');
+  assert.equal(amb1.etablissement.nom, 'Centre Alpha');
+  assert.equal(amb1.chauffeur.nom, 'Didier MBALA');
+  assert.ok(!('position' in r.corps.ambulances.find((a) => a.code === 'AMB-02')), 'pas de position GPS');
+  const didier = r.corps.chauffeurs.find((c) => c.matricule === 'CHF-100001');
+  assert.equal(didier.ambulance.code, 'AMB-01');
+  assert.equal(didier.etablissement.nom, 'Centre Alpha');
+  assert.ok(!('motDePasse' in didier));
+  assert.equal((await appel('chefAlpha', 'GET', '/comite/flotte')).status, 403);
+});

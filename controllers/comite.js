@@ -86,6 +86,24 @@ exports.modifierProfil = async (req, res) => {
 
 // --- Membres du comité ---------------------------------------------------------------------
 
+/**
+ * Retrait d'un membre du comité : réservé au président, qui ne peut pas se retirer lui-même.
+ * Le compte et sa photo sont supprimés ; ses sessions ouvertes sont refusées aussitôt.
+ */
+exports.supprimerMembre = async (req, res) => {
+  if (!req.membreComite.estPresident) {
+    return res.status(403).json({ message: 'Seul le président du comité peut retirer un membre.' });
+  }
+  const membre = mongoose.isValidObjectId(req.params.id) && await MembreComite.findById(req.params.id).select('+photoCle');
+  if (!membre) return res.status(404).json({ message: 'Membre du comité introuvable.' });
+  if (membre.id === req.membreComite.id) {
+    return res.status(400).json({ message: 'Vous ne pouvez pas retirer votre propre compte.' });
+  }
+  await membre.deleteOne();
+  if (membre.photoCle) await supprimerFichier(membre.photoCle).catch(() => {});
+  res.status(204).end();
+};
+
 exports.listerMembres = async (req, res) => {
   res.json(await MembreComite.find().sort({ nom: 1, prenom: 1 }));
 };
@@ -403,6 +421,59 @@ exports.listerRecos = async (req, res) => {
       taches: { ouvertes: r.ouvertes, enRetard: r.enRetard, total: tot.get(r.id)?.total ?? 0, terminees: tot.get(r.id)?.terminees ?? 0 },
     };
   }));
+};
+
+// --- Flotte : ambulances et chauffeurs (lecture seule) ------------------------------------
+
+/**
+ * Toutes les ambulances et tous les chauffeurs de la plateforme, avec leur établissement, le
+ * chauffeur attitré de chaque ambulance et le nombre de missions effectuées. Lecture seule : la
+ * flotte est gérée par chaque établissement. La position GPS n'est pas transmise.
+ */
+exports.listerFlotte = async (req, res) => {
+  const Ambulance = require('../models/Ambulance');
+  const Chauffeur = require('../models/Chauffeur');
+  const [ambulances, chauffeurs, etablissements, missionsAmb, missionsChf] = await Promise.all([
+    Ambulance.find().sort({ code: 1 }).lean(),
+    Chauffeur.find().sort({ nom: 1, prenom: 1 }),
+    Etablissement.find().select('code nom province type statut'),
+    Urgence.aggregate([{ $match: { ambulance: { $ne: null } } }, { $group: { _id: '$ambulance', n: { $sum: 1 } } }]),
+    Urgence.aggregate([{ $match: { chauffeurId: { $ne: null } } }, { $group: { _id: '$chauffeurId', n: { $sum: 1 } } }]),
+  ]);
+  const etab = new Map(etablissements.map((e) => [e.id, e]));
+  const vueEtab = (id) => {
+    const e = id && etab.get(id);
+    return e ? { id: e.id, code: e.code, nom: e.nom, province: e.province, type: e.type, statut: e.statut }
+      : { id: id ?? null, code: '', nom: id ? 'Établissement supprimé' : 'Sans établissement', province: '', type: '', statut: null };
+  };
+  const nbAmb = new Map(missionsAmb.map((m) => [m._id, m.n]));
+  const nbChf = new Map(missionsChf.map((m) => [String(m._id), m.n]));
+  const chf = new Map(chauffeurs.map((c) => [c.id, c]));
+  const ambDe = new Map(ambulances.filter((a) => a.chauffeurId).map((a) => [String(a.chauffeurId), a]));
+  res.json({
+    ambulances: ambulances.map((a) => {
+      const c = a.chauffeurId ? chf.get(String(a.chauffeurId)) : null;
+      return {
+        id: String(a._id), code: a.code, immatriculation: a.immatriculation, modele: a.modele, annee: a.annee, type: a.type,
+        statut: a.statut, infirmier: a.infirmier, kilometrage: a.kilometrage, carburant: a.carburant,
+        prochaineRevision: a.prochaineRevision ?? null, urgence: a.urgence, creeLe: a.createdAt,
+        positionLe: a.position?.le ?? null, missions: nbAmb.get(a.code) ?? 0,
+        etablissement: vueEtab(a.etablissementId),
+        chauffeur: c ? { id: c.id, matricule: c.matricule, nom: `${c.prenom} ${c.nom}`, telephone: c.telephone, photo: c.photo ?? null } : null,
+      };
+    }),
+    chauffeurs: chauffeurs.map((c) => {
+      const a = ambDe.get(c.id);
+      return {
+        id: c.id, matricule: c.matricule, prenom: c.prenom, nom: c.nom, postnom: c.postnom, telephone: c.telephone,
+        photo: c.photo ?? null, permis: c.permis ?? '', permisExpire: c.permisExpire ?? null, statut: c.statut,
+        derniereConnexion: c.derniereConnexion, doitChangerMotDePasse: c.doitChangerMotDePasse, creeLe: c.createdAt,
+        missions: nbChf.get(c.id) ?? 0,
+        etablissement: vueEtab(c.etablissementId),
+        ambulance: a ? { code: a.code, immatriculation: a.immatriculation, statut: a.statut } : null,
+      };
+    }),
+  });
 };
 
 // --- Indicateurs consolidés ---------------------------------------------------------------

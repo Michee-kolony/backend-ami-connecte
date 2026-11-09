@@ -44,9 +44,11 @@ const ROLE_CHEF = 'Médecin chef de service';
  */
 function horsDeSonPerimetre(req, affectations, role) {
   if (role === ROLE_CHEF) return 'Le médecin chef d’un établissement est désigné par le comité de pilotage.';
+  // Un soignant peut exercer dans plusieurs établissements (il choisit le sien à la connexion),
+  // mais il reste rattaché à au moins un établissement du médecin chef qui le gère.
   const siens = new Set(req.soignant.affectations.map((a) => a.etablissementId));
-  if (affectations && affectations.some((a) => !siens.has(String(a.etablissementId)))) {
-    return 'Vous ne pouvez affecter du personnel qu’à votre établissement.';
+  if (affectations && !affectations.some((a) => siens.has(String(a.etablissementId)))) {
+    return 'Le soignant doit exercer dans au moins un de vos établissements (il peut aussi exercer dans d’autres).';
   }
   return null;
 }
@@ -178,12 +180,8 @@ exports.modifier = async (req, res) => {
     }
     const probleme = await Etablissement.verifierAffectations(affectations);
     if (probleme) return res.status(400).json({ message: probleme });
-    // Seuls les établissements ajoutés ou retirés doivent être ceux du médecin chef : un soignant
-    // qui exerce aussi ailleurs garde ses autres affectations.
-    const avant = new Set(soignant.affectations.map((a) => a.etablissementId));
-    const apres = new Set(affectations.map((a) => String(a.etablissementId)));
-    const changes = [...apres].filter((x) => !avant.has(x)).concat([...avant].filter((x) => !apres.has(x)));
-    const interdit = horsDeSonPerimetre(req, changes.map((etablissementId) => ({ etablissementId })), null);
+    // Plusieurs établissements possibles, dont au moins un du médecin chef qui modifie.
+    const interdit = horsDeSonPerimetre(req, affectations, null);
     if (interdit) return res.status(403).json({ message: interdit });
     soignant.affectations = affectations.map((a) => ({ etablissementId: String(a.etablissementId), service: String(a.service || '').trim() }));
   }
