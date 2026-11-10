@@ -192,7 +192,8 @@ exports.rechercher = async (req, res) => {
   }
   const [total, patientes] = await Promise.all([
     Patiente.countDocuments(filtre),
-    Patiente.find(filtre).sort({ updatedAt: -1 }).skip((page - 1) * parPage).limit(parPage),
+    // Dernières patientes enregistrées en tête (une modification du dossier ne change pas sa place).
+    Patiente.find(filtre).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * parPage).limit(parPage),
   ]);
   await journaliser(req, { action: 'patiente.recherche', details: { resultats: total } });
   const resultats = await completer(patientes);
