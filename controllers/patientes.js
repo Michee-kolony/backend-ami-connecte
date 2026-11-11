@@ -69,8 +69,9 @@ async function verifierAccesPatiente(req, patienteId) {
 
 /** Filtre des listes : patientes de l'établissement de connexion (aucune sans établissement). */
 function filtrePatientes(req) {
-  // Comité de pilotage : indicateurs consolidés de tous les établissements (agrégats seulement).
-  if (req.vueGlobale) return {};
+  // Comité de pilotage : indicateurs consolidés de tous les établissements (agrégats seulement),
+  // ou de ceux du périmètre choisi (établissement, province, zone de santé : voir lirePerimetre).
+  if (req.vueGlobale) return req.perimetre ? { etablissementId: { $in: req.perimetre } } : {};
   return req.etablissementId ? { etablissementId: req.etablissementId } : { _id: { $in: [] } };
 }
 

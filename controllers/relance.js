@@ -26,6 +26,7 @@ const estSuperviseur = (req) => r.ROLES_SUPERVISION.includes(req.soignant?.role)
 
 /** Filtre de territoire : la structure choisie à la connexion (aucune : toutes). */
 function filtreTerritoire(req) {
+  if (req.perimetre) return { etablissementId: { $in: req.perimetre } };
   return req.etablissementId ? { etablissementId: req.etablissementId } : {};
 }
 
@@ -34,7 +35,7 @@ function filtreTerritoire(req) {
  * connexion, aucun (comme les dossiers des patientes : voir filtrePatientes).
  */
 function filtreRecos(req) {
-  if (req.vueGlobale) return {};
+  if (req.vueGlobale) return req.perimetre ? { etablissementId: { $in: req.perimetre } } : {};
   return req.etablissementId ? { etablissementId: req.etablissementId } : { _id: { $in: [] } };
 }
 

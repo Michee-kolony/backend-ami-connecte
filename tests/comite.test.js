@@ -207,6 +207,48 @@ test('indicateurs consolidés : tous les établissements, sans données nominati
   assert.equal(t.corps.etablissements.find((e) => e.nom === 'Centre Gamma').medecinChef, false);
 });
 
+test('périmètre des indicateurs du comité : par établissement, par province, par zone de santé', async () => {
+  const Patiente = require('../models/Patiente');
+  const Etablissement = require('../models/Etablissement');
+  const auteur = { id: '64b000000000000000000001', nom: 'Fictif', role: 'Médecin' };
+  const goma = await Etablissement.create({
+    ...etablissement('Centre Goma'), code: 'ETS-NKI-9001', province: 'Nord-Kivu', zonesSante: ['Goma', 'Karisimbi'],
+  });
+  await Patiente.create({ numero: 'AC-PAT-880003', nom: 'Trois', prenom: 'Goma', etablissementId: goma.id, creePar: auteur });
+  await Patiente.create({ numero: 'AC-PAT-880004', nom: 'Quatre', prenom: 'Goma', etablissementId: goma.id, creePar: auteur });
+  const stats = (requete) => appel('comite', 'GET', `/comite/statistiques/patientes?${new URLSearchParams(requete)}`);
+  const lignes = (requete) => appel('comite', 'GET', `/comite/statistiques/etablissements?${new URLSearchParams(requete)}`);
+
+  assert.equal((await stats({})).corps.totaux.patientes, 4, 'sans filtre : tout le système');
+  assert.equal((await stats({ provinceEtablissement: 'Nord-Kivu' })).corps.totaux.patientes, 2);
+  assert.equal((await stats({ provinceEtablissement: 'Kinshasa' })).corps.totaux.patientes, 2);
+  assert.equal((await stats({ provinceEtablissement: 'Nord-Kivu', zoneSante: 'Karisimbi' })).corps.totaux.patientes, 2, 'zone couverte en plus de la principale');
+  assert.equal((await stats({ provinceEtablissement: 'Nord-Kivu', zoneSante: 'Rutshuru' })).corps.totaux.patientes, 0, 'zone sans établissement');
+  assert.equal((await stats({ etablissement: jetons.etabAlpha })).corps.totaux.patientes, 1);
+
+  const k = await lignes({ provinceEtablissement: 'Kinshasa', zoneSante: 'Limete' });
+  assert.equal(k.status, 200);
+  assert.ok(k.corps.etablissements.every((e) => e.province === 'Kinshasa' && e.zonesSante.includes('Limete')));
+  assert.equal(k.corps.totaux.patientes, 2);
+  const g = await lignes({ provinceEtablissement: 'Nord-Kivu' });
+  assert.deepEqual(g.corps.etablissements.map((e) => e.nom), ['Centre Goma']);
+  assert.equal(g.corps.totaux.zonesSante, 2);
+
+  // Mêmes filtres pour la synthèse et les analyses mensuelles.
+  const s = await appel('comite', 'GET', '/comite/statistiques/synthese?provinceEtablissement=Nord-Kivu');
+  assert.equal(s.status, 200, JSON.stringify(s.corps));
+  assert.equal((await appel('comite', 'GET', '/comite/statistiques/cpn-mensuel?provinceEtablissement=Nord-Kivu')).status, 200);
+
+  assert.equal((await stats({ zoneSante: 'Goma' })).status, 400, 'zone sans province');
+  assert.equal((await stats({ provinceEtablissement: 'Kinshasa', zoneSante: 'Goma' })).status, 400, 'zone d’une autre province');
+  assert.equal((await stats({ provinceEtablissement: 'Atlantide' })).status, 400);
+  assert.equal((await stats({ etablissement: 'pas-un-id' })).status, 400);
+
+  // Les tests suivants comptent les patientes de toute la plateforme.
+  await Patiente.deleteMany({ etablissementId: goma.id });
+  await goma.deleteOne();
+});
+
 test('suppression : refusée avec des patientes ; sinon l’établissement part avec son médecin chef', async () => {
   assert.equal((await appel('comite', 'DELETE', `/comite/etablissements/${jetons.etabAlpha}`)).status, 409);
   const r = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Epsilon'), medecinChef: chef('chef.eps@essai.test') });

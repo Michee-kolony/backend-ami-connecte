@@ -61,6 +61,8 @@ router.get('/flotte', ctrl.listerFlotte);
 // Indicateurs consolidés de tous les établissements (mêmes calculs que le tableau de bord du
 // personnel, réponses anonymisées : agrégats seulement).
 const s = ctrl.statistiques;
+// Filtre commun à tous les indicateurs : établissement, province ou zone de santé.
+router.use('/statistiques', ctrl.lirePerimetre);
 router.get('/statistiques/etablissements', ctrl.parEtablissement);
 router.get('/statistiques/patientes', s(statistiques.patientes));
 router.get('/statistiques/enfants', s(statistiques.enfants));

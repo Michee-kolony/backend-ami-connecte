@@ -18,6 +18,8 @@ const { motDePasseValide, genererMotDePasse } = require('./soignants');
 const { messageValidation } = require('../config/erreursFr');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const presence = require('../config/presence');
+const { PROVINCES_RDC } = require('../config/referentiels');
+const { zonesDeProvince } = require('../config/zonesSante');
 
 const ROLE_CHEF = 'Médecin chef de service';
 const MESSAGE_MDP = 'Mot de passe trop faible (10 caractères, majuscules, minuscules, chiffre et caractère spécial).';
@@ -573,6 +575,35 @@ function anonymiser(valeur, cle = '') {
   return sortie;
 }
 
+/**
+ * Périmètre des statistiques du comité : `?etablissement=<id>`, `?provinceEtablissement=<province>`,
+ * `?zoneSante=<zone>` (zone de la province). Les noms diffèrent de `province` / `aire`, déjà
+ * utilisés par les analyses pour l'adresse des patientes. Renseigne req.perimetre : identifiants
+ * des établissements retenus (liste éventuellement vide), ou null sans filtre (tout le système).
+ */
+exports.lirePerimetre = async (req, res, next) => {
+  const lire = (cle) => (typeof req.query[cle] === 'string' ? req.query[cle].trim() : '');
+  const etablissement = lire('etablissement');
+  const province = lire('provinceEtablissement');
+  const zone = lire('zoneSante');
+  req.perimetre = null;
+  if (!etablissement && !province && !zone) return next();
+
+  if (etablissement && !mongoose.isValidObjectId(etablissement)) return res.status(400).json({ message: 'Établissement invalide.' });
+  if (province && !PROVINCES_RDC.includes(province)) return res.status(400).json({ message: 'Province inconnue.' });
+  if (zone && !province) return res.status(400).json({ message: 'Choisissez la province de la zone de santé.' });
+  if (zone && !zonesDeProvince(province).includes(zone)) {
+    return res.status(400).json({ message: `« ${zone} » n’est pas une zone de santé de la province ${province}.` });
+  }
+  const filtre = {};
+  if (etablissement) filtre._id = etablissement;
+  if (province) filtre.province = province;
+  // Anciens établissements : une seule zone, dans `zoneSante`.
+  if (zone) filtre.$or = [{ zonesSante: zone }, { zoneSante: zone }];
+  req.perimetre = (await Etablissement.distinct('_id', filtre)).map(String);
+  next();
+};
+
 /** Exécute un contrôleur de statistiques existant et anonymise sa réponse pour le comité. */
 exports.statistiques = (controleur) => async (req, res, next) => {
   const json = res.json.bind(res);
@@ -585,7 +616,7 @@ exports.parEtablissement = async (req, res) => {
   const compter = (Modele, filtre = {}) => Modele.aggregate([{ $match: filtre }, { $group: { _id: '$etablissementId', n: { $sum: 1 } } }])
     .then((l) => new Map(l.map((x) => [x._id, x.n])));
   const [etablissements, soignants, patientes, consultations, accouchements, enfants, urgences, grossesses, patientesEtab] = await Promise.all([
-    Etablissement.find().sort({ nom: 1 }),
+    Etablissement.find(req.perimetre ? { _id: { $in: req.perimetre } } : {}).sort({ nom: 1 }),
     Soignant.find({ statut: 'Actif' }).select('affectations role').lean(),
     compter(Patiente),
     compter(Consultation, { statut: 'Finalisée' }),
@@ -606,6 +637,7 @@ exports.parEtablissement = async (req, res) => {
     const personnel = soignants.filter((s) => s.affectations.some((a) => a.etablissementId === e.id));
     return {
       id: e.id, code: e.code, nom: e.nom, type: e.type, province: e.province, statut: e.statut,
+      zonesSante: e.zonesSante?.length ? e.zonesSante : [e.zoneSante].filter(Boolean),
       soignants: personnel.length,
       medecinChef: personnel.some((s) => s.role === ROLE_CHEF),
       patientes: patientes.get(e.id) ?? 0,
@@ -623,6 +655,7 @@ exports.parEtablissement = async (req, res) => {
       etablissements: lignes.length,
       actifs: lignes.filter((l) => l.statut === 'Actif').length,
       provinces: new Set(lignes.map((l) => l.province)).size,
+      zonesSante: new Set(lignes.flatMap((l) => l.zonesSante.map((z) => `${l.province}|${z}`))).size,
       sansMedecinChef: lignes.filter((l) => !l.medecinChef).length,
       // Un soignant qui exerce dans plusieurs établissements n'est compté qu'une fois.
       soignants: soignants.filter((s) => s.affectations.some((a) => lignes.some((l) => l.id === a.etablissementId))).length,

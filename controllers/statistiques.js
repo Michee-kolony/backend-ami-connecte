@@ -98,10 +98,11 @@ exports.patientes = async (req, res) => {
 
   // --- Provinces (carte de la RDC) ----------------------------------------------------
   // Vue globale du système, tous établissements confondus : effectifs seulement, aucune identité.
+  // Comité avec un périmètre (établissement, province, zone) : patientes de ce périmètre seulement.
   const [parProvince, enCoursParProvince] = await Promise.all([
-    Patiente.aggregate([{ $group: { _id: '$adresse.province', n: { $sum: 1 } } }]),
+    Patiente.aggregate([{ $match: req.perimetre ? filtrePatientes(req) : {} }, { $group: { _id: '$adresse.province', n: { $sum: 1 } } }]),
     Grossesse.aggregate([
-      { $match: { statut: 'En cours' } },
+      { $match: { statut: 'En cours', ...(req.perimetre ? { patienteId: { $in: ids } } : {}) } },
       { $lookup: { from: Patiente.collection.name, localField: 'patienteId', foreignField: '_id', as: 'p' } },
       { $group: { _id: { $arrayElemAt: ['$p.adresse.province', 0] }, n: { $sum: 1 } } },
     ]),
