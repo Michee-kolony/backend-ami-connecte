@@ -22,6 +22,11 @@ function appliquer(etablissement, d) {
   if (d.longitude !== undefined) etablissement.longitude = nombre(d.longitude);
   if (d.lits !== undefined) etablissement.lits = nombre(d.lits) || 0;
   if (d.services !== undefined) etablissement.services = JSON.parse(d.services);
+  if (d.zonesSante !== undefined) {
+    const zones = typeof d.zonesSante === 'string' ? JSON.parse(d.zonesSante) : d.zonesSante;
+    if (!Array.isArray(zones)) throw new Error('zonesSante');
+    etablissement.zonesSante = zones.map((z) => String(z).trim()).filter(Boolean);
+  }
 }
 
 function erreurValidation(err) {
@@ -71,9 +76,11 @@ exports.creer = async (req, res) => {
   try {
     appliquer(e, req.body);
   } catch {
-    return res.status(400).json({ message: 'Services invalides.' });
+    return res.status(400).json({ message: 'Services ou zones de santé invalides.' });
   }
   if (!e.province) return res.status(400).json({ message: 'La province est obligatoire.' });
+  const erreurZones = e.erreurZones();
+  if (erreurZones) return res.status(400).json({ message: erreurZones });
   if (await nomDejaPris(e.nom, e.province)) {
     return res.status(409).json({ message: 'Un établissement porte déjà ce nom dans cette province.' });
   }
@@ -110,6 +117,8 @@ exports.modifier = async (req, res) => {
   } catch {
     return res.status(400).json({ message: 'Données invalides.' });
   }
+  const erreurZones = e.erreurZones();
+  if (erreurZones) return res.status(400).json({ message: erreurZones });
   const fichiers = req.files || [];
   const gardees = e.photos.filter((p) => conservees.includes(p.url));
   const retirees = e.photos.filter((p) => !conservees.includes(p.url));

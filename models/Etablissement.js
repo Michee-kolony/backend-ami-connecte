@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { zonesDeProvince } = require('../config/zonesSante');
 
 const TYPES = [
   'Hôpital général de référence', 'Hôpital militaire', 'Centre de santé de référence',
@@ -21,6 +22,9 @@ const etablissementSchema = new mongoose.Schema({
   province: { type: String, required: true, trim: true },
   /** District sanitaire (en-tête de la fiche CPN), renseigné par le médecin chef. */
   districtSanitaire: { type: String, default: '', trim: true },
+  /** Zones de santé couvertes (référentiel config/zonesSante.js, au moins une, de la province). */
+  zonesSante: { type: [{ type: String, trim: true }], default: undefined },
+  /** Zone de santé principale : la première de `zonesSante` (en-têtes, carte, épidémiologie). */
   zoneSante: { type: String, required: true, trim: true },
   aireSante: { type: String, default: '', trim: true },
   adresse: { type: String, required: true, trim: true },
@@ -45,6 +49,8 @@ const etablissementSchema = new mongoose.Schema({
   toJSON: {
     transform: (doc, ret) => {
       ret.id = String(ret._id);
+      // Établissements enregistrés avant la sélection multiple : leur zone unique.
+      if (!ret.zonesSante?.length) ret.zonesSante = ret.zoneSante ? [ret.zoneSante] : [];
       ret.photos = (ret.photos || []).map((p) => p.url);
       ret.creeLe = ret.createdAt ? new Date(ret.createdAt).toISOString().slice(0, 10) : null;
       delete ret._id;
@@ -53,6 +59,26 @@ const etablissementSchema = new mongoose.Schema({
     },
   },
 });
+
+/** La zone principale suit la première zone sélectionnée. */
+etablissementSchema.pre('validate', function () {
+  if (this.zonesSante?.length) this.zoneSante = this.zonesSante[0];
+});
+
+/**
+ * Message d'erreur si les zones de santé ne sont pas valides pour la province, sinon null.
+ * Vérifiées seulement quand elles (ou la province) changent : les zones saisies librement
+ * avant le référentiel ne bloquent pas les autres modifications.
+ */
+etablissementSchema.methods.erreurZones = function () {
+  if (!this.isNew && !this.isModified('zonesSante') && !this.isModified('province')) return null;
+  const zones = this.zonesSante ?? [];
+  if (!zones.length) return 'Sélectionnez au moins une zone de santé.';
+  if (new Set(zones).size !== zones.length) return 'La même zone de santé est choisie deux fois.';
+  const valides = zonesDeProvince(this.province);
+  const inconnue = zones.find((z) => !valides.includes(z));
+  return inconnue ? `« ${inconnue} » n’est pas une zone de santé de la province ${this.province}.` : null;
+};
 
 /** Abréviation de la province : KIN pour Kinshasa, KCE pour Kongo-Central… */
 function abreviation(province) {
@@ -88,7 +114,7 @@ etablissementSchema.statics.verifierAffectations = async function (affectations)
 etablissementSchema.methods.resume = function () {
   return {
     id: this.id, code: this.code, nom: this.nom, type: this.type, province: this.province,
-    districtSanitaire: this.districtSanitaire, zoneSante: this.zoneSante, aireSante: this.aireSante, adresse: this.adresse, photo: this.photos[0]?.url ?? null,
+    districtSanitaire: this.districtSanitaire, zoneSante: this.zoneSante, zonesSante: this.zonesSante?.length ? this.zonesSante : [this.zoneSante], aireSante: this.aireSante, adresse: this.adresse, photo: this.photos[0]?.url ?? null,
   };
 };
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const { authentifier } = require('../middleware/auth');
 const { PROVINCES_RDC } = require('../config/referentiels');
+const { ZONES_SANTE_RDC } = require('../config/zonesSante');
 const cpn = require('../config/cpn');
 const accouchement = require('../config/accouchement');
 const partogramme = require('../config/partogramme');
@@ -13,6 +14,11 @@ router.use(authentifier);
 /** Les 26 provinces de la RDC, pour les listes déroulantes du tableau de bord. */
 router.get('/provinces', (req, res) => {
   res.json(PROVINCES_RDC);
+});
+
+/** Les 519 zones de santé, regroupées par province. */
+router.get('/zones-sante', (req, res) => {
+  res.json(ZONES_SANTE_RDC);
 });
 
 /** Listes de la fiche CPN (antécédents, signes, mesures préventives, laboratoire, référence). */

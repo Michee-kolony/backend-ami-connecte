@@ -230,9 +230,11 @@ exports.creerEtablissement = async (req, res) => {
   try {
     etab.appliquer(e, req.body);
   } catch {
-    return res.status(400).json({ message: 'Services invalides.' });
+    return res.status(400).json({ message: 'Services ou zones de santé invalides.' });
   }
   if (!e.province) return res.status(400).json({ message: 'La province est obligatoire.' });
+  const erreurZones = e.erreurZones();
+  if (erreurZones) return res.status(400).json({ message: erreurZones });
   if (await etab.nomDejaPris(e.nom, e.province)) {
     return res.status(409).json({ message: 'Un établissement porte déjà ce nom dans cette province.' });
   }

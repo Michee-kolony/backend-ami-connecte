@@ -29,7 +29,7 @@ async function formulaire(qui, chemin, champs) {
 }
 
 const etablissement = (nom) => ({
-  nom, type: 'Centre de santé', secteur: 'Public', province: 'Kinshasa', zoneSante: 'ZS Fictive',
+  nom, type: 'Centre de santé', secteur: 'Public', province: 'Kinshasa', zonesSante: ['Lemba', 'Limete'],
   adresse: 'Avenue fictive', telephone: '+243 000', responsable: 'Fictif', services: ['CPN', 'Maternité'],
 });
 const chef = (email, prenom = 'Clarisse') => ({
@@ -86,6 +86,8 @@ test('le comité enregistre un établissement et son médecin chef ; le médecin
   const r = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Alpha'), medecinChef: chef('chef.alpha@essai.test') });
   assert.equal(r.status, 201, JSON.stringify(r.corps));
   assert.match(r.corps.etablissement.code, /^ETS-KIN-\d{4}$/);
+  assert.deepEqual(r.corps.etablissement.zonesSante, ['Lemba', 'Limete']);
+  assert.equal(r.corps.etablissement.zoneSante, 'Lemba', 'zone principale = première sélectionnée');
   assert.equal(r.corps.medecinChef.email, 'chef.alpha@essai.test');
   assert.match(r.corps.medecinChef.matricule, /^MED-/);
   assert.ok(r.corps.motDePasseTemporaire, 'mot de passe temporaire renvoyé une fois');
@@ -103,6 +105,17 @@ test('le comité enregistre un établissement et son médecin chef ; le médecin
   const alpha = liste.corps.find((e) => e.nom === 'Centre Alpha');
   assert.equal(alpha.medecinsChefs.length, 1);
   assert.equal(alpha.effectifs.soignants, 1);
+});
+
+test('zones de santé : au moins une, toutes de la province choisie', async () => {
+  const sansZone = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: [], medecinChef: chef('chef.zeta@essai.test') });
+  assert.equal(sansZone.status, 400);
+  assert.match(sansZone.corps.message, /au moins une zone/);
+  const horsProvince = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: ['Lemba', 'Goma'], medecinChef: chef('chef.zeta@essai.test') });
+  assert.equal(horsProvince.status, 400);
+  assert.match(horsProvince.corps.message, /Goma/);
+  const Etablissement = require('../models/Etablissement');
+  assert.equal(await Etablissement.exists({ nom: 'Centre Zêta' }), null);
 });
 
 test('établissement non créé si le médecin chef est invalide (rien n’est gardé)', async () => {
