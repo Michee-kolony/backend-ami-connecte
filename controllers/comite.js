@@ -14,6 +14,7 @@ const Accouchement = require('../models/Accouchement');
 const Enfant = require('../models/Enfant');
 const Urgence = require('../models/Urgence');
 const etab = require('./etablissements');
+const ficheEtab = require('./ficheEtablissement');
 const { motDePasseValide, genererMotDePasse } = require('./soignants');
 const { messageValidation } = require('../config/erreursFr');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
@@ -239,6 +240,13 @@ exports.creerEtablissement = async (req, res) => {
   if (erreurZones) return res.status(400).json({ message: erreurZones });
   if (await etab.nomDejaPris(e.nom, e.province)) {
     return res.status(409).json({ message: 'Un établissement porte déjà ce nom dans cette province.' });
+  }
+  // Fiche AMI (étapes 1 à 9) saisie avec l'établissement : elle démarre en brouillon.
+  try {
+    await ficheEtab.appliquerDepuisFormulaire(e, req.body.fiche, req, { creation: true });
+  } catch (err) {
+    if (!err.status) throw err;
+    return res.status(err.status).json({ message: err.message });
   }
   e.code = await Etablissement.prochainCode(e.province);
   try {

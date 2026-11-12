@@ -1,6 +1,7 @@
 const express = require('express');
 const { authentifierComite } = require('../middleware/comite');
-const { televerserPhoto, televerserPhotosEtablissement } = require('../middleware/upload');
+const { televerserPhoto, televerserPhotosEtablissement, televerserPieceEtablissement } = require('../middleware/upload');
+const fiche = require('../controllers/ficheEtablissement');
 const etablissements = require('../controllers/etablissements');
 const statistiques = require('../controllers/statistiques');
 const synthese = require('../controllers/synthese');
@@ -25,6 +26,12 @@ router.delete('/membres/:id', ctrl.supprimerMembre);
 
 // Établissements sanitaires et leur médecin chef (superadmin de l'établissement).
 router.get('/etablissements', ctrl.listerEtablissements);
+// Fiche AMI (étapes 1 à 10) : saisie complète, pièces jointes et circuit de validation.
+router.get('/etablissements/aires', fiche.aires);
+router.get('/etablissements/:id/fiche', fiche.obtenirComite);
+router.patch('/etablissements/:id/fiche', fiche.modifierComite);
+router.post('/etablissements/:id/fiche/pieces', televerserPieceEtablissement, fiche.ajouterPiece);
+router.post('/etablissements/:id/fiche/circuit/:action', fiche.circuit);
 router.get('/etablissements/:id', etablissements.obtenir);
 router.post('/etablissements', televerserPhotosEtablissement, ctrl.creerEtablissement);
 router.patch('/etablissements/:id', televerserPhotosEtablissement, etablissements.modifier);

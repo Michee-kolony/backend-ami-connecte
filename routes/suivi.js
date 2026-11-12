@@ -3,6 +3,7 @@
 const express = require('express');
 const { authentifier, exigerRole } = require('../middleware/auth');
 const { exigerMedecin } = require('../middleware/clinique');
+const { exigerModule } = require('../middleware/modules');
 const { ROLES_GESTION } = require('../models/Soignant');
 const patientes = require('../controllers/patientes');
 const consultations = require('../controllers/consultations');
@@ -16,7 +17,7 @@ grossesses.patch('/:id', patientes.modifierGrossesse);
 grossesses.put('/:id/datation', patientes.dater);
 grossesses.post('/:id/issue', patientes.issue);
 grossesses.get('/:id/consultations', consultations.lister);
-grossesses.post('/:id/consultations', consultations.creer);
+grossesses.post('/:id/consultations', exigerModule('CPN'), consultations.creer);
 grossesses.get('/:id/echographies', echographies.lister);
 grossesses.post('/:id/echographies', televerserFichiersEchographie, echographies.creer);
 

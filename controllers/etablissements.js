@@ -3,6 +3,7 @@ const Etablissement = require('../models/Etablissement');
 const Soignant = require('../models/Soignant');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
+const ficheEtab = require('./ficheEtablissement');
 
 const DOSSIER_PHOTOS = 'etablissement';
 const MAX_PHOTOS = 6;
@@ -119,6 +120,13 @@ exports.modifier = async (req, res) => {
   }
   const erreurZones = e.erreurZones();
   if (erreurZones) return res.status(400).json({ message: erreurZones });
+  // Fiche AMI modifiée avec l'établissement (comité de pilotage).
+  try {
+    await ficheEtab.appliquerDepuisFormulaire(e, req.body.fiche, req, { creation: false });
+  } catch (err) {
+    if (!err.status) throw err;
+    return res.status(err.status).json({ message: err.message });
+  }
   const fichiers = req.files || [];
   const gardees = e.photos.filter((p) => conservees.includes(p.url));
   const retirees = e.photos.filter((p) => !conservees.includes(p.url));
