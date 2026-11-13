@@ -10,6 +10,7 @@ const ACTIONS = {
   'patiente.suppression': 'Suppression définitive du dossier',
   'patiente.carte': 'Carte patiente générée (PDF)',
   'patiente.recherche': 'Recherche de patientes',
+  'patiente.export': 'Export Excel de la liste des patientes (téléphones complets)',
   'dossier.lecture': 'Ouverture du dossier',
   'suivi.lecture': 'Consultation du suivi (grossesse et rendez-vous)',
   'grossesse.creation': 'Nouvelle grossesse enregistrée',

@@ -19,6 +19,9 @@ router.get('/:id/suivi', patientes.suivi);
 router.use(exigerMedecin);
 
 router.get('/doublons', patientes.doublons);
+// Export Excel (liste avec téléphones complets, journalisé) et photo d'identification pour l'export.
+router.get('/export', patientes.exporter);
+router.get('/:id/photo', patientes.photo);
 router.post('/', televerserPhoto, patientes.creer);
 router.get('/:id', patientes.dossier);
 router.patch('/:id', patientes.modifier);

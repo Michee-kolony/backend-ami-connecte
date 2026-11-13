@@ -14,7 +14,7 @@ const { ROLES_MEDECIN } = require('../models/Soignant');
 const { journaliser, ACTIONS } = require('../config/audit');
 const { PROVINCES_RDC } = require('../config/referentiels');
 const cpn = require('../config/cpn');
-const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
+const { envoyerFichier, supprimerFichier, urlSignee, lireFichier } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
 const { verifierVersion } = require('../config/conflits');
 
@@ -173,11 +173,9 @@ function debutDuJour() {
   return d;
 }
 
-/** Recherche paginée : identifiant, nom, postnom, prénom ou téléphone. */
-exports.rechercher = async (req, res) => {
+/** Filtre de la recherche (établissement, statut, province, texte ou téléphone), partagé avec l'export. */
+function filtreRecherche(req) {
   const q = texte(req.query.q, 100);
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const parPage = Math.min(PAR_PAGE_MAX, Math.max(1, parseInt(req.query.parPage, 10) || 20));
   const filtre = filtrePatientes(req);
   if (req.query.statut && Patiente.STATUTS_PATIENTE.includes(req.query.statut)) filtre.statut = req.query.statut;
   if (req.query.province && PROVINCES_RDC.includes(req.query.province)) filtre['adresse.province'] = req.query.province;
@@ -191,6 +189,14 @@ exports.rechercher = async (req, res) => {
       ? [{ telephoneChiffres: new RegExp(chiffres.slice(-9)) }, { telephone2Chiffres: new RegExp(chiffres.slice(-9)) }]
       : [parIdentite];
   }
+  return filtre;
+}
+
+/** Recherche paginée : identifiant, nom, postnom, prénom ou téléphone. */
+exports.rechercher = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const parPage = Math.min(PAR_PAGE_MAX, Math.max(1, parseInt(req.query.parPage, 10) || 20));
+  const filtre = filtreRecherche(req);
   const [total, patientes] = await Promise.all([
     Patiente.countDocuments(filtre),
     // Dernières patientes enregistrées en tête (une modification du dossier ne change pas sa place).
@@ -201,6 +207,63 @@ exports.rechercher = async (req, res) => {
   // Infirmier·ères : pas d'indication de risque (donnée clinique réservée aux médecins).
   if (!ROLES_MEDECIN.includes(req.soignant.role)) resultats.forEach((r) => r.grossesse && delete r.grossesse.aRisque);
   res.json({ total, page, parPage, resultats });
+};
+
+/** Nombre maximal de dossiers par export Excel. */
+const EXPORT_MAX = 5000;
+
+/**
+ * Export Excel de la liste des patientes (médecins seulement, journalisé) : mêmes filtres que la
+ * recherche, avec les numéros de téléphone complets (déjà visibles dans le dossier du médecin) et
+ * l'indication d'une photo (téléchargée ensuite par /patientes/:id/photo).
+ */
+exports.exporter = async (req, res) => {
+  const filtre = filtreRecherche(req);
+  const total = await Patiente.countDocuments(filtre);
+  const patientes = await Patiente.find(filtre).sort({ createdAt: -1, _id: -1 }).limit(EXPORT_MAX);
+  const ids = patientes.map((p) => p._id);
+  const [grossesses, rdvs] = await Promise.all([
+    Grossesse.find({ patienteId: { $in: ids } }).sort({ numero: -1 }),
+    RendezVous.find({ patienteId: { $in: ids }, statut: { $in: STATUTS_ACTIFS }, date: { $gte: debutDuJour() } }).sort({ date: 1 }),
+  ]);
+  const premiere = (liste) => {
+    const m = new Map();
+    for (const x of liste) if (!m.has(String(x.patienteId))) m.set(String(x.patienteId), x);
+    return m;
+  };
+  const parGrossesse = premiere(grossesses);
+  const parRdv = premiere(rdvs);
+  await journaliser(req, { action: 'patiente.export', details: { lignes: patientes.length, total } });
+  res.json({
+    total,
+    tronque: total > patientes.length,
+    lignes: patientes.map((p) => {
+      const r = resume(p, parGrossesse.get(p.id), parRdv.get(p.id), null);
+      delete r.telephoneMasque;
+      return {
+        ...r,
+        aPhoto: Boolean(p.photoCle),
+        telephone: p.telephone || '',
+        telephonePartage: Boolean(p.telephonePartage),
+        telephone2: p.telephone2 || '',
+        email: p.email || '',
+        avenue: p.adresse?.avenue ?? '',
+        contactUrgence: { nom: p.contactUrgence?.nom ?? '', lien: p.contactUrgence?.lien ?? '', telephone: p.contactUrgence?.telephone ?? '' },
+        consentements: { sms: p.consentements?.sms ?? null, appel: p.consentements?.appel ?? null, whatsapp: p.consentements?.whatsapp ?? null },
+      };
+    }),
+  });
+};
+
+/** Photo d'identification d'une patiente (octets), pour l'export Excel : médecins, même établissement. */
+exports.photo = async (req, res) => {
+  const patiente = await trouverPatiente(req, req.params.id);
+  const octets = await lireFichier(patiente.photoCle);
+  if (!octets) return res.status(404).json({ message: 'Aucune photo pour ce dossier.' });
+  const type = octets[0] === 0x89 && octets[1] === 0x50 ? 'image/png'
+    : octets[0] === 0xff && octets[1] === 0xd8 ? 'image/jpeg'
+      : octets.slice(0, 4).toString() === 'RIFF' ? 'image/webp' : 'application/octet-stream';
+  res.set({ 'Content-Type': type, 'Cache-Control': 'private, no-store' }).send(octets);
 };
 
 /** Doublons possibles : même identité (nom + prénom/date de naissance) ou même téléphone. */

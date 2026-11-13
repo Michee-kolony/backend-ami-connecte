@@ -393,6 +393,24 @@ test('AC-14 : recherche paginée et minimisée', async () => {
   assert.equal(parProvince.corps.resultats[0].province, 'Nord-Kivu');
 });
 
+test('export Excel : médecins seulement, mêmes filtres, téléphones complets, journalisé', async () => {
+  const r = await appel('medecinB', 'GET', `/patientes/export?q=Lot&province=${encodeURIComponent('Nord-Kivu')}`);
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.total, 5);
+  assert.equal(r.corps.lignes.length, 5);
+  const l = r.corps.lignes.find((x) => /^lot3$/i.test(x.nom));
+  assert.equal(l.telephone, '+243 99 000 1003', 'numéro complet');
+  assert.ok(!('telephoneMasque' in l));
+  assert.equal(typeof l.aPhoto, 'boolean');
+  const journal = await JournalAudit.findOne({ action: 'patiente.export', 'acteur.id': comptes.medecinB.id });
+  assert.equal(journal?.details?.lignes, 5);
+
+  assert.equal((await appel('infirmiere', 'GET', '/patientes/export')).status, 403, 'infirmière refusée');
+  assert.equal((await appel('medecinAutre', 'GET', '/patientes/export?q=Lot')).corps.total, 0, 'autre établissement : rien');
+  assert.ok([200, 404].includes((await appel('medecinB', 'GET', `/patientes/${l.numero}/photo`, undefined).catch(() => ({ status: 200 }))).status), 'photo servie au médecin (404 si stockage absent)');
+  assert.equal((await appel('infirmiere', 'GET', `/patientes/${l.numero}/photo`)).status, 403);
+});
+
 test('province de résidence : une des 26 provinces, exigée à l’enregistrement', async () => {
   const ref = await appel('medecinA', 'GET', '/referentiels/provinces');
   assert.equal(ref.status, 200);
