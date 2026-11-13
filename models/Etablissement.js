@@ -1,13 +1,15 @@
 const mongoose = require('mongoose');
 const { zonesDeProvince } = require('../config/zonesSante');
 const { ficheSchema } = require('./ficheEtablissement');
-const { abrege, modulesActifs, completude } = require('../config/ficheEtablissement');
+const { abrege, modulesActifs, completude, profilDe } = require('../config/ficheEtablissement');
 
 const TYPES = [
   'Hôpital général de référence', 'Hôpital militaire', 'Centre de santé de référence',
   'Centre de santé', 'Poste de santé', 'Polyclinique', 'Clinique',
   // Fiche AMI (étape 1 du cahier des charges).
   'Hôpital provincial', 'Hôpital national', 'Centre médical', 'Autre',
+  // Fiche « Identification générale de la structure ».
+  'Laboratoire', 'Maternité',
 ];
 const SECTEURS = ['Public', 'Privé', 'Confessionnel', 'Militaire', 'ONG'];
 const SERVICES = ['CPN', 'Maternité', 'Vaccination', 'Urgences', 'Ambulance', 'Pédiatrie', 'Laboratoire', 'Imagerie', 'Chirurgie'];
@@ -67,6 +69,7 @@ const etablissementSchema = new mongoose.Schema({
         statut: doc.fiche.circuit?.statut ?? 'Brouillon',
         completude: completude(doc),
         modulesActifs: modulesActifs(doc),
+        profil: profilDe(doc),
         niveauSanitaire: doc.fiche.identification?.niveauSanitaire ?? null,
         statutActuel: doc.fiche.identification?.statutActuel ?? null,
       } : null;

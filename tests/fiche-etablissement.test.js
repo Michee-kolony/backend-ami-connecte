@@ -223,3 +223,145 @@ test('établissement antérieur à la fiche : modules non restreints', async () 
   assert.equal(r.status, 200, JSON.stringify(r.corps));
   assert.equal(r.corps.calculs.modulesActifs, null, 'fiche ouverte sur un établissement existant : rien n’est bloqué');
 });
+
+test('fiche générale : identification, contacts, rattachement, effectifs, complétude avec champs manquants', async () => {
+  const autre = await formulaire('saisie', 'POST', '/comite/etablissements', {
+    ...etablissement('HGR Kalemie'), type: 'Hôpital général de référence', aireSante: 'Kalemie-Centre',
+    fiche: { ...fiche(), identification: { ...fiche().identification, codeSnis: 'SNIS-HGR' } }, medecinChef: chef('chef.hgr@essai.test'),
+  });
+  assert.equal(autre.status, 201, JSON.stringify(autre.corps));
+  const idHgr = autre.corps.etablissement.id;
+
+  const r = await appel('saisie', 'PATCH', `/comite/etablissements/${idEtab}/fiche`, {
+    identification: {
+      codeSnisSource: 'DHIS2', niveauSoins: 'Premier recours', maternite: 'Oui', hospitalisation: 'Non', chirurgie: 'Non',
+      anciensNoms: [{ nom: 'Dispensaire Nyemba', debut: '1990-01-01', fin: '1997-12-31' }],
+      acteCreation: { numero: 'AM/123', date: '1998-03-01', autorite: 'Gouverneur' },
+    },
+    localisation: { groupement: 'Nyemba', avenue: 'Lumumba', numero: '12', gps: { precisionM: 5, methode: 'Smartphone', date: '2026-11-01' } },
+    contacts: { telephoneUrgence: '+243 81 234 5678', canalPrivilegie: 'WhatsApp institutionnel' },
+    rattachementSanitaire: { structureReferenceId: idHgr, programmes: [{ programme: 'PEV', debut: '2020-01-01' }] },
+    responsablesFonctionnels: [{ domaine: 'CPN', nom: 'MASIKA', prenom: 'Rose', debut: '2025-01-01' }],
+    effectifs: [{ categorie: 'Sages-femmes', theorique: 4, affecte: 3, present: 2, absents: { conge: 1 } }],
+    operationnel: { fonctionnement24h: 'Oui', moyensReference: ['Moto'], systemeRapportage: ['DHIS2'] },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.rattachement.structureReference.nom, 'HGR Kalemie');
+  assert.equal(r.corps.calculs.effectifs.tauxPresence, 66.7);
+  assert.ok(Array.isArray(r.corps.calculs.champsManquants));
+  assert.ok(!r.corps.calculs.champsManquants.includes('Étape 1 · Niveau de soins'));
+  assert.equal(r.corps.profil, 'centreSante');
+  assert.equal(r.corps.formulaire.cle, 'centreSante');
+  assert.ok(r.corps.calculs.cibles.lignes.some((l) => l.cible === 'AA' && l.cibleAnnuelle === 824), 'accouchements attendus = 4 %');
+
+  const hgr = await appel('saisie', 'GET', `/comite/etablissements/${idHgr}/fiche`);
+  assert.deepEqual(hgr.corps.rattachement.structuresReferentes.map((s) => s.nom), ['Centre de Santé Nyemba']);
+
+  const soi = await appel('saisie', 'PATCH', `/comite/etablissements/${idEtab}/fiche`, { rattachementSanitaire: { structureReferenceId: idEtab } });
+  assert.equal(soi.status, 400, 'une structure ne se réfère pas elle-même');
+});
+
+test('volets spécifiques : centre de santé et hôpital, contrôles de cohérence', async () => {
+  // Centre de santé : le médecin chef complète le volet « centreSante ».
+  const cs = await appel('chef', 'PATCH', `/etablissements/${idEtab}/fiche`, {
+    centreSante: {
+      infrastructure: { batiments: 3, sallesCpn: { installes: 2, fonctionnels: 1 }, salleAccouchement: 'Oui', electricite: ['Solaire'] },
+      consultations: [{ element: 'Consultations curatives', disponible: 'Oui', fonctionnel: 'Oui', horaires: '7h-15h' }],
+      santeMaternelle: { serviceCpn: 'Oui', organisation: { jours: ['Mardi', 'Jeudi'] }, equipements: [{ element: 'Tensiomètre', nombre: 2, fonctionnels: 2 }] },
+      nutrition: { pesee: 'Oui', perimetreBrachial: 'Oui' },
+      ressourcesHumaines: [{ element: 'Sages-femmes', prevus: 3, presents: 2, actifs: 2 }],
+    },
+  });
+  assert.equal(cs.status, 200, JSON.stringify(cs.corps));
+  assert.equal(cs.corps.fiche.centreSante.infrastructure.sallesCpn.fonctionnels, 1);
+  assert.ok(!cs.corps.calculs.champsManquants.includes('Fiche spécifique Centre de santé · 7. Nutrition et santé de l’enfant'));
+
+  // Le volet hôpital ne s'applique pas à un centre de santé.
+  const faux = await appel('chef', 'PATCH', `/etablissements/${idEtab}/fiche`, { hopital: { capacite: { litsInstalles: 10 } } });
+  assert.equal(faux.status, 400);
+  assert.match(faux.corps.message, /centreSante/);
+
+  // Cohérence : fonctionnels > installés, borne max, élément en double.
+  const incoherent = await appel('chef', 'PATCH', `/etablissements/${idEtab}/fiche`, {
+    centreSante: {
+      infrastructure: { sallesCpn: { installes: 1, fonctionnels: 3 } },
+      ressourcesHumaines: [{ element: 'Sages-femmes', presents: 1, actifs: 2 }, { element: 'Sages-femmes' }],
+    },
+  });
+  assert.equal(incoherent.status, 200);
+  const erreurs = incoherent.corps.calculs.controle.erreurs.join('\n');
+  assert.match(erreurs, /Salles CPN : fonctionnels \(3\) > installés \(1\)/);
+  assert.match(erreurs, /Effectif actif \(2\) > Effectif présent \(1\)/);
+  assert.match(erreurs, /« Sages-femmes » saisi deux fois/);
+
+  // Hôpital : volet « hopital ».
+  const Etablissement = require('../models/Etablissement');
+  const h = await Etablissement.findOne({ nom: 'HGR Kalemie' });
+  const r = await appel('saisie', 'PATCH', `/comite/etablissements/${h.id}/fiche`, {
+    hopital: {
+      capacite: { litsInstalles: 120, litsFonctionnels: 100, litsDisponibles: 30, blocsOperatoires: { installes: 2, fonctionnels: 2 } },
+      services: [
+        { element: 'Urgences', existe: 'Oui', fonctionnel: 'Oui', permanence24h: 'Oui' },
+        { element: 'Néonatologie', existe: 'Oui', fonctionnel: 'Non', incubateurs: 2, motifNonFonctionnement: 'Panne électrique' },
+      ],
+      maternite: { existe: 'Oui', cesarienne: 'Oui', tablesAccouchement: { installes: 4, fonctionnels: 3 } },
+      neonatologie: { existe: 'Oui', incubateurs: { installes: 3, fonctionnels: 2 }, soinsKangourou: 'Oui' },
+      vaccination: { service: 'Oui', refrigerateurs: { nombre: 2, fonctionnels: 1 } },
+      ressourcesHumaines: [
+        { element: 'Pédiatres', service: 'Pédiatrie', effectifTotal: 2, effectifActif: 2 },
+        { element: 'Pédiatres', service: 'Néonatologie', effectifTotal: 1, effectifActif: 1 },
+      ],
+    },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.profil, 'hopital');
+  assert.equal(r.corps.fiche.hopital.services.length, 2);
+  assert.ok(!r.corps.calculs.controle.erreurs.some((m) => /Fiche spécifique Hôpital/.test(m)), 'même profession dans deux services : accepté');
+
+  const inconnue = await appel('saisie', 'PATCH', `/comite/etablissements/${h.id}/fiche`, { hopital: { piscine: {} } });
+  assert.equal(inconnue.status, 400);
+  const mauvaisService = await appel('saisie', 'PATCH', `/comite/etablissements/${h.id}/fiche`, { hopital: { services: [{ element: 'Astrologie' }] } });
+  assert.equal(mauvaisService.status, 400);
+});
+
+test('services : historique des changements d’état', async () => {
+  const Etablissement = require('../models/Etablissement');
+  const h = await Etablissement.findOne({ nom: 'HGR Kalemie' });
+  const avant = (await appel('saisie', 'GET', `/comite/etablissements/${h.id}/fiche`)).corps.fiche.historiqueServices.length;
+  assert.ok(avant > 0, 'état initial des services historisé à la création');
+  const r = await appel('saisie', 'PATCH', `/comite/etablissements/${h.id}/fiche`, {
+    services: [service('CPN'), { ...service('Vaccination'), fonctionnel: 'Non', disponibilite: 'Indisponible', motifIndisponibilite: 'Intrants' }],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  const hist = r.corps.fiche.historiqueServices.slice(avant).filter((x) => x.service === 'Vaccination');
+  assert.ok(hist.some((x) => x.champ === 'disponibilite' && x.ancien === null && x.nouveau === 'Indisponible'));
+  assert.ok(!hist.some((x) => x.champ === 'fonctionnel'), 'fonctionnel inchangé (Non → Non) : rien à historiser');
+});
+
+test('circuit : rejet et fermeture avec motif obligatoire, réouverture', async () => {
+  const Etablissement = require('../models/Etablissement');
+  const h = await Etablissement.findOne({ nom: 'HGR Kalemie' });
+  const chemin = (a) => `/comite/etablissements/${h.id}/fiche/circuit/${a}`;
+  assert.equal((await appel('verif', 'POST', chemin('rejeter'), { motif: 'x' })).status, 409, 'pas de rejet d’un brouillon');
+  const s = await appel('saisie', 'POST', chemin('soumettre'));
+  assert.equal(s.status, 200, JSON.stringify(s.corps));
+  assert.equal((await appel('verif', 'POST', chemin('rejeter'))).status, 400, 'motif obligatoire');
+  assert.equal((await appel('saisie', 'POST', chemin('rejeter'), { motif: 'Doublon' })).status, 403, 'l’auteur ne rejette pas');
+  const rej = await appel('verif', 'POST', chemin('rejeter'), { motif: 'Structure en double', dateEffet: '2026-11-15' });
+  assert.equal(rej.corps.fiche.circuit.statut, 'Rejetée');
+  assert.equal(rej.corps.fiche.circuit.historique.at(-1).dateEffet, '2026-11-15');
+  assert.equal((await appel('verif', 'POST', chemin('rouvrir'))).corps.fiche.circuit.statut, 'Brouillon');
+  assert.equal((await appel('verif', 'POST', chemin('fermer'))).status, 400, 'motif de fermeture obligatoire');
+  const f = await appel('verif', 'POST', chemin('fermer'), { motif: 'Fermeture administrative' });
+  assert.equal(f.corps.fiche.circuit.statut, 'Fermée');
+  assert.deepEqual(f.corps.calculs.modulesActifs, []);
+});
+
+test('référentiel : listes et volets du formulaire dynamique', async () => {
+  const r = await appel('chef', 'GET', '/referentiels/fiche-etablissement');
+  assert.equal(r.status, 200, JSON.stringify(r.corps));
+  assert.equal(r.corps.profilDuType['Centre de santé'], 'centreSante');
+  assert.equal(r.corps.volets.hopital.sections.length, 7);
+  assert.equal(r.corps.volets.centreSante.sections.length, 9);
+  assert.ok(r.corps.listes.NIVEAUX_SOINS.includes('Premier recours'));
+});

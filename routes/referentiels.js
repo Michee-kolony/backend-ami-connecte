@@ -6,6 +6,8 @@ const cpn = require('../config/cpn');
 const accouchement = require('../config/accouchement');
 const partogramme = require('../config/partogramme');
 const vaccination = require('../config/vaccination');
+const ficheEtablissement = require('../config/ficheEtablissement');
+const ficheSpecifique = require('../config/ficheSpecifique');
 
 const router = express.Router();
 
@@ -30,6 +32,19 @@ router.get('/cpn', (req, res) => {
 router.get('/accouchement', (req, res) => {
   const { BCF, PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM, VITESSE_CM_H, DECALAGE_ACTION_H, STAGNATION_H } = partogramme;
   res.json({ ...accouchement, partogramme: { BCF, PHASE_ACTIVE_CM, DILATATION_COMPLETE_CM, VITESSE_CM_H, DECALAGE_ACTION_H, STAGNATION_H } });
+});
+
+/**
+ * Fiche AMI d'un établissement : listes de choix de la fiche générale et description des volets
+ * spécifiques (hôpital, centre de santé) pour construire le formulaire selon le type de structure.
+ */
+router.get('/fiche-etablissement', (req, res) => {
+  const listes = Object.fromEntries(Object.entries(ficheEtablissement).filter(([, v]) => Array.isArray(v)));
+  res.json({
+    listes,
+    profilDuType: ficheSpecifique.PROFIL_DU_TYPE,
+    volets: { hopital: ficheSpecifique.formulaire('hopital'), centreSante: ficheSpecifique.formulaire('centreSante') },
+  });
 });
 
 /** Calendrier vaccinal (PEV RDC) et suivi préscolaire. */

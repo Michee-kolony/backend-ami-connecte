@@ -8,9 +8,11 @@ const EntiteGeographique = require('../models/EntiteGeographique');
 const CoefficientDemographique = require('../models/CoefficientDemographique');
 const Accouchement = require('../models/Accouchement');
 const Consultation = require('../models/Consultation');
+const Reco = require('../models/Reco');
 const { envoyerFichier, supprimerFichier, urlSignee } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
 const R = require('../config/ficheEtablissement');
+const V = require('../config/ficheSpecifique');
 
 const ROLE_CHEF = 'Médecin chef de service';
 const DOSSIER_PIECES = 'etablissement-pieces';
@@ -64,9 +66,24 @@ function appliquerFiche(e, brut, auteur, role) {
     if (!droit) throw erreur(403, `La section « ${section} » est saisie par le comité de pilotage.`);
     const valeur = d[section];
 
-    if (['equipements', 'agents', 'effectifsAttendus', 'services'].includes(section)) {
+    if (R.SECTIONS_LISTE.includes(section)) {
       if (!Array.isArray(valeur)) throw erreur(400, `${section} : liste attendue.`);
+      if (section === 'services') historiserServices(f, valeur, auteur);
       f[section] = valeur;
+    } else if (V.PROFILS[section]) {
+      // Volet spécifique : seulement celui qui correspond au type de la structure.
+      const profil = V.profilDe(e);
+      if (profil !== section) {
+        throw erreur(400, profil
+          ? `Le volet « ${section} » ne s’applique pas à un(e) ${e.type} : utilisez le volet « ${profil} ».`
+          : `Aucun volet spécifique pour le type « ${e.type} ».`);
+      }
+      if (!estObjet(valeur)) throw erreur(400, `${section} : objet attendu.`);
+      const connues = V.PROFILS[section].sections.map((s) => s.cle);
+      const inconnues = Object.keys(valeur).filter((k) => !connues.includes(k));
+      if (inconnues.length) throw erreur(400, `Rubriques inconnues du volet « ${section} » : ${inconnues.join(', ')}.`);
+      if (!f[section]) f[section] = {};
+      for (const k of Object.keys(valeur)) f[section][k] = valeur[k];
     } else if (section === 'populations') {
       if (!Array.isArray(valeur)) throw erreur(400, 'populations : liste attendue.');
       // Une année = un enregistrement ; les années déjà saisies sont conservées (jamais supprimées).
@@ -102,6 +119,34 @@ function historiserResponsable(f, cle, nouveau, auteur) {
   if (!estObjet(nouveau) || memePersonne(ancien, nouveau)) return;
   if (!R.nomPersonne(ancien)) return; // première saisie : rien à historiser
   f.historiqueResponsables.push({ role: R.RESPONSABLES[cle], ancien, nouveau, le: new Date(), par: auteur });
+}
+
+/** Changements d'existence, de disponibilité ou de fonctionnalité d'un service : historisés. */
+function historiserServices(f, nouveaux, auteur) {
+  const avant = new Map((f.services ?? []).map((s) => [s.service, s]));
+  for (const n of nouveaux) {
+    if (!n?.service) continue;
+    const a = avant.get(n.service);
+    for (const champ of ['existence', 'disponible', 'disponibilite', 'fonctionnel']) {
+      const ancien = a?.[champ] ?? null;
+      const nouveau = n[champ] ?? null;
+      if (ancien !== nouveau && (a || nouveau != null)) {
+        f.historiqueServices.push({ service: n.service, champ, ancien, nouveau, le: new Date(), par: auteur });
+      }
+    }
+  }
+}
+
+/** Structure de référence et structures desservies : établissements existants, autres que celui-ci. */
+async function erreurRattachement(e) {
+  const r = e.fiche?.rattachementSanitaire;
+  if (!r) return null;
+  const ids = [r.structureReferenceId, ...(r.structuresDesservies ?? [])].filter(Boolean).map(String);
+  if (!ids.length) return null;
+  if (ids.includes(e.id)) return 'Rattachement : une structure ne peut pas se référer ou se desservir elle-même.';
+  if (ids.some((id) => !mongoose.isValidObjectId(id))) return 'Rattachement : structure inconnue (choisir dans le référentiel).';
+  const trouvees = await Etablissement.countDocuments({ _id: { $in: [...new Set(ids)] } });
+  return trouvees === new Set(ids).size ? null : 'Rattachement : structure inconnue (choisir dans le référentiel).';
 }
 
 /** Champs de l'établissement déduits de la fiche (utilisés par le reste de la plateforme). */
@@ -176,28 +221,67 @@ async function activitesRealisees(e) {
   return { accouchements, cpn };
 }
 
+/** RECO enregistrés sur la plateforme pour l'aire de santé de l'établissement (comptés à part des salariés). */
+async function recosPlateforme(e) {
+  const filtre = { $or: [{ etablissementId: e.id }, ...(e.aireSante ? [{ aireSante: e.aireSante }] : [])] };
+  const [total, actifs] = await Promise.all([
+    Reco.countDocuments(filtre),
+    Reco.countDocuments({ ...filtre, statut: 'Actif' }),
+  ]);
+  return { total, actifs };
+}
+
+/** Rattachement : structure de référence, structures desservies et structures qui réfèrent vers celle-ci. */
+async function structuresLiees(e) {
+  const r = e.fiche?.rattachementSanitaire ?? {};
+  const ids = [r.structureReferenceId, ...(r.structuresDesservies ?? [])].filter((id) => id && mongoose.isValidObjectId(id));
+  const [liees, referentes] = await Promise.all([
+    ids.length ? Etablissement.find({ _id: { $in: ids } }).select('nom codeAmi type zoneSante') : [],
+    Etablissement.find({ 'fiche.rattachementSanitaire.structureReferenceId': e.id }).select('nom codeAmi type zoneSante'),
+  ]);
+  const resume = (x) => ({ id: x.id, nom: x.nom, codeAmi: x.codeAmi ?? null, type: x.type, zoneSante: x.zoneSante });
+  const parId = new Map(liees.map((x) => [x.id, resume(x)]));
+  return {
+    structureReference: r.structureReferenceId ? parId.get(String(r.structureReferenceId)) ?? null : null,
+    structuresDesservies: (r.structuresDesservies ?? []).map((id) => parId.get(String(id))).filter(Boolean),
+    structuresReferentes: referentes.map(resume),
+  };
+}
+
 /** Fiche complète avec ses calculs (étapes 4, 5, 8, 9 et 10). */
 async function ficheComplete(e, { role }) {
   const fiche = e.fiche ? e.fiche.toObject() : null;
-  const [coefficients, realisees] = await Promise.all([coefficientsValides(), activitesRealisees(e)]);
+  const [coefficients, realisees, recos, liees] = await Promise.all([
+    coefficientsValides(), activitesRealisees(e), recosPlateforme(e), structuresLiees(e),
+  ]);
   const cibles = R.calculsCibles(e, coefficients);
   if (fiche) {
     // Pièces jointes : stockage privé, liens temporaires.
-    const signer = async (p) => (p?.cle ? { nom: p.nom, url: await urlSignee(p.cle).catch(() => null) } : null);
+    const signer = async (p) => (p?.cle ? { ...p, cle: undefined, url: await urlSignee(p.cle).catch(() => null) } : null);
     if (fiche.organisation?.autorisation?.piece) fiche.organisation.autorisation.piece = await signer(fiche.organisation.autorisation.piece);
+    if (fiche.organisation?.agrement?.piece) fiche.organisation.agrement.piece = await signer(fiche.organisation.agrement.piece);
+    if (fiche.identification?.acteCreation?.piece) fiche.identification.acteCreation.piece = await signer(fiche.identification.acteCreation.piece);
+    for (const q of fiche.equipements ?? []) if (q.preuve) q.preuve = await signer(q.preuve);
     fiche.circuit.pieces = await Promise.all((fiche.circuit.pieces ?? []).map(signer));
   }
+  const profil = V.profilDe(e);
   return {
     etablissement: e.toJSON(),
     fiche,
     role,
     champsChef: R.CHAMPS_CHEF,
-    rattachement: R.rattachement(e),
+    rattachement: { ...R.rattachement(e), ...liees },
+    /** Volet spécifique à afficher (hôpital / centre de santé) et sa description pour le formulaire dynamique. */
+    profil,
+    formulaire: V.formulaire(profil),
     calculs: {
       completude: R.completude(e),
+      champsManquants: R.champsManquants(e),
       controle: R.controler(e),
       equipements: R.calculsEquipements(fiche?.equipements),
       rh: R.calculsRh(fiche?.agents, fiche?.effectifsAttendus),
+      effectifs: R.calculsEffectifs(fiche?.effectifs),
+      recos: { declares: fiche?.recos ?? null, plateforme: recos },
       cibles,
       capacites: R.calculsCapacites(e, cibles, realisees),
       modulesPrevus: R.modulesPrevus(e),
@@ -260,7 +344,7 @@ exports.modifierComite = repondre(async (req, res) => {
   initialiserFiche(e, auteur);
   appliquerFiche(e, req.body.fiche ?? req.body, auteur, 'comite');
   marquerAuteur(e, auteur);
-  const aire = await erreurAire(e);
+  const aire = await erreurAire(e) ?? await erreurRattachement(e);
   if (aire) throw erreur(400, aire);
   await enregistrer(e);
   res.json(await ficheComplete(e, { role: 'comite' }));
@@ -297,7 +381,7 @@ async function appliquerDepuisFormulaire(e, brut, req, { creation }) {
   initialiserFiche(e, auteur, { creation });
   appliquerFiche(e, d, auteur, 'comite');
   marquerAuteur(e, auteur);
-  const aire = await erreurAire(e);
+  const aire = await erreurAire(e) ?? await erreurRattachement(e);
   if (aire) throw erreur(400, aire);
   e.fiche.circuit.completude = R.completude(e);
 }
@@ -310,23 +394,41 @@ exports.aires = repondre(async (req, res) => {
 
 // --- Pièces jointes -------------------------------------------------------------------------------
 
-/** Pièce d'autorisation de fonctionnement (étape 3) ou pièce justificative de vérification (étape 10). */
+/**
+ * Pièces jointes, selon `type` : autorisation de fonctionnement et agrément (étape 3), acte de
+ * création (étape 1), preuve de recensement d'un équipement (`index` de la ligne) ou pièce
+ * justificative de vérification (étape 10, avec type, numéro, date, émetteur, validité).
+ */
+const TYPES_PIECE_FICHE = ['autorisation', 'agrement', 'acteCreation', 'equipement', 'verification'];
+
 exports.ajouterPiece = repondre(async (req, res) => {
   const e = await trouver(req.params.id);
   if (!req.file) throw erreur(400, 'Aucun fichier reçu.');
-  const type = req.body.type === 'verification' ? 'verification' : 'autorisation';
+  const type = TYPES_PIECE_FICHE.includes(req.body.type) ? req.body.type : 'autorisation';
   const auteur = acteur(req);
   initialiserFiche(e, auteur);
+  const f = e.fiche;
+  const index = Number(req.body.index);
+  if (type === 'verification' && f.circuit.pieces.length >= 10) throw erreur(400, '10 pièces justificatives au maximum.');
+  if (type === 'equipement' && !(Number.isInteger(index) && f.equipements[index])) throw erreur(400, 'Équipement introuvable (index).');
   const envoye = await envoyerFichier(req.file, DOSSIER_PIECES);
   const piece = { url: envoye.url, cle: envoye.cle, nom: req.file.originalname };
   let ancienne = null;
-  if (type === 'autorisation') {
-    ancienne = e.fiche.organisation.autorisation?.piece?.cle ?? null;
-    e.fiche.organisation.autorisation.piece = piece;
+  const remplacer = (objet, cle = 'piece') => {
+    ancienne = objet[cle]?.cle ?? null;
+    objet[cle] = piece;
     marquerAuteur(e, auteur);
-  } else {
-    if (e.fiche.circuit.pieces.length >= 10) throw erreur(400, '10 pièces justificatives au maximum.');
-    e.fiche.circuit.pieces.push(piece);
+  };
+  if (type === 'autorisation') remplacer(f.organisation.autorisation);
+  else if (type === 'agrement') remplacer(f.organisation.agrement);
+  else if (type === 'acteCreation') remplacer(f.identification.acteCreation);
+  else if (type === 'equipement') remplacer(f.equipements[index], 'preuve');
+  else {
+    const d = nettoyer(req.body);
+    f.circuit.pieces.push({
+      ...piece, type: d.typePiece ?? null, numero: d.numero ?? '', date: d.date ?? null, emetteur: d.emetteur ?? '',
+      validite: d.validite ?? null, accesRestreint: d.accesRestreint !== 'false' && d.accesRestreint !== false,
+    });
   }
   try {
     await e.save();
@@ -340,10 +442,18 @@ exports.ajouterPiece = repondre(async (req, res) => {
 
 // --- Étape 10 : circuit de validation -------------------------------------------------------------
 
-function changerStatut(e, vers, auteur, action, motif = '') {
+function changerStatut(e, vers, auteur, action, motif = '', dateEffet = null) {
   const c = e.fiche.circuit;
-  c.historique.push({ de: c.statut, vers, action, motif, par: auteur, le: new Date() });
+  c.historique.push({ de: c.statut, vers, action, motif, par: auteur, le: new Date(), dateEffet: dateEffet || new Date().toISOString().slice(0, 10) });
   c.statut = vers;
+}
+
+/** Date d'effet facultative d'une décision (AAAA-MM-JJ). */
+function dateEffet(d) {
+  const v = String(d?.dateEffet ?? '').trim();
+  if (!v) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) throw erreur(400, 'Date d’effet invalide (AAAA-MM-JJ attendu).');
+  return v;
 }
 
 /** Doublons : { bloquants } (code SNIS déjà attribué) et { possibles } (mêmes coordonnées GPS). */
@@ -379,6 +489,8 @@ const ACTIONS = {
     const { erreurs, avertissements } = R.controler(e);
     const aire = await erreurAire(e);
     if (aire) erreurs.push(`Étape 2 · ${aire}`);
+    const rattachement = await erreurRattachement(e);
+    if (rattachement) erreurs.push(rattachement);
     const dbl = await doublons(e);
     erreurs.push(...dbl.bloquants);
     // Un doublon seulement possible n'est pas bloquant : il est signalé au vérificateur.
@@ -420,33 +532,44 @@ const ACTIONS = {
       par: auteur, nom: texteRequis(d.nom, 'Nom du valideur'), fonction: String(d.fonction ?? '').trim(),
       date: texteRequis(d.date, 'Date de validation'), statutFinal: String(d.statutFinal ?? 'Validée').trim() || 'Validée',
     };
-    changerStatut(e, 'Validée', auteur, 'Validation', String(d.observations ?? '').trim());
+    changerStatut(e, 'Validée', auteur, 'Validation', String(d.observations ?? '').trim(), dateEffet(d));
   },
   /** 6-7. Activation : modules ouverts selon l'étape 6, QR code généré. */
-  async activer(e, auteur) {
+  async activer(e, auteur, d) {
     exigerStatut(e, 'Validée');
     e.fiche.circuit.qrCode = await QRCode.toDataURL(
       `AMI Santé Connect\nCode AMI : ${e.codeAmi}\n${e.nom}\n${e.province} · ZS ${e.zoneSante}${e.aireSante ? ` · AS ${e.aireSante}` : ''}`,
       { errorCorrectionLevel: 'M', margin: 1, width: 320 },
     );
     e.fiche.circuit.activeLe = new Date();
-    changerStatut(e, 'Active', auteur, `Activation (modules : ${R.modulesPrevus(e).join(', ') || 'aucun'})`);
+    changerStatut(e, 'Active', auteur, `Activation (modules : ${R.modulesPrevus(e).join(', ') || 'aucun'})`, '', dateEffet(d));
   },
   async suspendre(e, auteur, d) {
     exigerStatut(e, 'Active');
-    changerStatut(e, 'Suspendue', auteur, 'Suspension', texteRequis(d.motif, 'Motif de la suspension'));
+    changerStatut(e, 'Suspendue', auteur, 'Suspension', texteRequis(d.motif, 'Motif de la suspension'), dateEffet(d));
   },
-  async reactiver(e, auteur) {
+  async reactiver(e, auteur, d) {
     exigerStatut(e, 'Suspendue');
-    changerStatut(e, 'Active', auteur, 'Réactivation');
+    changerStatut(e, 'Active', auteur, 'Réactivation', '', dateEffet(d));
+  },
+  /** Rejet du dossier (vérification ou validation) : motif obligatoire. */
+  async rejeter(e, auteur, d) {
+    exigerStatut(e, 'En attente de vérification', 'En attente de validation');
+    if (e.fiche.circuit.auteurs.includes(auteur.id)) throw erreur(403, 'Le rejet est décidé par un utilisateur différent de l’auteur de la saisie.');
+    changerStatut(e, 'Rejetée', auteur, 'Rejet', texteRequis(d.motif, 'Motif du rejet'), dateEffet(d));
+  },
+  /** Fermeture de la structure : motif obligatoire, modules fermés. */
+  async fermer(e, auteur, d) {
+    if (['Fermée', 'Archivée'].includes(e.fiche.circuit.statut)) throw erreur(409, `La fiche est déjà « ${e.fiche.circuit.statut} ».`);
+    changerStatut(e, 'Fermée', auteur, 'Fermeture', texteRequis(d.motif, 'Motif de la fermeture'), dateEffet(d));
   },
   async archiver(e, auteur, d) {
     if (e.fiche.circuit.statut === 'Archivée') throw erreur(409, 'La fiche est déjà archivée.');
-    changerStatut(e, 'Archivée', auteur, 'Archivage', texteRequis(d.motif, 'Motif de l’archivage'));
+    changerStatut(e, 'Archivée', auteur, 'Archivage', texteRequis(d.motif, 'Motif de l’archivage'), dateEffet(d));
   },
-  /** Fiche archivée par erreur : retour en brouillon (nouveau circuit complet). */
+  /** Fiche archivée, rejetée ou fermée : retour en brouillon (nouveau circuit complet). */
   async rouvrir(e, auteur) {
-    exigerStatut(e, 'Archivée');
+    exigerStatut(e, 'Archivée', 'Rejetée', 'Fermée');
     changerStatut(e, 'Brouillon', auteur, 'Réouverture');
   },
 };
