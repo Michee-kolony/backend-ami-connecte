@@ -25,6 +25,7 @@ const cpn = require('../config/cpn');
 const partogramme = require('../config/partogramme');
 const { motDePasseValide } = require('./patientes');
 const carte = require('./carte');
+const domaine = require('../config/domaineAdmin');
 const { erreur, texte } = require('./saisie');
 
 const { STATUTS_ACTIFS } = RendezVous;
@@ -34,6 +35,21 @@ const RAPPEL_RDV_MANQUE_JOURS = 30;
 const debutDuJour = () => new Date(`${jourKinshasa()}T00:00:00+01:00`);
 /** Soignant figé dans un acte : nom et fonction seulement (ni identifiant ni matricule). */
 const soignant = (a) => (a ? { nom: a.nom, role: a.role } : null);
+
+/**
+ * Guides d'utilisation publiés sur le site web (français / lingala) : adresses complètes, pour que
+ * l'application mobile les ouvre dans le navigateur. Public : utile aussi avant la connexion.
+ */
+exports.guides = async (req, res) => {
+  const site = await domaine.domaineAdmin();
+  res.json({
+    site,
+    guides: [
+      { cle: 'patiente', titre: 'Guide de l’application (patiente)', url: `${site}/guide-application-patiente` },
+      { cle: 'medecin', titre: 'Guide de l’espace professionnel (médecin)', url: `${site}/guide-espace-medecin` },
+    ],
+  });
+};
 
 exports.connexion = async (req, res) => {
   // « email » : champ envoyé par les versions de l'application déjà installées.

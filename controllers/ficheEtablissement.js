@@ -69,6 +69,7 @@ function appliquerFiche(e, brut, auteur, role) {
     if (R.SECTIONS_LISTE.includes(section)) {
       if (!Array.isArray(valeur)) throw erreur(400, `${section} : liste attendue.`);
       if (section === 'services') historiserServices(f, valeur, auteur);
+      if (section === 'equipements') conserverPreuves(f.equipements, valeur);
       f[section] = valeur;
     } else if (V.PROFILS[section]) {
       // Volet spécifique : seulement celui qui correspond au type de la structure.
@@ -103,6 +104,9 @@ function appliquerFiche(e, brut, auteur, role) {
       if (refuses.length) throw erreur(403, `Champs réservés au comité de pilotage : ${refuses.join(', ')}.`);
       for (const k of champs) {
         if (section === 'organisation' && R.RESPONSABLES[k]) historiserResponsable(f, k, valeur[k], auteur);
+        // Pièce jointe (acte, autorisation, agrément) : déposée par sa propre route, conservée ici.
+        const ancienne = f[section][k]?.piece;
+        if (ancienne?.cle && estObjet(valeur[k]) && !valeur[k].piece?.cle) valeur[k].piece = ancienne.toObject?.() ?? ancienne;
         f[section][k] = valeur[k];
       }
     }
@@ -111,6 +115,13 @@ function appliquerFiche(e, brut, auteur, role) {
   if (sections.length) f.modifications.push({ par: auteur, le: new Date(), sections });
   synchroniser(e);
   return sections;
+}
+
+/** Preuves de recensement des équipements (stockage privé) : gardées quand la liste est renvoyée sans elles. */
+function conserverPreuves(anciens = [], nouveaux) {
+  const cle = (q) => `${q?.categorie ?? ''}|${q?.nom ?? ''}`;
+  const preuves = new Map(anciens.filter((q) => q.preuve?.cle).map((q) => [cle(q), q.preuve.toObject?.() ?? q.preuve]));
+  for (const q of nouveaux) if (estObjet(q) && !q.preuve?.cle && preuves.has(cle(q))) q.preuve = preuves.get(cle(q));
 }
 
 /** Changement de responsable : l'ancien est gardé dans l'historique, jamais écrasé. */
@@ -152,6 +163,8 @@ async function erreurRattachement(e) {
 /** Champs de l'établissement déduits de la fiche (utilisés par le reste de la plateforme). */
 function synchroniser(e) {
   const f = e.fiche;
+  // Valeurs déduites d'autres réponses (catégorie, fonction du responsable, totaux…) : jamais ressaisies.
+  R.deduire(e);
   const org = f.organisation ?? {};
   if (org.statutJuridique) e.secteur = R.SECTEUR_DU_STATUT[org.statutJuridique];
   const nom = R.nomPersonne(org.responsable);
@@ -162,7 +175,6 @@ function synchroniser(e) {
     const services = R.servicesPlateforme(f.services);
     if (services.length) e.services = services;
   }
-  if (!f.identification.categorie && e.type) f.identification.categorie = R.CATEGORIE_DU_TYPE[e.type] ?? null;
 }
 
 /**
@@ -281,6 +293,7 @@ async function ficheComplete(e, { role }) {
       equipements: R.calculsEquipements(fiche?.equipements),
       rh: R.calculsRh(fiche?.agents, fiche?.effectifsAttendus),
       effectifs: R.calculsEffectifs(fiche?.effectifs),
+      personnel: R.calculsPersonnel(fiche?.personnel, e.type),
       recos: { declares: fiche?.recos ?? null, plateforme: recos },
       cibles,
       capacites: R.calculsCapacites(e, cibles, realisees),
@@ -462,11 +475,11 @@ async function doublons(e) {
   const pb = [];
   const code = e.fiche.identification?.codeSnis;
   if (code && await Etablissement.exists({ _id: { $ne: e._id }, 'fiche.identification.codeSnis': code })) {
-    bloquants.push(`Étape 1 · Le code SNIS / DHIS2 ${code} est déjà attribué à un autre établissement.`);
+    bloquants.push(`Identification · Le code SNIS / DHIS2 ${code} est déjà attribué à un autre établissement.`);
   }
   if (e.latitude != null && e.longitude != null
     && await Etablissement.exists({ _id: { $ne: e._id }, latitude: e.latitude, longitude: e.longitude })) {
-    pb.push('Étape 1 · Un autre établissement a exactement les mêmes coordonnées GPS (doublon possible).');
+    pb.push('Localisation · Un autre établissement a exactement les mêmes coordonnées GPS (doublon possible).');
   }
   return { bloquants, possibles: pb };
 }
@@ -488,7 +501,7 @@ const ACTIONS = {
     exigerStatut(e, 'Brouillon', 'À corriger');
     const { erreurs, avertissements } = R.controler(e);
     const aire = await erreurAire(e);
-    if (aire) erreurs.push(`Étape 2 · ${aire}`);
+    if (aire) erreurs.push(`Localisation · ${aire}`);
     const rattachement = await erreurRattachement(e);
     if (rattachement) erreurs.push(rattachement);
     const dbl = await doublons(e);

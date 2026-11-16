@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const { dateJour } = require('./commun');
 const R = require('../config/ficheEtablissement');
 const V = require('../config/ficheSpecifique');
+const C = require('../config/catalogueStructure');
 
 const sansId = { _id: false };
 const texte = () => ({ type: String, default: '', trim: true });
@@ -280,6 +281,12 @@ const effectifCategorieSchema = new mongoose.Schema({
   verificateur: texte(),
 }, sansId);
 
+/** Personnel par fonction (fiche « Identification générale », §10) : un nombre par fonction du catalogue. */
+const personnelSchema = new mongoose.Schema({
+  fonction: { type: String, enum: C.FONCTIONS_PERSONNEL, required: [true, 'Fonction du personnel obligatoire.'] },
+  nombre: entier(),
+}, sansId);
+
 /** Relais communautaires (RECO) liés à l'aire de santé : comptés à part des salariés. */
 const recosSchema = new mongoose.Schema({
   nombre: entier(), actifs: entier(), formes: entier(), sitesCommunautaires: entier(), dateReference: dateJour(), source: texte(),
@@ -336,8 +343,15 @@ const populationSchema = new mongoose.Schema({
   rurale: entier(),
   hommes: entier(),
   femmes: entier(),
+  /**
+   * Groupes de population (config/catalogueStructure.js, GROUPES_POPULATION) : moins1 = 0-11 mois,
+   * moins5 = 0-59 mois, de15a49 = femmes en âge de procréer ; plus50 : ancienne tranche, conservée.
+   */
   tranches: {
-    type: new mongoose.Schema({ moins1: entier(), moins5: entier(), de5a14: entier(), de15a49: entier(), plus50: entier() }, sansId),
+    type: new mongoose.Schema({
+      ...Object.fromEntries(C.GROUPES_POPULATION.map((g) => [g.cle, entier()])),
+      plus50: entier(),
+    }, sansId),
     default: () => ({}),
   },
   source: choix(R.SOURCES_POPULATION),
@@ -428,6 +442,7 @@ const ficheSchema = new mongoose.Schema({
   effectifsAttendus: { type: [effectifAttenduSchema], default: [] },
   effectifs: { type: [effectifCategorieSchema], default: [] },
   recos: { type: recosSchema, default: () => ({}) },
+  personnel: { type: [personnelSchema], default: [] },
   services: { type: [serviceSchema], default: [] },
   historiqueServices: { type: [changementServiceSchema], default: [] },
   populations: { type: [populationSchema], default: [] },

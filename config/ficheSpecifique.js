@@ -379,6 +379,7 @@ const PROFILS = {
 
 /** Type de structure → volet spécifique (les autres types n'ont que la fiche générale). */
 const PROFIL_DU_TYPE = {
+  Hôpital: 'hopital',
   'Hôpital général de référence': 'hopital', 'Hôpital provincial': 'hopital', 'Hôpital national': 'hopital',
   'Hôpital militaire': 'hopital', Polyclinique: 'hopital', Clinique: 'hopital',
   'Centre de santé de référence': 'centreSante', 'Centre de santé': 'centreSante', 'Poste de santé': 'centreSante',

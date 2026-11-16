@@ -4,6 +4,9 @@ const { ficheSchema } = require('./ficheEtablissement');
 const { abrege, modulesActifs, completude, profilDe } = require('../config/ficheEtablissement');
 
 const TYPES = [
+  // Fiche « Identification générale » : le type est la nature de la structure, la catégorie
+  // (HGR, hôpital provincial, spécialisé…) est portée par la fiche (config/catalogueStructure.js).
+  'Hôpital',
   'Hôpital général de référence', 'Hôpital militaire', 'Centre de santé de référence',
   'Centre de santé', 'Poste de santé', 'Polyclinique', 'Clinique',
   // Fiche AMI (étape 1 du cahier des charges).
@@ -112,20 +115,22 @@ function abreviation(province) {
   return mots.length > 1 ? (mots[0][0] + mots[1].slice(0, 2)) : mots[0].slice(0, 3);
 }
 
+/** Plus grand numéro déjà attribué après ce préfixe (comparaison numérique : 10000 > 9999). */
+async function dernierNumero(modele, champ, prefixe) {
+  const codes = await modele.find({ [champ]: new RegExp(`^${prefixe}`) }).select(champ).lean();
+  return codes.reduce((max, d) => Math.max(max, parseInt(d[champ].slice(prefixe.length), 10) || 0), 0);
+}
+
 /** Code ETS-<province>-<numéro>, ex. ETS-KIN-0003. */
 etablissementSchema.statics.prochainCode = async function (province) {
   const prefixe = `ETS-${abreviation(province)}-`;
-  const dernier = await this.findOne({ code: new RegExp(`^${prefixe}`) }).sort({ code: -1 });
-  const n = dernier ? parseInt(dernier.code.slice(prefixe.length), 10) || 0 : 0;
-  return prefixe + String(n + 1).padStart(4, '0');
+  return prefixe + String(await dernierNumero(this, 'code', prefixe) + 1).padStart(4, '0');
 };
 
 /** Code AMI-<province>-<zone>-<numéro>, ex. AMI-TAN-KAL-00124 (numéro propre au couple province/zone). */
 etablissementSchema.statics.prochainCodeAmi = async function (province, zone) {
   const prefixe = `AMI-${abreviation(province)}-${abrege(zone)}-`;
-  const dernier = await this.findOne({ codeAmi: new RegExp(`^${prefixe}`) }).sort({ codeAmi: -1 });
-  const n = dernier ? parseInt(dernier.codeAmi.slice(prefixe.length), 10) || 0 : 0;
-  return prefixe + String(n + 1).padStart(5, '0');
+  return prefixe + String(await dernierNumero(this, 'codeAmi', prefixe) + 1).padStart(5, '0');
 };
 
 /** Établissements actifs parmi ces identifiants, dans l'ordre donné (le premier est le principal). */

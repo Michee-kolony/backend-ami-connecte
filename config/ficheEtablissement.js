@@ -1,18 +1,19 @@
-// Fiche AMI d'un établissement sanitaire : les 10 étapes du cahier des charges (identification,
-// localisation, organisation, infrastructures, ressources humaines, services, population, cibles,
-// capacités, validation). Référentiels, répartition des champs entre le comité de pilotage
-// (obligatoires) et le médecin chef (facultatifs), contrôle automatique et calculs.
+// Fiche AMI d'un établissement sanitaire, alignée sur la fiche « Identification générale de la
+// structure » (identification, localisation, population cible, contacts, responsables, services,
+// infrastructures, ressources humaines, équipements, informations opérationnelles, validation).
+// Référentiels, répartition des champs entre le comité de pilotage (obligatoires) et le médecin
+// chef (facultatifs), valeurs déduites, contrôle automatique et calculs.
 
 const { COEFFICIENTS_INITIAUX } = require('./epidemiologie');
 const V = require('./ficheSpecifique');
+const C = require('./catalogueStructure');
 
 // --- Référentiels ----------------------------------------------------------------------------
 
 const NIVEAUX_SANITAIRES = ['Central', 'Provincial', 'Zone', 'Aire', 'Prestation'];
-const CATEGORIES = ['HGR', 'HP', 'HN', 'HM', 'CSR', 'CS', 'PS', 'Polyclinique', 'Clinique', 'CM', 'Laboratoire', 'Maternité', 'Autre'];
-const STATUTS_ACTUELS = [
-  'Fonctionnelle', 'Fonctionnelle limitée', 'Temporairement fermée', 'Définitivement fermée', 'En construction', 'En réhabilitation',
-];
+const CATEGORIES = ['HGR', 'HP', 'HS', 'HN', 'HM', 'CSR', 'CS', 'PS', 'Polyclinique', 'Clinique', 'CM', 'Laboratoire', 'Maternité', 'Autre'];
+/** Statut de fonctionnement (fiche « Identification générale ») ; les anciens libellés restent lisibles. */
+const STATUTS_ACTUELS = [...C.STATUTS_FONCTIONNEMENT, ...Object.keys(C.STATUTS_ANCIENS)];
 const STATUTS_JURIDIQUES = ['Public', 'Privé lucratif', 'Privé non lucratif', 'Confessionnel', 'Militaire', 'Associatif', 'Autre'];
 /** Régime de gestion / tutelle (fiche « Identification générale » : État, Établissement public, Privé, Confessionnel, Militaire, ONG). */
 const MODES_GESTION = [
@@ -60,17 +61,18 @@ const SYSTEMES_RAPPORTAGE = ['DHIS2', 'Registre papier', 'Autre système', 'Aucu
 const ETATS_INTRANTS = ['Disponibles', 'Ruptures partielles', 'Rupture totale'];
 const TYPES_PIECE = ['Acte de création', 'Autorisation de fonctionnement', 'Agrément', 'Procès-verbal de vérification', 'Autre'];
 
-/** Étape 6 : services évalués (les 13 du cahier des charges, plus l'imagerie et l'ambulance d'AMI). */
-const SERVICES_SANITAIRES = [
-  'CPN', 'Accouchement', 'Vaccination', 'Consultation générale', 'Consultation postnatale', 'Planification familiale',
-  'Laboratoire', 'Hospitalisation', 'Chirurgie', 'Urgences', 'Nutrition', 'Pédiatrie', 'Maternité', 'Imagerie', 'Ambulance',
-];
-/** Services de l'étape 6 qui ouvrent un module AMI quand ils sont fonctionnels. */
-const MODULES = { CPN: 'CPN', Accouchement: 'Accouchement', Vaccination: 'Vaccination' };
+/** Services et activités (§8) : catalogues hôpital et centre de santé, plus l'ancienne liste de 15 services. */
+const SERVICES_SANITAIRES = C.NOMS_SERVICES;
+/** Modules AMI ouverts par un service fonctionnel : module → noms de service (catalogue et anciens). */
+const MODULES = C.SERVICES_MODULE;
 /** Correspondance avec la liste courte `services` utilisée par le reste de la plateforme. */
 const VERS_SERVICES_PLATEFORME = {
-  CPN: 'CPN', Accouchement: 'Maternité', Maternité: 'Maternité', Vaccination: 'Vaccination', Urgences: 'Urgences',
-  Ambulance: 'Ambulance', Pédiatrie: 'Pédiatrie', Laboratoire: 'Laboratoire', Imagerie: 'Imagerie', Chirurgie: 'Chirurgie',
+  CPN: 'CPN', Accouchement: 'Maternité', 'Salle d’accouchement': 'Maternité', Maternité: 'Maternité', Vaccination: 'Vaccination',
+  'Vaccination et PEV': 'Vaccination', Urgences: 'Urgences', 'Urgences médicales': 'Urgences', 'Urgences de première ligne': 'Urgences',
+  Ambulance: 'Ambulance', 'Transport et ambulance': 'Ambulance', Pédiatrie: 'Pédiatrie', 'Hospitalisation pédiatrique': 'Pédiatrie',
+  Laboratoire: 'Laboratoire', 'Laboratoire de biologie médicale': 'Laboratoire', 'Laboratoire de première ligne': 'Laboratoire',
+  Imagerie: 'Imagerie', 'Imagerie médicale': 'Imagerie', Radiologie: 'Imagerie', Échographie: 'Imagerie',
+  Chirurgie: 'Chirurgie', 'Chirurgie générale': 'Chirurgie', 'Chirurgie spécialisée': 'Chirurgie', 'Blocs opératoires': 'Chirurgie',
 };
 
 /** Étape 10 : statuts informatiques du circuit de validation. */
@@ -87,6 +89,8 @@ const SECTEUR_DU_STATUT = {
 
 /** Type de structure → catégorie proposée (modifiable). */
 const CATEGORIE_DU_TYPE = {
+  // Types à catégorie unique : la catégorie se déduit du type (jamais redemandée).
+  ...Object.fromEntries(Object.entries(C.CATEGORIES_DU_TYPE).filter(([, l]) => l.length === 1).map(([t, [c]]) => [t, c])),
   'Hôpital général de référence': 'HGR', 'Hôpital provincial': 'HP', 'Hôpital national': 'HN', 'Hôpital militaire': 'HM',
   'Centre de santé de référence': 'CSR', 'Centre de santé': 'CS', 'Poste de santé': 'PS', Polyclinique: 'Polyclinique',
   Clinique: 'Clinique', 'Centre médical': 'CM', Laboratoire: 'Laboratoire', Maternité: 'Maternité', Autre: 'Autre',
@@ -118,6 +122,7 @@ const CHAMPS_CHEF = {
   effectifsAttendus: true,
   effectifs: true,
   recos: true,
+  personnel: true,
   populations: true,
   capacites: true,
   operationnel: true,
@@ -127,11 +132,11 @@ const CHAMPS_CHEF = {
 };
 const SECTIONS = [
   'identification', 'localisation', 'organisation', 'contacts', 'rattachementSanitaire', 'responsablesFonctionnels', 'infrastructures',
-  'equipements', 'agents', 'effectifsAttendus', 'effectifs', 'recos', 'services', 'populations', 'capacites', 'operationnel',
+  'equipements', 'agents', 'effectifsAttendus', 'effectifs', 'recos', 'personnel', 'services', 'populations', 'capacites', 'operationnel',
   'hopital', 'centreSante',
 ];
 /** Sections saisies sous forme de liste (remplacées en entier). */
-const SECTIONS_LISTE = ['equipements', 'agents', 'effectifsAttendus', 'effectifs', 'services', 'responsablesFonctionnels'];
+const SECTIONS_LISTE = ['equipements', 'agents', 'effectifsAttendus', 'effectifs', 'personnel', 'services', 'responsablesFonctionnels'];
 
 /** Responsables de l'étape 3 dont le changement est historisé. */
 const RESPONSABLES = {
@@ -243,12 +248,19 @@ function modulesActifs(e) {
   if (!statut) return null;
   if (e.fiche.circuit.anterieur && !e.fiche.circuit.activeLe && !['Archivée', 'Rejetée', 'Fermée'].includes(statut)) return null;
   if (statut !== 'Active') return [];
-  return Object.keys(MODULES).filter((m) => (e.fiche.services ?? []).some((s) => s.service === m && s.fonctionnel === 'Oui'));
+  return modulesPrevus(e);
 }
 
-/** Modules qui seront ouverts à l'activation (selon l'étape 6). */
+/** Ligne de service qui porte un module (CPN, Accouchement, Vaccination), sous son ancien ou son nouveau nom. */
+function serviceDuModule(services = [], module) {
+  const noms = MODULES[module] ?? [module];
+  const lignes = services.filter((s) => noms.includes(s.service));
+  return lignes.find((s) => s.fonctionnel === 'Oui') ?? lignes.find((s) => s.fonctionnel === 'Partiel') ?? lignes[0];
+}
+
+/** Modules qui seront ouverts à l'activation (selon les services fonctionnels). */
 function modulesPrevus(e) {
-  return Object.keys(MODULES).filter((m) => (e.fiche?.services ?? []).some((s) => s.service === m && s.fonctionnel === 'Oui'));
+  return Object.keys(MODULES).filter((m) => serviceDuModule(e.fiche?.services, m)?.fonctionnel === 'Oui');
 }
 
 /** Liste courte `services` de la plateforme : services disponibles et fonctionnels (ou partiels). */
@@ -281,11 +293,13 @@ function calculsCibles(e, coefficients = {}) {
     const annuelle = base != null ? Math.round(base * pct / 100) : null;
     return {
       cible: c.cible,
-      indicateur: { FE: 'Femmes enceintes attendues', NA: 'Naissances attendues', NS: 'Nourrissons survivants attendus' }[c.cible],
+      indicateur: { FE: 'Femmes enceintes attendues', NA: 'Naissances vivantes attendues', NS: 'Nourrissons survivants attendus' }[c.cible],
       populationBase: base,
       coefficientPct: pct,
       formule: `Population totale × ${(pct / 100).toLocaleString('fr-FR', { maximumFractionDigits: 6 })}`,
       cibleAnnuelle: annuelle,
+      cibleSemestrielle: annuelle != null ? Math.round(annuelle / 2) : null,
+      cibleTrimestrielle: annuelle != null ? Math.round(annuelle / 4) : null,
       cibleMensuelle: annuelle != null ? Math.round(annuelle / 12) : null,
       coefficient: valide
         ? { code: valide.code, version: valide.version, dateDebut: valide.dateDebut, validePar: valide.validePar ?? null, valideLe: valide.valideLe ?? null, source: 'Épidémiologie (validé)' }
@@ -301,7 +315,7 @@ function calculsCibles(e, coefficients = {}) {
     annee: pop?.annee ?? null,
     source: pop?.source ?? null,
     populationBase: base,
-    periode: 'Annuelle et mensuelle',
+    periode: 'Annuelle, semestrielle, trimestrielle et mensuelle',
     dateCalcul: new Date().toISOString().slice(0, 10),
     lignes,
     alerte: 'Ne jamais additionner femmes enceintes, accouchements et naissances attendus : c’est la même cohorte vue de plusieurs façons.',
@@ -322,7 +336,7 @@ const CONTACTS_CPN = 4;
 function calculsCapacites(e, cibles, realisees = {}) {
   const c = e.fiche?.capacites ?? {};
   const infra = e.fiche?.infrastructures ?? {};
-  const service = (nom) => (e.fiche?.services ?? []).find((s) => s.service === nom);
+  const service = (nom) => serviceDuModule(e.fiche?.services, nom);
   const mensuelle = (code) => cibles.lignes.find((l) => l.cible === code)?.cibleMensuelle ?? null;
   const prerequis = {
     Accouchement: [['personnelQualifie', 'Personnel qualifié', c.personnelQualifie], ['eau', 'Eau', c.eau]],
@@ -356,11 +370,124 @@ function calculsCapacites(e, cibles, realisees = {}) {
   };
 }
 
-// --- Étape 10 : contrôle automatique et complétude ---------------------------------------------
+
+// --- Valeurs déduites (jamais ressaisies) -------------------------------------------------------
+
+/** Une ligne de service existante et fonctionnelle (Oui / Partiel) parmi ces noms ? null si aucune ligne. */
+function serviceOuiNon(services, noms) {
+  const lignes = services.filter((s) => noms.includes(s.service) && s.existence !== 'Non' && s.fonctionnel);
+  if (!lignes.length) return null;
+  return lignes.some((s) => s.fonctionnel === 'Oui' || s.fonctionnel === 'Partiel') ? 'Oui' : 'Non';
+}
+
+const somme = (liste, cle) => liste.reduce((s, x) => s + (x[cle] ?? 0), 0);
+
+/**
+ * Recalcule ce qui se déduit d'une autre réponse de la fiche, pour qu'une information ne soit
+ * jamais saisie deux fois : catégorie et niveau sanitaire (type), année de création (date de mise
+ * en service), fonction du responsable (titre), Oui / Non hérités (services), bâtiments hors
+ * service, totaux des lits (lits par unité), eau, électricité, chaîne du froid (équipements),
+ * nombre de RECO (personnel).
+ */
+function deduire(e) {
+  const f = e.fiche;
+  if (!f) return;
+  const id = f.identification;
+  const org = f.organisation;
+  const infra = f.infrastructures;
+  const services = f.services ?? [];
+
+  // Identification : la catégorie d'un type qui n'en admet qu'une n'est pas demandée.
+  const permises = C.CATEGORIES_DU_TYPE[e.type];
+  if (permises?.length === 1) id.categorie = permises[0];
+  else if (!id.categorie && CATEGORIE_DU_TYPE[e.type]) id.categorie = CATEGORIE_DU_TYPE[e.type];
+  if (id.categorie && C.NIVEAU_DE_CATEGORIE[id.categorie]) id.niveauSanitaire = C.NIVEAU_DE_CATEGORIE[id.categorie];
+  if (id.dateOuverture && /^\d{4}/.test(id.dateOuverture)) id.anneeCreation = Number(id.dateOuverture.slice(0, 4));
+
+  // Responsable principal : sa fonction est son titre (sauf « Autre », précisé à la main).
+  if (org.titreResponsable && org.titreResponsable !== 'Autre') org.responsable.fonction = org.titreResponsable;
+
+  // Oui / Non hérités de l'ancienne fiche : déduits des services déclarés.
+  const deduits = {
+    maternite: ['Maternité', 'Salle d’accouchement', 'Accouchement', 'Obstétrique'],
+    chirurgie: ['Chirurgie', 'Chirurgie générale', 'Chirurgie spécialisée', 'Blocs opératoires'],
+    hospitalisation: ['Hospitalisation', 'Hospitalisation adulte', 'Hospitalisation pédiatrique'],
+  };
+  for (const [cle, noms] of Object.entries(deduits)) {
+    const v = serviceOuiNon(services, noms);
+    if (v) id[cle] = v;
+  }
+  const ouvrages = {
+    blocOperatoire: ['Blocs opératoires'],
+    laboratoire: ['Laboratoire', 'Laboratoire de biologie médicale', 'Laboratoire de première ligne'],
+    pharmacie: ['Pharmacie hospitalière', 'Pharmacie et dispensation des médicaments'],
+    morgue: ['Morgue'],
+  };
+  for (const [cle, noms] of Object.entries(ouvrages)) {
+    const v = serviceOuiNon(services, noms);
+    if (v) infra[cle] = v;
+  }
+
+  // Infrastructures.
+  if (infra.batiments != null && infra.batimentsFonctionnels != null) {
+    infra.batimentsHorsService = Math.max(0, infra.batiments - infra.batimentsFonctionnels);
+  }
+  const unites = infra.litsParUnite ?? [];
+  if (unites.length) {
+    infra.litsTotal = somme(unites, 'installes');
+    infra.litsFonctionnels = somme(unites, 'operationnels');
+    const maternite = unites.filter((u) => /maternit|obst/i.test(u.unite));
+    if (maternite.length) infra.litsMaternite = somme(maternite, 'operationnels');
+  }
+  if (infra.litsFonctionnels != null) f.capacites.litsFonctionnels = infra.litsFonctionnels;
+  const continuiteEau = infra.eau?.continuite;
+  if (continuiteEau) {
+    infra.eau.disponibilite = { Continue: 'Permanente', Intermittente: 'Intermittente', Absente: 'Absente' }[continuiteEau];
+    infra.pointEau = continuiteEau === 'Absente' ? 'Non' : 'Oui';
+  }
+  const elec = infra.electriciteDetail;
+  if (elec?.sources?.length) {
+    infra.electricite = 'Oui';
+    infra.groupeElectrogene = elec.sources.includes('Groupe électrogène') ? 'Oui' : 'Non';
+  }
+  if (elec?.heuresParJour != null) {
+    elec.continuite = elec.heuresParJour >= 24 ? 'Continue' : elec.heuresParJour === 0 ? 'Absente' : 'Intermittente';
+    if (elec.heuresParJour === 0) infra.electricite = 'Non';
+  }
+  const frigos = (f.equipements ?? []).filter((q) => C.EQUIPEMENTS_CHAINE_FROID.includes(q.nom));
+  if (frigos.length) infra.chaineFroid = frigos.some((q) => (q.fonctionnels ?? q.total ?? 0) > 0) ? 'Oui' : 'Non';
+
+  // Personnel : les RECO sont comptés dans le §10, pas ressaisis.
+  const reco = (f.personnel ?? []).find((p) => p.fonction === 'RECO');
+  if (reco?.nombre != null) f.recos.nombre = reco.nombre;
+}
+
+/** Personnel par fonction (§10) : total et sous-totaux par groupe du catalogue de la structure. */
+function calculsPersonnel(personnel = [], type) {
+  const groupes = C.PERSONNEL[C.profilCatalogue(type)];
+  const nombre = (fonction) => personnel.find((p) => p.fonction === fonction)?.nombre ?? 0;
+  const parGroupe = groupes.map((g) => ({ groupe: g.titre, total: g.elements.reduce((s, fct) => s + nombre(fct), 0) }));
+  return { total: somme(personnel, 'nombre'), fonctions: personnel.filter((p) => p.nombre).length, parGroupe };
+}
+
+// --- Contrôle automatique et complétude --------------------------------------------------------
+
+/** Doublons d'une liste selon une clé (libellés des valeurs répétées). */
+function enDouble(liste, cle) {
+  const vus = new Set();
+  const doubles = new Set();
+  for (const x of liste) {
+    const k = cle(x);
+    if (vus.has(k)) doubles.add(k);
+    vus.add(k);
+  }
+  return [...doubles];
+}
 
 /**
  * Contrôle automatique avant vérification : champs obligatoires, cohérences (erreurs bloquantes)
- * et points d'attention (avertissements). Les doublons sont vérifiés par le contrôleur (base).
+ * et points d'attention (avertissements). Les doublons de code SNIS / GPS sont vérifiés par le
+ * contrôleur (base). Les libellés reprennent les rubriques de la fiche « Identification générale ».
  */
 function controler(e) {
   const f = e.fiche ?? {};
@@ -371,176 +498,194 @@ function controler(e) {
   const erreurs = [];
   const avertissements = [];
   const exiger = (v, libelle) => { if (!rempli(v)) erreurs.push(`${libelle} : obligatoire.`); };
+  const jour = new Date().toISOString().slice(0, 10);
 
-  // Étape 1
-  exiger(e.nom, 'Étape 1 · Nom officiel');
-  exiger(e.type, 'Étape 1 · Type de structure');
-  exiger(id.niveauSanitaire, 'Étape 1 · Niveau sanitaire');
-  exiger(id.categorie, 'Étape 1 · Catégorie');
-  exiger(id.statutActuel, 'Étape 1 · Statut actuel');
-  exiger(e.telephone, 'Étape 1 · Téléphone principal');
-  if (e.latitude == null || e.longitude == null) avertissements.push('Étape 1 · Coordonnées GPS non renseignées : la structure n’apparaîtra pas sur la carte.');
-  const annee = new Date().getFullYear();
-  if (id.anneeCreation != null && (id.anneeCreation < 1850 || id.anneeCreation > annee)) erreurs.push(`Étape 1 · Année de création invalide (${id.anneeCreation}).`);
-  if (id.anneeCreation && id.dateOuverture && Number(id.dateOuverture.slice(0, 4)) < id.anneeCreation) {
-    erreurs.push('Étape 1 · La date d’ouverture précède l’année de création.');
+  // 1. Identification générale (et §4 catégorie)
+  exiger(e.nom, 'Identification · Nom officiel');
+  exiger(e.type, 'Identification · Type de structure');
+  exiger(id.categorie, 'Identification · Catégorie de structure');
+  exiger(id.statutActuel, 'Identification · Statut de fonctionnement');
+  exiger(org.statutJuridique, 'Identification · Statut juridique');
+  exiger(org.modeGestion, 'Identification · Régime de gestion / tutelle');
+  const permises = C.CATEGORIES_DU_TYPE[e.type];
+  if (permises && id.categorie && !permises.includes(id.categorie)) {
+    erreurs.push(`Identification · La catégorie « ${C.LIBELLES_CATEGORIE[id.categorie] ?? id.categorie} » ne correspond pas au type « ${e.type} ».`);
   }
-  // Étape 2
-  exiger(e.province, 'Étape 2 · Province');
-  exiger(loc.territoire, 'Étape 2 · Ville ou territoire');
-  exiger(e.zonesSante, 'Étape 2 · Zone de santé');
-  exiger(e.aireSante, 'Étape 2 · Aire de santé');
-  exiger(e.adresse, 'Étape 2 · Adresse physique');
-  for (const [cle, libelle] of [['distanceBczsKm', 'BCZS'], ['distanceHgrKm', 'HGR'], ['distanceCsrKm', 'CSR']]) {
-    if (loc[cle] != null && loc[cle] < 0) erreurs.push(`Étape 2 · Distance au ${libelle} négative.`);
+  if (id.dateOuverture && id.dateOuverture > jour) erreurs.push('Identification · Date de création / mise en service dans le futur.');
+  if (id.anneeCreation != null && (id.anneeCreation < 1850 || id.anneeCreation > new Date().getFullYear())) {
+    erreurs.push(`Identification · Année de création invalide (${id.anneeCreation}).`);
   }
-  // Étape 3
-  exiger(org.statutJuridique, 'Étape 3 · Statut juridique');
-  exiger(org.modeGestion, 'Étape 3 · Mode de gestion');
-  exiger(org.responsable?.nom, 'Étape 3 · Nom du responsable');
-  exiger(org.responsable?.prenom, 'Étape 3 · Prénom du responsable');
-  exiger(org.responsable?.fonction, 'Étape 3 · Fonction du responsable');
-  exiger(org.responsable?.telephone, 'Étape 3 · Téléphone du responsable');
-  if (org.autorisation?.date && org.agrement?.dateEcheance && org.agrement.dateEcheance < new Date().toISOString().slice(0, 10)) {
-    avertissements.push('Étape 3 · L’agrément est arrivé à échéance.');
-  }
-  if (org.garde?.disponible === 'Oui' && !org.garde?.horaires) avertissements.push('Étape 3 · Horaires de garde non précisés.');
-  // Étape 4
-  if (infra.litsFonctionnels != null && infra.litsTotal != null && infra.litsFonctionnels > infra.litsTotal) {
-    erreurs.push('Étape 4 · Plus de lits fonctionnels que de lits au total.');
-  }
-  if (infra.toilettesFonctionnelles != null && infra.toilettesTotal != null && infra.toilettesFonctionnelles > infra.toilettesTotal) {
-    erreurs.push('Étape 4 · Plus de toilettes fonctionnelles que de toilettes au total.');
-  }
-  for (const q of f.equipements ?? []) {
-    const somme = (q.fonctionnels ?? 0) + (q.enPanne ?? 0) + (q.horsService ?? 0);
-    if (somme > (q.total ?? 0)) erreurs.push(`Étape 4 · ${q.nom} : fonctionnels + en panne + hors service (${somme}) > quantité totale (${q.total ?? 0}).`);
-  }
-  if (infra.batimentsFonctionnels != null && infra.batimentsHorsService != null && infra.batiments != null
-    && infra.batimentsFonctionnels + infra.batimentsHorsService > infra.batiments) {
-    erreurs.push('Étape 4 · Bâtiments fonctionnels + hors service > nombre total de bâtiments.');
-  }
-  for (const u of infra.litsParUnite ?? []) {
-    if (u.operationnels != null && u.installes != null && u.operationnels > u.installes) {
-      erreurs.push(`Étape 4 · Lits « ${u.unite} » : opérationnels (${u.operationnels}) > installés (${u.installes}).`);
+  if (id.acteCreation?.date && id.acteCreation.date > jour) erreurs.push('Identification · Date de l’acte dans le futur.');
+  if (id.codeSnisVerifieLe && id.codeSnisVerifieLe > jour) erreurs.push('Identification · Date de vérification du code officiel dans le futur.');
+  for (const n of id.anciensNoms ?? []) {
+    if (n.debut && n.fin && n.fin < n.debut) erreurs.push(`Identification · Ancien nom « ${n.nom} » : fin de validité avant le début.`);
+    if (String(n.nom ?? '').trim().toLowerCase() === String(e.nom ?? '').trim().toLowerCase()) {
+      erreurs.push(`Identification · « ${n.nom} » est le nom officiel actuel, pas un ancien nom.`);
     }
   }
-  for (const q of f.equipements ?? []) {
-    if ((q.fonctionnels ?? 0) > (q.total ?? 0)) erreurs.push(`Étape 4 · ${q.nom} : quantité fonctionnelle > quantité totale.`);
+
+  // 2. Localisation géographique
+  exiger(e.province, 'Localisation · Province');
+  exiger(loc.territoire, 'Localisation · Ville ou territoire');
+  exiger(e.zonesSante, 'Localisation · Zone de santé');
+  exiger(e.aireSante, 'Localisation · Aire de santé');
+  exiger(e.adresse, 'Localisation · Adresse détaillée');
+  if (e.latitude == null || e.longitude == null) avertissements.push('Localisation · Coordonnées GPS non renseignées : la structure n’apparaîtra pas sur la carte.');
+  if (loc.gps?.date && loc.gps.date > jour) erreurs.push('Localisation · Date de collecte GPS dans le futur.');
+  for (const [cle, libelle] of [['distanceBczsKm', 'BCZS'], ['distanceHgrKm', 'HGR'], ['distanceCsrKm', 'CSR']]) {
+    if (loc[cle] != null && loc[cle] < 0) erreurs.push(`Localisation · Distance au ${libelle} négative.`);
   }
-  // Identification générale : classification, historique des noms, contacts, responsables.
-  for (const n of id.anciensNoms ?? []) {
-    if (n.debut && n.fin && n.fin < n.debut) erreurs.push(`Étape 1 · Ancien nom « ${n.nom} » : fin de validité avant le début.`);
+
+  // 3. Population cible
+  const annees = (f.populations ?? []).map((p) => p.annee);
+  if (new Set(annees).size !== annees.length) erreurs.push('Population · Deux enregistrements de population pour la même année.');
+  for (const p of f.populations ?? []) {
+    const t = p.tranches ?? {};
+    const groupes = C.GROUPES_POPULATION.filter((g) => t[g.cle] != null && p.totale != null && t[g.cle] > p.totale);
+    for (const g of groupes) erreurs.push(`Population · ${p.annee} : ${g.libelle} (${t[g.cle]}) > population totale (${p.totale}).`);
+    if (t.moins1 != null && t.de0a23m != null && t.moins1 > t.de0a23m) erreurs.push(`Population · ${p.annee} : 0-11 mois > 0-23 mois.`);
+    if (t.de12a23m != null && t.de0a23m != null && t.de12a23m > t.de0a23m) erreurs.push(`Population · ${p.annee} : 12-23 mois > 0-23 mois.`);
+    if (t.de0a23m != null && t.moins5 != null && t.de0a23m > t.moins5) erreurs.push(`Population · ${p.annee} : 0-23 mois > 0-59 mois.`);
+    if (t.moins1 != null && t.moins5 != null && t.moins1 > t.moins5) erreurs.push(`Population · ${p.annee} : 0-11 mois > 0-59 mois.`);
+    if (t.moins1 != null && t.de12a23m != null && t.de0a23m != null && t.moins1 + t.de12a23m !== t.de0a23m) {
+      avertissements.push(`Population · ${p.annee} : 0-11 mois + 12-23 mois (${t.moins1 + t.de12a23m}) ≠ 0-23 mois (${t.de0a23m}).`);
+    }
+    if (p.hommes != null && p.femmes != null && p.totale != null && p.hommes + p.femmes !== p.totale) {
+      avertissements.push(`Population · ${p.annee} : hommes + femmes (${p.hommes + p.femmes}) ≠ population totale (${p.totale}).`);
+    }
   }
-  if (id.fonctionReference === 'Oui' && !id.territoireCouvert) avertissements.push('Étape 1 · Fonction de référence : territoire couvert non précisé.');
-  if (id.maternite === 'Non' && (f.services ?? []).some((s) => ['Accouchement', 'Maternité'].includes(s.service) && s.fonctionnel === 'Oui')) {
-    avertissements.push('Étape 1 · Maternité déclarée « Non » mais un service d’accouchement / maternité est fonctionnel.');
-  }
-  const telephoneValide = (v) => !v || /^\+243\d{9}$/.test(String(v).replace(/[\s.-]/g, ''));
+  if (!(f.populations ?? []).length) avertissements.push('Population · Population de l’aire non renseignée : les cibles ne peuvent pas être calculées.');
+
+  // 6. Coordonnées et contacts
+  exiger(e.telephone, 'Contacts · Téléphone principal');
+  const telephoneValide = (v) => !v || /^\+243\d{9}$/.test(String(v).replace(/[\s.()-]/g, ''));
   const contacts = f.contacts ?? {};
   for (const [v, libelle] of [[e.telephone, 'principal'], [contacts.telephoneSecondaire, 'secondaire'], [contacts.telephoneUrgence, 'd’urgence']]) {
     if (!telephoneValide(v)) avertissements.push(`Contacts · Téléphone ${libelle} : format +243 suivi de 9 chiffres attendu.`);
   }
+  for (const c of contacts.contactsService ?? []) {
+    if (c.debut && c.fin && c.fin < c.debut) erreurs.push(`Contacts · ${c.service} : fin de validité avant le début.`);
+  }
+
+  // 7. Responsables et organisation
+  exiger(org.responsable?.nom, 'Responsables · Nom du responsable principal');
+  exiger(org.responsable?.prenom, 'Responsables · Prénom du responsable principal');
+  exiger(org.titreResponsable || org.responsable?.fonction, 'Responsables · Fonction / titre du responsable principal');
+  exiger(org.responsable?.telephone, 'Responsables · Contact du responsable principal');
+  if (org.datePriseFonction && org.datePriseFonction > jour) erreurs.push('Responsables · Date de prise de fonction dans le futur.');
+  for (const d of enDouble(f.responsablesFonctionnels ?? [], (r) => r.domaine)) erreurs.push(`Responsables · Domaine « ${d} » saisi deux fois.`);
   for (const r of f.responsablesFonctionnels ?? []) {
     if (r.debut && r.fin && r.fin < r.debut) erreurs.push(`Responsables · ${r.domaine} : fin de responsabilité avant le début.`);
     if (r.suppleantDebut && r.suppleantFin && r.suppleantFin < r.suppleantDebut) erreurs.push(`Responsables · ${r.domaine} : fin de suppléance avant le début.`);
   }
+  if (org.agrement?.dateEmission && org.agrement?.dateEcheance && org.agrement.dateEcheance < org.agrement.dateEmission) {
+    erreurs.push('Responsables · Agrément : échéance avant la date d’émission.');
+  }
   for (const p of f.rattachementSanitaire?.programmes ?? []) {
     if (p.debut && p.fin && p.fin < p.debut) erreurs.push(`Rattachement · Programme ${p.programme} : fin de validité avant le début.`);
   }
+
+  // 8. Services et activités
+  const services = f.services ?? [];
+  if (!services.some((s) => s.fonctionnel === 'Oui' || s.fonctionnel === 'Partiel')) erreurs.push('Services · Aucun service fonctionnel déclaré.');
+  for (const d of enDouble(services, (s) => s.service)) erreurs.push(`Services · « ${d} » saisi deux fois.`);
+  for (const s of services) {
+    if (s.fonctionnel && s.fonctionnel !== 'Non' && s.autorise === 'Non') avertissements.push(`Services · ${s.service} déclaré fonctionnel sans autorisation.`);
+    if (s.fonctionnel === 'Oui' && s.disponible === 'Non') erreurs.push(`Services · ${s.service} : fonctionnel mais non disponible.`);
+    if (s.existence === 'Non' && s.fonctionnel && s.fonctionnel !== 'Non') erreurs.push(`Services · ${s.service} : déclaré fonctionnel mais inexistant.`);
+    if (s.dateDebut && s.dateFin && s.dateFin < s.dateDebut) erreurs.push(`Services · ${s.service} : date de fin avant la date de début.`);
+  }
+
+  // 9. Infrastructures
+  if (infra.batimentsFonctionnels != null && infra.batiments != null && infra.batimentsFonctionnels > infra.batiments) {
+    erreurs.push('Infrastructures · Bâtiments fonctionnels > nombre total de bâtiments.');
+  }
+  if (infra.litsFonctionnels != null && infra.litsTotal != null && infra.litsFonctionnels > infra.litsTotal) {
+    erreurs.push('Infrastructures · Plus de lits opérationnels que de lits installés.');
+  }
+  for (const u of infra.litsParUnite ?? []) {
+    if (u.operationnels != null && u.installes != null && u.operationnels > u.installes) {
+      erreurs.push(`Infrastructures · Lits « ${u.unite} » : opérationnels (${u.operationnels}) > installés (${u.installes}).`);
+    }
+  }
+  for (const d of enDouble(infra.litsParUnite ?? [], (u) => String(u.unite).trim().toLowerCase())) erreurs.push(`Infrastructures · Unité de lits « ${d} » saisie deux fois.`);
+  if (infra.toilettesFonctionnelles != null && infra.toilettesTotal != null && infra.toilettesFonctionnelles > infra.toilettesTotal) {
+    erreurs.push('Infrastructures · Plus de toilettes fonctionnelles que de toilettes au total.');
+  }
+  if (infra.etatBatiment?.date && infra.etatBatiment.date > jour) erreurs.push('Infrastructures · Date d’évaluation du bâtiment dans le futur.');
+
+  // 10. Ressources humaines
+  for (const d of enDouble(f.personnel ?? [], (p) => p.fonction)) erreurs.push(`Ressources humaines · « ${d} » saisi deux fois.`);
   for (const l of f.effectifs ?? []) {
-    if (l.present != null && l.affecte != null && l.present > l.affecte) erreurs.push(`Étape 5 · ${l.categorie} : effectif présent > effectif affecté.`);
+    if (l.present != null && l.affecte != null && l.present > l.affecte) erreurs.push(`Ressources humaines · ${l.categorie} : effectif présent > effectif affecté.`);
   }
-  if (org.agrement?.dateEmission && org.agrement?.dateEcheance && org.agrement.dateEcheance < org.agrement.dateEmission) {
-    erreurs.push('Étape 3 · Agrément : échéance avant la date d’émission.');
+
+  // 11. Équipements
+  for (const d of enDouble(f.equipements ?? [], (q) => `${q.categorie ?? ''} · ${q.nom}`)) erreurs.push(`Équipements · ${d} : saisi deux fois.`);
+  for (const q of f.equipements ?? []) {
+    if ((q.fonctionnels ?? 0) > (q.total ?? 0)) erreurs.push(`Équipements · ${q.nom} : quantité fonctionnelle > quantité totale.`);
+    const somme3 = (q.fonctionnels ?? 0) + (q.enPanne ?? 0) + (q.horsService ?? 0);
+    if (somme3 > (q.total ?? 0)) erreurs.push(`Équipements · ${q.nom} : fonctionnels + en panne + hors service (${somme3}) > quantité totale (${q.total ?? 0}).`);
   }
-  // Volet spécifique (hôpital ou centre de santé).
+
+  // 13. Informations opérationnelles
+  const op = f.operationnel ?? {};
+  if (op.urgences?.disponible === 'Oui' && !op.urgences?.horaires && op.fonctionnement24h !== 'Oui') {
+    avertissements.push('Opérationnel · Horaires des urgences / de la garde non précisés.');
+  }
+  if (op.dateDerniereEvaluation && op.dateDerniereEvaluation > jour) erreurs.push('Opérationnel · Date de dernière évaluation dans le futur.');
+
+  // Volet spécifique (hôpital ou centre de santé), s'il a été renseigné.
   const profil = V.profilDe(e);
   if (profil) erreurs.push(...V.controlerVolet(profil, f[profil]));
-  // Étape 6
-  const services = f.services ?? [];
-  if (!services.some((s) => s.fonctionnel === 'Oui' || s.fonctionnel === 'Partiel')) erreurs.push('Étape 6 · Aucun service fonctionnel déclaré.');
-  for (const s of services) {
-    if (s.fonctionnel && s.fonctionnel !== 'Non' && s.autorise === 'Non') avertissements.push(`Étape 6 · ${s.service} déclaré fonctionnel sans autorisation.`);
-    if (s.fonctionnel === 'Oui' && s.disponible === 'Non') erreurs.push(`Étape 6 · ${s.service} : fonctionnel mais non disponible.`);
-    if (s.existence === 'Non' && s.fonctionnel && s.fonctionnel !== 'Non') erreurs.push(`Étape 6 · ${s.service} : déclaré fonctionnel mais inexistant.`);
-    if ((s.disponibilite === 'Indisponible' || s.fonctionnel === 'Non') && s.existence !== 'Non' && !s.motifIndisponibilite) {
-      avertissements.push(`Étape 6 · ${s.service} : motif d’indisponibilité non précisé.`);
-    }
-    if (s.dateDebut && s.dateFin && s.dateFin < s.dateDebut) erreurs.push(`Étape 6 · ${s.service} : date de fin avant la date de début.`);
-  }
-  // Étape 7
-  const annees = (f.populations ?? []).map((p) => p.annee);
-  if (new Set(annees).size !== annees.length) erreurs.push('Étape 7 · Deux enregistrements de population pour la même année.');
-  for (const p of f.populations ?? []) {
-    if (p.hommes != null && p.femmes != null && p.totale != null && p.hommes + p.femmes !== p.totale) {
-      avertissements.push(`Étape 7 · ${p.annee} : hommes + femmes (${p.hommes + p.femmes}) ≠ population totale (${p.totale}).`);
-    }
-    if (p.urbaine != null && p.rurale != null && p.totale != null && p.urbaine + p.rurale !== p.totale) {
-      avertissements.push(`Étape 7 · ${p.annee} : urbaine + rurale (${p.urbaine + p.rurale}) ≠ population totale (${p.totale}).`);
-    }
-    const t = p.tranches ?? {};
-    if (t.moins1 != null && t.moins5 != null && t.moins1 > t.moins5) erreurs.push(`Étape 7 · ${p.annee} : moins de 1 an > moins de 5 ans.`);
-  }
-  if (!(f.populations ?? []).length) avertissements.push('Étape 7 · Population desservie non renseignée : les cibles (étape 8) ne peuvent pas être calculées.');
   return { erreurs, avertissements };
 }
 
-/** Champs comptés dans la complétude du dossier, [libellé, valeur] (fiche générale + volet spécifique). */
+/**
+ * Champs comptés dans la complétude du dossier, [libellé, valeur] : ceux de la fiche
+ * « Identification générale » (les valeurs déduites et les rubriques facultatives comme le site
+ * web ou le téléphone secondaire ne pèsent pas).
+ */
 function champsCompletude(e) {
   const f = e.fiche ?? {};
   const id = f.identification ?? {};
   const loc = f.localisation ?? {};
   const org = f.organisation ?? {};
   const infra = f.infrastructures ?? {};
-  const cap = f.capacites ?? {};
   const ct = f.contacts ?? {};
-  const rat = f.rattachementSanitaire ?? {};
   const op = f.operationnel ?? {};
-  const profil = V.profilDe(e);
+  const pop = populationRecente(f.populations);
+  const salles = Object.values(infra.salles?.toObject?.() ?? infra.salles ?? {}).some((v) => v != null);
+  const groupes = Object.values(pop?.tranches?.toObject?.() ?? pop?.tranches ?? {}).some((v) => v != null);
   return [
-    ['Étape 1 · Nom officiel', e.nom], ['Étape 1 · Type de structure', e.type], ['Étape 1 · Code SNIS / DHIS2', id.codeSnis],
-    ['Étape 1 · Source du code officiel', id.codeSnisSource], ['Étape 1 · Nom usuel', id.nomUsuel], ['Étape 1 · Sigle', id.sigle],
-    ['Étape 1 · Niveau sanitaire', id.niveauSanitaire], ['Étape 1 · Catégorie', id.categorie], ['Étape 1 · Niveau de soins', id.niveauSoins],
-    ['Étape 1 · Année de création', id.anneeCreation], ['Étape 1 · Date d’ouverture', id.dateOuverture],
-    ['Étape 1 · Acte de création', id.acteCreation?.numero], ['Étape 1 · Statut actuel', id.statutActuel],
-    ['Étape 1 · Hospitalisation (Oui / Non)', id.hospitalisation], ['Étape 1 · Maternité (Oui / Non)', id.maternite],
-    ['Étape 1 · Chirurgie (Oui / Non)', id.chirurgie], ['Étape 1 · Fonction de référence', id.fonctionReference],
-    ['Contacts · Téléphone principal', e.telephone], ['Contacts · E-mail officiel', e.email], ['Contacts · Site web', id.siteWeb],
+    ['Identification · Nom officiel', e.nom], ['Identification · Type de structure', e.type], ['Identification · Catégorie', id.categorie],
+    ['Identification · Code officiel SNIS / DHIS2', id.codeSnis], ['Identification · Source du code officiel', id.codeSnisSource],
+    ['Identification · Date de vérification du code', id.codeSnisVerifieLe], ['Identification · Nom usuel / sigle', id.nomUsuel || id.sigle],
+    ['Identification · Statut juridique', org.statutJuridique], ['Identification · Régime de gestion / tutelle', org.modeGestion],
+    ['Identification · Date de création / mise en service', id.dateOuverture || id.anneeCreation],
+    ['Identification · Acte de création (numéro)', id.acteCreation?.numero], ['Identification · Acte de création (autorité)', id.acteCreation?.autorite],
+    ['Identification · Statut de fonctionnement', id.statutActuel],
+    ['Localisation · Province', e.province], ['Localisation · Ville ou territoire', loc.territoire],
+    ['Localisation · Commune / secteur / chefferie', loc.commune], ['Localisation · Groupement / quartier / village', loc.quartier || loc.groupement],
+    ['Localisation · Zone de santé', e.zoneSante], ['Localisation · Aire de santé', e.aireSante], ['Localisation · Adresse détaillée', e.adresse],
+    ['Localisation · Repère', loc.reperes], ['Localisation · Coordonnées GPS', e.latitude], ['Localisation · Méthode de collecte GPS', loc.gps?.methode],
+    ['Population · Population totale de l’aire', pop?.totale], ['Population · Source', pop?.source], ['Population · Groupes cibles', groupes || null],
+    ['Contacts · Téléphone principal', e.telephone], ['Contacts · E-mail officiel', e.email],
     ['Contacts · Téléphone d’urgence', ct.telephoneUrgence], ['Contacts · Canal privilégié', ct.canalPrivilegie],
-    ['Étape 2 · Coordonnées GPS', e.latitude], ['Étape 2 · Méthode de collecte GPS', loc.gps?.methode],
-    ['Étape 2 · Province', e.province], ['Étape 2 · Ville ou territoire', loc.territoire], ['Étape 2 · Commune / secteur / chefferie', loc.commune],
-    ['Étape 2 · Zone de santé', e.zoneSante], ['Étape 2 · Aire de santé', e.aireSante],
-    ['Étape 2 · Groupement / quartier / village', loc.quartier || loc.groupement],
-    ['Étape 2 · Adresse', e.adresse], ['Étape 2 · Repères', loc.reperes], ['Étape 2 · Distance au BCZS', loc.distanceBczsKm],
-    ['Étape 2 · Distance à l’HGR', loc.distanceHgrKm], ['Étape 2 · Distance au CSR', loc.distanceCsrKm],
-    ['Étape 2 · Temps de déplacement', loc.tempsDeplacement], ['Étape 2 · Moyen de transport', loc.moyenTransport],
-    ['Étape 2 · Accessibilité en saison des pluies', loc.accessibilitePluies], ['Étape 2 · Accessibilité en urgence', loc.accessibiliteUrgence],
-    ['Étape 3 · Statut juridique', org.statutJuridique], ['Étape 3 · Propriétaire', org.proprietaire], ['Étape 3 · Mode de gestion', org.modeGestion],
-    ['Étape 3 · Tutelle administrative', org.tutelleAdministrative], ['Étape 3 · Tutelle technique', org.tutelleTechnique],
-    ['Étape 3 · Autorisation (référence)', org.autorisation?.reference], ['Étape 3 · Autorisation (date)', org.autorisation?.date],
-    ['Étape 3 · Agrément (numéro)', org.agrement?.numero], ['Étape 3 · Responsable principal', nomPersonne(org.responsable)],
-    ['Étape 3 · Titre du responsable', org.titreResponsable], ['Étape 3 · Date de prise de fonction', org.datePriseFonction],
-    ['Étape 3 · Responsable médical', org.responsableMedical?.nom], ['Étape 3 · Responsable infirmier', org.responsableInfirmier?.nom],
-    ['Étape 3 · Responsable administratif', org.responsableAdministratif?.nom], ['Étape 3 · Responsable maternité', org.responsableMaternite?.nom],
-    ['Étape 3 · Jours de fonctionnement', org.joursFonctionnement], ['Étape 3 · Horaires', org.horaires], ['Étape 3 · Garde', org.garde?.disponible],
-    ['Responsables fonctionnels', f.responsablesFonctionnels],
-    ['Rattachement · Structure de référence', rat.structureReferenceId], ['Rattachement · Programmes / réseaux', rat.programmes],
-    ['Étape 4 · Bâtiments', infra.batiments], ['Étape 4 · Lits installés', infra.litsTotal], ['Étape 4 · Lits fonctionnels', infra.litsFonctionnels],
-    ['Étape 4 · Bloc opératoire', infra.blocOperatoire], ['Étape 4 · Laboratoire', infra.laboratoire], ['Étape 4 · Pharmacie', infra.pharmacie],
-    ['Étape 4 · Point d’eau', infra.pointEau], ['Étape 4 · Électricité', infra.electricite], ['Étape 4 · Chaîne du froid', infra.chaineFroid],
-    ['Étape 4 · Connectivité', infra.connectivite?.internet ?? infra.connectivite?.reseauMobile],
-    ['Étape 4 · Accessibilité (route)', infra.accessibilite?.route], ['Étape 4 · État du bâtiment', infra.etatBatiment?.etat],
-    ['Étape 4 · Équipements', f.equipements],
-    ['Étape 5 · Registre du personnel', f.agents], ['Étape 5 · Effectifs par catégorie', f.effectifs],
-    ['Étape 6 · Services évalués', (f.services ?? []).filter((s) => s.fonctionnel).length ? true : null],
-    ['Étape 7 · Population desservie', f.populations],
-    ['Étape 9 · Capacité d’accueil', cap.accueil], ['Étape 9 · Accouchements / mois', cap.accouchementsMois], ['Étape 9 · CPN / mois', cap.cpnMois],
-    ['Étape 9 · Séances de vaccination / mois', cap.seancesVaccinationMois], ['Étape 9 · Vaccins', cap.vaccins], ['Étape 9 · Médicaments', cap.medicaments],
-    ['Étape 9 · Personnel qualifié', cap.personnelQualifie],
-    ['Opérationnel · Fonctionnement 24h/24', op.fonctionnement24h], ['Opérationnel · Moyens de référence', op.moyensReference],
+    ['Responsables · Responsable principal', nomPersonne(org.responsable)], ['Responsables · Fonction / titre', org.titreResponsable || org.responsable?.fonction],
+    ['Responsables · Contact professionnel', org.responsable?.telephone], ['Responsables · Date de prise de fonction', org.datePriseFonction],
+    ['Responsables · Responsables fonctionnels', (f.responsablesFonctionnels ?? []).filter((r) => r.nom)],
+    ['Services · Services et activités', (f.services ?? []).some((s) => s.fonctionnel) || null],
+    ['Infrastructures · Bâtiments', infra.batiments], ['Infrastructures · Salles par fonction', salles || null],
+    ['Infrastructures · Lits', infra.litsTotal], ['Infrastructures · Eau', infra.eau?.continuite || infra.eau?.disponibilite],
+    ['Infrastructures · Toilettes fonctionnelles', infra.toilettesFonctionnelles], ['Infrastructures · Électricité', infra.electriciteDetail?.sources],
+    ['Infrastructures · Connectivité', infra.connectivite?.internet ?? infra.connectivite?.reseauMobile],
+    ['Infrastructures · Accessibilité', infra.accessibilite?.route], ['Infrastructures · État du bâtiment', infra.etatBatiment?.etat],
+    ['Ressources humaines · Personnel par fonction', (f.personnel ?? []).filter((p) => p.nombre != null)],
+    ['Équipements · Matériel par service', f.equipements],
+    ['Opérationnel · Fonctionnement 24h/24', op.fonctionnement24h], ['Opérationnel · Urgences / garde', op.urgences?.disponible],
+    ['Opérationnel · Disponibilité des intrants', op.intrants?.etat], ['Opérationnel · Moyens de référence', op.moyensReference],
     ['Opérationnel · Système de rapportage', op.systemeRapportage], ['Opérationnel · Date de dernière évaluation', op.dateDerniereEvaluation],
-    ...(profil ? V.champsVolet(profil, f[profil]) : []),
   ];
 }
 
@@ -562,7 +707,7 @@ module.exports = {
   NIVEAUX_SOINS, TITRES_RESPONSABLE, DOMAINES_RESPONSABILITE, CANAUX_CONTACT, PROGRAMMES, METHODES_GPS, SOURCES_CODE,
   DISPONIBILITES_SERVICE, MOTIFS_INDISPONIBILITE, ETATS_BATIMENT, STABILITES, CONTINUITES, ROUTES, SOURCES_ELECTRICITE, CATEGORIES_RH,
   CATEGORIES_EQUIPEMENT, PREUVES_EQUIPEMENT, MOYENS_REFERENCE, SYSTEMES_RAPPORTAGE, ETATS_INTRANTS, TYPES_PIECE,
-  rempli, nomPersonne, abrege, rattachement, calculsEquipements, calculsRh, calculsEffectifs, modulesActifs, modulesPrevus, servicesPlateforme,
-  populationRecente, calculsCibles, calculsCapacites, controler, completude, champsManquants,
+  rempli, nomPersonne, abrege, rattachement, calculsEquipements, calculsRh, calculsEffectifs, calculsPersonnel, modulesActifs, modulesPrevus,
+  serviceDuModule, servicesPlateforme, populationRecente, calculsCibles, calculsCapacites, deduire, controler, completude, champsManquants,
   profilDe: V.profilDe,
 };

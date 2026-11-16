@@ -8,6 +8,7 @@ const partogramme = require('../config/partogramme');
 const vaccination = require('../config/vaccination');
 const ficheEtablissement = require('../config/ficheEtablissement');
 const ficheSpecifique = require('../config/ficheSpecifique');
+const catalogueStructure = require('../config/catalogueStructure');
 
 const router = express.Router();
 
@@ -44,6 +45,8 @@ router.get('/fiche-etablissement', (req, res) => {
     listes,
     profilDuType: ficheSpecifique.PROFIL_DU_TYPE,
     volets: { hopital: ficheSpecifique.formulaire('hopital'), centreSante: ficheSpecifique.formulaire('centreSante') },
+    /** Catalogues de la fiche « Identification générale » (types, services, personnel, équipements…). */
+    catalogue: catalogueStructure.catalogue(),
   });
 });
 

@@ -206,7 +206,7 @@ test('contrôle automatique : champs obligatoires manquants bloquent la soumissi
   assert.equal(r.status, 201, JSON.stringify(r.corps));
   const s = await appel('saisie', 'POST', `/comite/etablissements/${r.corps.etablissement.id}/fiche/circuit/soumettre`);
   assert.equal(s.status, 422);
-  assert.ok(s.corps.erreurs.some((m) => /Statut actuel/.test(m)));
+  assert.ok(s.corps.erreurs.some((m) => /Statut de fonctionnement/.test(m)));
   assert.ok(s.corps.erreurs.some((m) => /SNIS-001 est déjà attribué/.test(m)), 'doublon de code SNIS bloquant');
 });
 
@@ -364,4 +364,108 @@ test('référentiel : listes et volets du formulaire dynamique', async () => {
   assert.equal(r.corps.volets.hopital.sections.length, 7);
   assert.equal(r.corps.volets.centreSante.sections.length, 9);
   assert.ok(r.corps.listes.NIVEAUX_SOINS.includes('Premier recours'));
+});
+
+test('fiche « Identification générale » : chaque information saisie une fois, le reste est déduit', async () => {
+  const equipement = (categorie, nom, total, fonctionnels) => ({ categorie, nom, total, fonctionnels });
+  const hopital = {
+    ...etablissement('Hôpital Général de Moba'), type: 'Hôpital', zonesSante: ['Moba'], aireSante: 'Moba-Centre', adresse: 'Avenue du Lac 4, Kapemba, Moba',
+    medecinChef: chef('chef.moba@essai.test'),
+    fiche: {
+      identification: { categorie: 'HGR', statutActuel: 'Opérationnel', dateOuverture: '1987-03-15', codeSnis: 'SNIS-MOBA' },
+      localisation: { territoire: 'Moba', quartier: 'Kapemba', avenue: 'Avenue du Lac', numero: '4' },
+      organisation: {
+        statutJuridique: 'Public', modeGestion: 'Étatique', titreResponsable: 'Médecin directeur', datePriseFonction: '2024-01-02',
+        responsable: { nom: 'MWAMBA', prenom: 'Aline', fonction: '', telephone: '+243810000000' },
+      },
+      services: [
+        { service: 'CPN', existence: 'Oui', disponible: 'Oui', fonctionnel: 'Oui' },
+        { service: 'Salle d’accouchement', existence: 'Oui', disponible: 'Oui', fonctionnel: 'Oui' },
+        { service: 'Vaccination et PEV', existence: 'Oui', disponible: 'Oui', fonctionnel: 'Oui' },
+        { service: 'Blocs opératoires', existence: 'Oui', disponible: 'Oui', fonctionnel: 'Partiel' },
+      ],
+      infrastructures: {
+        batiments: 6, batimentsFonctionnels: 4,
+        litsParUnite: [{ unite: 'Maternité', installes: 20, operationnels: 15 }, { unite: 'Pédiatrie', installes: 10, operationnels: 10 }],
+        eau: { continuite: 'Intermittente' }, electriciteDetail: { sources: ['Solaire', 'Groupe électrogène'], heuresParJour: 24 },
+      },
+      personnel: [{ fonction: 'Médecin directeur', nombre: 1 }, { fonction: 'Sage-femme', nombre: 6 }],
+      equipements: [equipement('Vaccination', 'Réfrigérateur spécialisé pour vaccins', 2, 1), equipement('CPN', 'Tensiomètre', 3, 3)],
+      populations: [{ annee: 2026, totale: 120000, source: 'DPS', tranches: { moins1: 4000, de12a23m: 3800, de0a23m: 7800 } }],
+    },
+  };
+  const r = await formulaire('saisie', 'POST', '/comite/etablissements', hopital);
+  assert.equal(r.status, 201, JSON.stringify(r.corps));
+  const e = r.corps.etablissement;
+  assert.equal(e.lits, 30, 'lits de l’établissement = somme des lits installés par unité');
+  assert.equal(e.responsable, 'Aline MWAMBA');
+  assert.equal(e.fonctionResponsable, 'Médecin directeur', 'fonction = titre choisi, pas ressaisie');
+
+  const f = (await appel('saisie', 'GET', `/comite/etablissements/${e.id}/fiche`)).corps;
+  const { identification: id, infrastructures: infra } = f.fiche;
+  assert.equal(id.niveauSanitaire, 'Zone', 'niveau sanitaire déduit de la catégorie HGR');
+  assert.equal(id.anneeCreation, 1987, 'année déduite de la date de mise en service');
+  assert.equal(id.maternite, 'Oui');
+  assert.equal(id.chirurgie, 'Oui');
+  assert.equal(infra.batimentsHorsService, 2, 'hors service = total − fonctionnels');
+  assert.deepEqual([infra.litsTotal, infra.litsFonctionnels, infra.litsMaternite], [30, 25, 15]);
+  assert.equal(infra.blocOperatoire, 'Oui');
+  assert.equal(infra.eau.disponibilite, 'Intermittente');
+  assert.equal(infra.electricite, 'Oui');
+  assert.equal(infra.groupeElectrogene, 'Oui');
+  assert.equal(infra.electriciteDetail.continuite, 'Continue', '24 h / 24 → continue');
+  assert.equal(infra.chaineFroid, 'Oui', 'déduite du réfrigérateur à vaccins fonctionnel');
+  assert.deepEqual(f.calculs.modulesPrevus, ['CPN', 'Accouchement', 'Vaccination'], 'services du catalogue → modules AMI');
+  assert.equal(f.calculs.personnel.total, 7);
+  const fe = f.calculs.cibles.lignes.find((l) => l.cible === 'FE');
+  assert.deepEqual([fe.cibleAnnuelle, fe.cibleSemestrielle, fe.cibleTrimestrielle, fe.cibleMensuelle], [4800, 2400, 1200, 400]);
+  assert.ok(f.calculs.champsManquants.every((m) => !/Niveau sanitaire|Distance|Tutelle/.test(m)), 'complétude limitée aux champs de la fiche');
+
+  // Centre de santé : la catégorie suit le type, même si une autre est envoyée.
+  const cs = await formulaire('saisie', 'POST', '/comite/etablissements', {
+    ...etablissement('Centre de Santé Kirungu'), aireSante: 'Kirungu', medecinChef: chef('chef.kirungu@essai.test'),
+    fiche: { ...fiche(), identification: { ...fiche().identification, codeSnis: 'SNIS-KIR', categorie: 'HGR' } },
+  });
+  assert.equal(cs.status, 201, JSON.stringify(cs.corps));
+  const fcs = (await appel('saisie', 'GET', `/comite/etablissements/${cs.corps.etablissement.id}/fiche`)).corps.fiche;
+  assert.equal(fcs.identification.categorie, 'CS');
+  assert.equal(fcs.identification.niveauSanitaire, 'Aire');
+
+  // Un hôpital doit avoir une catégorie d'hôpital ; une fonction ou un service saisi deux fois est refusé.
+  const p = await appel('saisie', 'PATCH', `/comite/etablissements/${e.id}/fiche`, {
+    fiche: {
+      identification: { categorie: 'CS' },
+      personnel: [{ fonction: 'Sage-femme', nombre: 2 }, { fonction: 'Sage-femme', nombre: 3 }],
+      services: [...hopital.fiche.services, { service: 'CPN', existence: 'Oui', fonctionnel: 'Non' }],
+    },
+  });
+  assert.equal(p.status, 200, JSON.stringify(p.corps));
+  const s = await appel('saisie', 'POST', `/comite/etablissements/${e.id}/fiche/circuit/soumettre`);
+  assert.equal(s.status, 422);
+  assert.ok(s.corps.erreurs.some((m) => /ne correspond pas au type « Hôpital »/.test(m)), JSON.stringify(s.corps.erreurs));
+  assert.ok(s.corps.erreurs.some((m) => /« Sage-femme » saisi deux fois/.test(m)));
+  assert.ok(s.corps.erreurs.some((m) => /« CPN » saisi deux fois/.test(m)));
+
+  // Fonction hors catalogue refusée.
+  const x = await appel('saisie', 'PATCH', `/comite/etablissements/${e.id}/fiche`, { fiche: { personnel: [{ fonction: 'Astronaute', nombre: 1 }] } });
+  assert.equal(x.status, 400);
+});
+
+test('référentiel : catalogue de la fiche « Identification générale »', async () => {
+  const { corps } = await appel('chef', 'GET', '/referentiels/fiche-etablissement');
+  const c = corps.catalogue;
+  assert.deepEqual(c.categoriesDuType.Hôpital, ['HGR', 'HP', 'HS', 'HN', 'HM']);
+  assert.equal(c.services.hopital.length, 3);
+  assert.equal(c.services.centreSante.length, 5);
+  assert.equal(c.personnel.hopital.length, 5);
+  assert.equal(c.equipements.centreSante.length, 9);
+  for (const profil of ['hopital', 'centreSante']) {
+    const noms = c.services[profil].flatMap((g) => g.elements);
+    assert.equal(new Set(noms).size, noms.length, `aucun service en double (${profil})`);
+    const fonctions = c.personnel[profil].flatMap((g) => g.elements);
+    assert.equal(new Set(fonctions).size, fonctions.length, `aucune fonction en double (${profil})`);
+    for (const g of c.equipements[profil]) assert.equal(new Set(g.elements).size, g.elements.length, `${g.titre} sans doublon`);
+  }
+  assert.ok(!c.services.centreSante.flatMap((g) => g.elements).includes('Hygiène et assainissement'), 'fusionné avec « Eau, hygiène et assainissement »');
+  assert.ok(!c.groupesPopulation.some((g) => g.libelle === 'Femmes de 15 à 49 ans'), 'même groupe que les femmes en âge de procréer');
 });

@@ -9,6 +9,8 @@ const messagesUrgence = require('../controllers/messagesUrgence');
 const router = express.Router();
 
 router.post('/connexion', ctrl.connexion);
+// Liens des guides d'utilisation du site web (avant ou après connexion).
+router.get('/guides', ctrl.guides);
 // Carte patiente ouverte hors de l'application (lecteur PDF) : lien temporaire signé.
 router.get('/carte.pdf', ctrl.carteParLien);
 

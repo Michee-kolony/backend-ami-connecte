@@ -613,6 +613,10 @@ test('espace patiente : connexion, accueil, carnet du bébé et rendez-vous ; cl
   assert.equal(await domaine.domaineAdmin(), 'https://admin.ami-sante.test');
   process.env.APP_URL = 'https://tableau.ami-sante.test';
   assert.equal(await domaine.domaineAdmin(), 'https://tableau.ami-sante.test', 'APP_URL configurée prioritaire');
+  // Guides d'utilisation : adresses complètes sur le domaine du site, sans connexion.
+  const guides = await appel(null, 'GET', '/espace-patiente/guides');
+  assert.equal(guides.status, 200);
+  assert.equal(guides.corps.guides.find((g) => g.cle === 'patiente').url, 'https://tableau.ami-sante.test/guide-application-patiente');
   if (appUrl === undefined) delete process.env.APP_URL; else process.env.APP_URL = appUrl;
   const jetonSession = enTetes.Authorization.split(' ')[1];
   assert.equal((await fetch(`${api}/espace-patiente/carte.pdf?jeton=${jetonSession}`)).status, 401, 'jeton de session refusé dans un lien');
