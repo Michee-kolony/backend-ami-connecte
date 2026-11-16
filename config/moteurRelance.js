@@ -2,7 +2,8 @@
 //   1. détection   : chaque règle active parcourt les rendez-vous, grossesses, naissances et doses ;
 //   2. vérification: prestation déjà enregistrée, dossier archivé, motif déjà traité → aucune tâche ;
 //   3. création    : une tâche par parcours et par personne (les autres motifs y sont reliés) ;
-//   4. attribution : au RECO actif de la structure dont le secteur couvre le quartier, le moins chargé ;
+//   4. attribution : au RECO attitré de la patiente (config/affectationReco.js), sinon au RECO actif
+//                    de la structure dont le secteur couvre le quartier, le moins chargé ;
 //   + confirmation : une prestation enregistrée dans le dossier de soins par un soignant confirme la
 //                    réintégration (jamais la seule déclaration du RECO) ;
 //   + alertes      : échéance proche, retard, urgence non prise, orientation non confirmée.
@@ -115,6 +116,12 @@ async function choisirReco({ etablissementId, zone, aireSante }) {
   return candidats.sort((x, y) => (charge.get(x.id) ?? 0) - (charge.get(y.id) ?? 0) || x.matricule.localeCompare(y.matricule))[0];
 }
 
+/** RECO attitré de la patiente (config/affectationReco.js), s'il est actif dans la structure de la tâche. */
+async function recoAttitre(patiente, etablissementId) {
+  if (!patiente?.recoId || !etablissementId) return null;
+  return Reco.findOne({ _id: patiente.recoId, statut: 'Actif', etablissementId });
+}
+
 /** Attribue (ou réattribue) la tâche à un RECO ; l'historique garde l'ancien RECO. */
 function attribuer(tache, reco, par, { motif = '', le = new Date() } = {}) {
   const ancien = tache.recoId ? String(tache.recoId) : null;
@@ -224,7 +231,7 @@ const cleTache = (parcoursCode, c) => `${parcoursCode}:${c.personneType}:${Strin
  */
 async function traiterCandidat(c, { regle, parcours }, maintenant) {
   if (await TacheRelance.exists({ clesMotifs: c.cle })) return null;
-  const patiente = await Patiente.findById(c.patienteId).select('statut etablissementId adresse');
+  const patiente = await Patiente.findById(c.patienteId).select('statut etablissementId adresse recoId');
   if (!patiente || patiente.statut === 'Archivé') return null;
   const p = regle.parametres;
   const motif = {
@@ -257,7 +264,7 @@ async function traiterCandidat(c, { regle, parcours }, maintenant) {
       creePar: AUTEUR_SYSTEME,
     });
     tache.historique.push({ action: 'Création', nouveauStatut: 'Nouvelle', motif: motif.libelle, details: { regle: regle.code, version: regle.version }, par: AUTEUR_SYSTEME, le: maintenant });
-    const reco = await choisirReco({ etablissementId, zone: tache.zone, aireSante: tache.aireSante });
+    const reco = await recoAttitre(patiente, etablissementId) ?? await choisirReco({ etablissementId, zone: tache.zone, aireSante: tache.aireSante });
     if (reco) attribuer(tache, reco, AUTEUR_SYSTEME, { le: maintenant });
     try {
       await tache.save();

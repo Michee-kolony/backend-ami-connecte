@@ -107,6 +107,22 @@ const patienteSchema = new mongoose.Schema({
 
   etablissementId: { type: String, default: null },
   /**
+   * Relais communautaire (RECO) attitré : choisi à l'enregistrement parmi les RECO actifs de la
+   * structure qui couvrent son quartier (sinon sa commune, sinon son aire de santé), ou désigné par
+   * le personnel. Il suit la patiente, voit son dossier minimal dans l'application RECO et reçoit
+   * ses alertes et tâches de relance.
+   */
+  recoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Reco', default: null, index: true },
+  recoAffectation: {
+    type: new mongoose.Schema({
+      /** Automatique : recalculée si l'adresse change ; Manuelle : gardée tant que le RECO est actif. */
+      mode: { type: String, enum: ['Automatique', 'Manuelle'], required: true },
+      le: { type: Date, required: true },
+      par: { type: auteurSchema, required: true },
+    }, { _id: false }),
+    default: null,
+  },
+  /**
    * Origine du dossier : enregistrement CPN complet, admission directe en salle de travail (sans CPN),
    * ou enregistrement de son enfant né hors plateforme (vaccination, sans CPN ni accouchement ici).
    */

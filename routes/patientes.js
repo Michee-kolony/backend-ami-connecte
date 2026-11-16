@@ -14,6 +14,9 @@ router.use(authentifier);
 // Suivi (tout le personnel soignant) : recherche minimisée, grossesse en cours et rendez-vous.
 router.get('/', patientes.rechercher);
 router.get('/:id/suivi', patientes.suivi);
+// RECO attitré : liste des RECO possibles (le conseillé marqué) et changement (ou retour à l'automatique).
+router.get('/:id/recos', patientes.recosPossibles);
+router.put('/:id/reco', patientes.changerReco);
 
 // Dossier médical complet : médecins uniquement (infirmier·ères refusé·es et journalisé·es).
 router.use(exigerMedecin);

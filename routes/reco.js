@@ -20,6 +20,8 @@ router.post('/taches/:numero/actions', ctrl.agir);
 // Actions faites hors connexion, renvoyées ensemble à la reconnexion (sans doublon).
 router.post('/synchroniser', ctrl.synchroniser);
 router.post('/signalements', ctrl.signaler);
+// Patientes confiées au RECO (lui seul les voit) : de quoi les retrouver et les suivre.
+router.get('/patientes', ctrl.patientes);
 router.get('/alertes', ctrl.alertes);
 router.post('/alertes/:id/accuser', ctrl.accuserAlerte);
 // Messagerie avec les soignants et les chauffeurs de son établissement (discussions chiffrées).

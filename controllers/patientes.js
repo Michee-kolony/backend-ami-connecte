@@ -17,6 +17,8 @@ const cpn = require('../config/cpn');
 const { envoyerFichier, supprimerFichier, urlSignee, lireFichier } = require('../config/r2');
 const { messageValidation } = require('../config/erreursFr');
 const { verifierVersion } = require('../config/conflits');
+const affectation = require('../config/affectationReco');
+const Reco = require('../models/Reco');
 
 const DOSSIER_PHOTOS = 'patiente';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -24,6 +26,18 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Mot de passe de l'espace patiente : 8 caractères au moins, avec lettres et chiffres. */
 function motDePasseValide(m) {
   return typeof m === 'string' && m.length >= 8 && m.length <= 128 && /[A-Za-z]/.test(m) && /\d/.test(m);
+}
+
+/** RECO attitré affiché dans le dossier : identité, contact, secteur et mode d'affectation. */
+async function vueReco(patiente) {
+  if (!patiente.recoId) return null;
+  const reco = await Reco.findById(patiente.recoId).select('matricule prenom nom postnom telephone photo zones aireSante statut');
+  if (!reco) return null;
+  return {
+    id: reco.id, matricule: reco.matricule, prenom: reco.prenom, nom: reco.nom, postnom: reco.postnom, telephone: reco.telephone,
+    photo: reco.photo, zones: reco.zones, aireSante: reco.aireSante, statut: reco.statut,
+    mode: patiente.recoAffectation?.mode ?? null, le: patiente.recoAffectation?.le ?? null,
+  };
 }
 exports.motDePasseValide = motDePasseValide;
 
@@ -369,6 +383,15 @@ exports.creer = async (req, res) => {
     creePar: auteur,
     numero: await Patiente.prochainNumero(),
   });
+  // RECO attitré : celui choisi dans le formulaire (actif, même structure), sinon celui du secteur.
+  let changementReco;
+  if (d.recoId) {
+    const reco = mongoose.isValidObjectId(d.recoId) ? await affectation.recoDesigne(patiente, d.recoId) : null;
+    if (!reco) throw erreur(400, 'Relais communautaire introuvable ou suspendu dans cet établissement.');
+    changementReco = affectation.placer(patiente, reco, auteur, 'Manuelle');
+  } else {
+    changementReco = await affectation.affecterAutomatiquement(patiente, auteur);
+  }
   const grossesse = new Grossesse({
     patienteId: patiente._id,
     numero: 1,
@@ -420,7 +443,17 @@ exports.creer = async (req, res) => {
   if (grossesse.datation) await journaliser(req, { action: 'grossesse.datation', patienteId: patiente._id, ressource: { type: 'grossesse', id: grossesse.id }, details: { methode: grossesse.datation.methode } });
   if (rdv) await journaliser(req, { action: 'rdv.creation', patienteId: patiente._id, ressource: { type: 'rendezvous', id: rdv.id } });
   const consultation = premiereCpn ? await consultations.creerBrouillon(grossesse, premiereCpn, req) : null;
-  res.status(201).json({ id: patiente.id, numero: patiente.numero, grossesseId: grossesse.id, consultationId: consultation?.id ?? null });
+  await affectation.prevenir(patiente, changementReco, { nouvelle: true });
+  if (patiente.recoId) {
+    await journaliser(req, {
+      action: 'patiente.reco', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero },
+      details: { reco: changementReco.apres, mode: patiente.recoAffectation.mode },
+    });
+  }
+  res.status(201).json({
+    id: patiente.id, numero: patiente.numero, grossesseId: grossesse.id, consultationId: consultation?.id ?? null,
+    reco: await vueReco(patiente),
+  });
 };
 
 /** Médecin de la première consultation : type « Première consultation prénatale », sinon la plus ancienne finalisée. */
@@ -462,6 +495,7 @@ exports.dossier = async (req, res) => {
   res.json({
     etablissement: etablissement ? { id: etablissement.id, code: etablissement.code, nom: etablissement.nom, province: etablissement.province } : null,
     patiente: { ...patiente.toJSON(), age: patiente.age(), photoUrl: await urlSignee(patiente.photoCle) },
+    reco: await vueReco(patiente),
     grossesses: grossesses.map((g) => ({
       ...g.toJSON(),
       agJours: g.statut === 'En cours' ? g.agJoursLe() : null,
@@ -505,6 +539,10 @@ exports.modifier = async (req, res) => {
   const modifies = patiente.modifiedPaths().filter((p) => !p.includes('.'));
   if (!modifies.length) return res.json({ ...patiente.toJSON(), age: patiente.age() });
   patiente.modifiePar = auteurDe(req.soignant);
+  // Quartier, commune ou aire de santé changés (ou dossier sans RECO) : le RECO du secteur reprend
+  // le suivi ; un RECO désigné à la main est gardé tant qu'il est actif.
+  const secteurChange = ['adresse.quartier', 'adresse.commune', 'adresse.aireSante'].some((k) => patiente.isModified(k));
+  const changementReco = secteurChange || !patiente.recoId ? await affectation.affecterAutomatiquement(patiente, patiente.modifiePar) : null;
   try {
     await patiente.save();
   } catch (err) {
@@ -512,7 +550,45 @@ exports.modifier = async (req, res) => {
     throw err;
   }
   await journaliser(req, { action: 'patiente.modification', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero }, details: { champs: modifies } });
-  res.json({ ...patiente.toJSON(), age: patiente.age() });
+  if (changementReco) await affectation.prevenir(patiente, changementReco);
+  res.json({ ...patiente.toJSON(), age: patiente.age(), reco: await vueReco(patiente) });
+};
+
+/**
+ * Changer le RECO attitré : { recoId } (choix manuel, RECO actif de la structure de la patiente)
+ * ou { recoId: null } (retour au choix automatique selon son secteur).
+ */
+exports.changerReco = async (req, res) => {
+  const patiente = await trouverPatiente(req, req.params.id);
+  const par = auteurDe(req.soignant);
+  let changement;
+  if (req.body?.recoId) {
+    const reco = mongoose.isValidObjectId(req.body.recoId) ? await affectation.recoDesigne(patiente, req.body.recoId) : null;
+    if (!reco) throw erreur(400, 'Relais communautaire introuvable ou suspendu dans l’établissement de la patiente.');
+    changement = affectation.placer(patiente, reco, par, 'Manuelle');
+  } else {
+    changement = await affectation.affecterAutomatiquement(patiente, par, { forcer: true });
+  }
+  patiente.modifiePar = par;
+  await patiente.save();
+  await affectation.prevenir(patiente, changement, { nouvelle: !patiente.recoId });
+  await journaliser(req, {
+    action: 'patiente.reco', patienteId: patiente._id, ressource: { type: 'patiente', id: patiente.numero },
+    details: { avant: changement.avant, reco: changement.apres, mode: patiente.recoAffectation?.mode ?? null },
+  });
+  res.json({ reco: await vueReco(patiente) });
+};
+
+/** RECO actifs de l'établissement de la patiente (liste du choix manuel), le RECO conseillé marqué. */
+exports.recosPossibles = async (req, res) => {
+  const patiente = await trouverPatiente(req, req.params.id);
+  const recos = await Reco.find({ statut: 'Actif', etablissementId: patiente.etablissementId }).sort({ nom: 1, prenom: 1 })
+    .select('matricule prenom nom postnom telephone zones aireSante');
+  const conseille = await affectation.choisirRecoPatiente(patiente);
+  res.json(recos.map((x) => ({
+    id: x.id, matricule: x.matricule, nom: [x.prenom, x.nom, x.postnom].filter(Boolean).join(' '), telephone: x.telephone,
+    zones: x.zones, aireSante: x.aireSante, conseille: conseille?.id === x.id,
+  })));
 };
 
 /** Nouvelle grossesse (la précédente doit être terminée). */
@@ -666,6 +742,7 @@ exports.suivi = async (req, res) => {
       contactUrgence: { nom: urgence.nom ?? '', lien: urgence.lien ?? '', telephone: urgence.telephone ?? '' },
     },
     etablissement: etablissement ? { id: etablissement.id, nom: etablissement.nom, province: etablissement.province } : null,
+    reco: await vueReco(patiente),
     grossesse: grossesse ? {
       id: grossesse.id, numero: grossesse.numero, statut: grossesse.statut,
       agJours: grossesse.agJoursLe(), dpa: grossesse.datation?.dpa ?? null, datee: !!grossesse.datation,

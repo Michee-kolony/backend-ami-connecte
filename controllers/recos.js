@@ -11,6 +11,8 @@ const { auteurDe, enregistrerAvecMatricule } = require('../models/commun');
 const { journaliser } = require('../config/audit');
 const { ROLES_RESPONSABLE } = require('../config/relance');
 const moteur = require('../config/moteurRelance');
+const affectation = require('../config/affectationReco');
+const Patiente = require('../models/Patiente');
 const presence = require('../config/presence');
 const { envoyerFichier, supprimerFichier } = require('../config/r2');
 const { motDePasseValide, genererMotDePasse, donneesDe } = require('./flotte');
@@ -30,7 +32,14 @@ async function vues(liste) {
     { $group: { _id: '$recoId', ouvertes: { $sum: 1 }, enRetard: { $sum: { $cond: [{ $lt: ['$echeance', new Date()] }, 1, 0] } } } },
   ]);
   const parReco = new Map(charge.map((c) => [String(c._id), c]));
-  return liste.map((x) => ({ ...x.toJSON(), ouvertes: parReco.get(x.id)?.ouvertes ?? 0, enRetard: parReco.get(x.id)?.enRetard ?? 0 }));
+  const suivies = await Patiente.aggregate([
+    { $match: { recoId: { $in: liste.map((x) => x._id) }, statut: { $ne: 'Archivé' } } },
+    { $group: { _id: '$recoId', n: { $sum: 1 } } },
+  ]);
+  const patientes = new Map(suivies.map((c) => [String(c._id), c.n]));
+  return liste.map((x) => ({
+    ...x.toJSON(), ouvertes: parReco.get(x.id)?.ouvertes ?? 0, enRetard: parReco.get(x.id)?.enRetard ?? 0, patientes: patientes.get(x.id) ?? 0,
+  }));
 }
 exports.vues = vues;
 
@@ -94,6 +103,8 @@ exports.creer = async (req, res) => {
   // Matricule (identifiant de connexion) attribué au hasard par le serveur, jamais saisi.
   await enregistrerAvecMatricule(reco, 'RECO');
   await journaliser(req, { action: 'reco.creation', ressource: { type: 'reco', id: reco.matricule } });
+  // Patientes de son secteur encore sans RECO : confiées à lui (il en est alerté).
+  await affectation.rattacherPatientesDuSecteur(reco, auteurDe(req.soignant));
   const [vue] = await vues([reco]);
   // Le mot de passe n'est renvoyé qu'une fois, pour être remis au RECO en personne.
   res.status(201).json({ reco: vue, motDePasse: d.motDePasse ? null : motDePasse });
@@ -115,6 +126,12 @@ exports.modifier = async (req, res) => {
   await reco.save();
   if (anciennePhoto) supprimerFichier(anciennePhoto).catch(() => {});
   await journaliser(req, { action: 'reco.modification', ressource: { type: 'reco', id: reco.matricule }, details: { champs: Object.keys(d), photo: !!req.file } });
+  // Secteur changé : les patientes hors de son nouveau secteur passent au RECO de leur quartier,
+  // et il reprend celles de son secteur restées sans RECO.
+  if (['zones', 'aireSante', 'etablissementId'].some((k) => d[k] !== undefined)) {
+    await affectation.reaffecterPatientesDe(reco._id, auteurDe(req.soignant));
+    await affectation.rattacherPatientesDuSecteur(reco, auteurDe(req.soignant));
+  }
   const [vue] = await vues([reco]);
   res.json(vue);
 };
@@ -134,6 +151,10 @@ exports.changerStatut = async (req, res) => {
   if (statut === 'Suspendu') {
     const taches = await TacheRelance.find({ recoId: reco._id, ouverte: true }).select('numero etablissementId');
     if (taches.length) await moteur.alerter('non_attribuee', { etablissementId: reco.etablissementId, taches: taches.map((t) => t.numero) });
+    // Ses patientes sont confiées à un autre RECO de leur secteur (sinon signalées au superviseur).
+    await affectation.reaffecterPatientesDe(reco._id, auteurDe(req.soignant));
+  } else {
+    await affectation.rattacherPatientesDuSecteur(reco, auteurDe(req.soignant));
   }
   await journaliser(req, { action: 'reco.statut', ressource: { type: 'reco', id: reco.matricule }, details: { statut } });
   const [vue] = await vues([reco]);
@@ -182,6 +203,8 @@ exports.supprimer = async (req, res) => {
   presence.expulserReco(reco.id);
   // Ses alertes ne concernaient que lui : fermées (conservées pour l'historique).
   await AlerteRelance.updateMany({ destinataire: 'reco', recoId: reco._id, ouverte: true }, { ouverte: false, accuseLe: new Date(), accusePar: auteurDe(req.soignant) });
+  // Ses patientes sont confiées à un autre RECO de leur secteur (sinon signalées au superviseur).
+  await affectation.reaffecterPatientesDe(reco._id, auteurDe(req.soignant));
   if (reco.photoCle) supprimerFichier(reco.photoCle).catch(() => {});
   await journaliser(req, {
     action: 'reco.suppression', ressource: { type: 'reco', id: reco.matricule },

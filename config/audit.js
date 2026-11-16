@@ -7,6 +7,7 @@ const { auteurDe } = require('../models/commun');
 const ACTIONS = {
   'patiente.creation': 'Création du dossier',
   'patiente.modification': 'Modification des informations administratives',
+  'patiente.reco': 'Relais communautaire (RECO) attitré affecté ou changé',
   'patiente.suppression': 'Suppression définitive du dossier',
   'patiente.carte': 'Carte patiente générée (PDF)',
   'patiente.recherche': 'Recherche de patientes',

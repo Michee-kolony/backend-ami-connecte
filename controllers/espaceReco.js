@@ -11,6 +11,8 @@ const TacheRelance = require('../models/TacheRelance');
 const AlerteRelance = require('../models/AlerteRelance');
 const Patiente = require('../models/Patiente');
 const Enfant = require('../models/Enfant');
+const Grossesse = require('../models/Grossesse');
+const RendezVous = require('../models/RendezVous');
 const Etablissement = require('../models/Etablissement');
 const { journaliser } = require('../config/audit');
 const { urlSignee } = require('../config/r2');
@@ -148,7 +150,57 @@ exports.taches = async (req, res) => {
 
 exports.alertes = async (req, res) => {
   const alertes = await AlerteRelance.find({ destinataire: 'reco', recoId: req.reco._id }).sort({ derniereLe: -1 }).limit(50);
-  res.json(alertes.map((a) => ({ id: a.id, type: a.type, libelle: r.ALERTES[a.type].libelle, taches: a.taches, occurrences: a.occurrences, derniereLe: a.derniereLe, ouverte: a.ouverte })));
+  res.json(alertes.map((a) => ({
+    id: a.id, type: a.type, libelle: r.ALERTES[a.type].libelle, taches: a.taches, occurrences: a.occurrences, derniereLe: a.derniereLe, ouverte: a.ouverte,
+    // Détail des dernières occurrences (ex. « Nouvelle patiente confiée à votre suivi : … »), le plus récent d'abord.
+    messages: a.messages.slice(-10).reverse().map((m) => ({ texte: m.texte, le: m.le })),
+  })));
+};
+
+// --- Mes patientes ----------------------------------------------------------------------------
+
+/**
+ * Patientes confiées au RECO (et à lui seul) : de quoi la retrouver et la suivre à domicile —
+ * identité, photo, adresse, téléphone si un canal téléphonique est consenti, terme de la grossesse
+ * en cours, prochain rendez-vous au centre et tâches de relance ouvertes. Aucune donnée clinique
+ * (antécédents, examens, résultats, traitements).
+ */
+exports.patientes = async (req, res) => {
+  const patientes = await Patiente.find({ recoId: req.reco._id, statut: { $ne: 'Archivé' } })
+    .select('numero prenom nom postnom telephone telephonePartage consentements adresse photoCle statut recoAffectation')
+    .sort({ nom: 1, prenom: 1 });
+  const ids = patientes.map((p) => p._id);
+  const maintenant = new Date();
+  const [grossesses, rendezVous, taches] = await Promise.all([
+    Grossesse.find({ patienteId: { $in: ids }, statut: 'En cours' }).select('patienteId datation'),
+    RendezVous.find({ patienteId: { $in: ids }, statut: { $in: RendezVous.STATUTS_ACTIFS }, date: { $gte: new Date(maintenant - r.JOUR) } })
+      .sort({ date: 1 }).select('patienteId date enfantId'),
+    TacheRelance.find({ patienteId: { $in: ids }, recoId: req.reco._id, ouverte: true }).select('patienteId numero priorite'),
+  ]);
+  const grossesseDe = new Map(grossesses.map((g) => [String(g.patienteId), g]));
+  const rdvDe = new Map();
+  for (const rdv of rendezVous) if (!rdvDe.has(String(rdv.patienteId))) rdvDe.set(String(rdv.patienteId), rdv);
+  const tachesDe = new Map();
+  for (const t of taches) tachesDe.set(String(t.patienteId), [...(tachesDe.get(String(t.patienteId)) ?? []), t.numero]);
+  const vues = await Promise.all(patientes.map(async (p) => {
+    const g = grossesseDe.get(p.id);
+    const rdv = rdvDe.get(p.id);
+    const avecTelephone = canauxAutorises(p).some((c) => c !== 'Visite à domicile');
+    const a = p.adresse ?? {};
+    return {
+      id: p.id, numero: p.numero, nom: [p.prenom, p.nom, p.postnom].filter(Boolean).join(' '),
+      photoUrl: await urlSignee(p.photoCle, DUREE_LIEN_PHOTO_S),
+      commune: a.commune ?? '', quartier: a.quartier ?? '', avenue: a.avenue ?? '', repere: a.repere ?? '',
+      telephone: avecTelephone ? p.telephone : '', telephonePartage: !!p.telephonePartage,
+      canauxAutorises: canauxAutorises(p),
+      suivi: p.statut,
+      grossesse: g ? { semaines: g.agJoursLe() != null ? Math.floor(g.agJoursLe() / 7) : null, dpa: g.datation?.dpa ?? null } : null,
+      prochainRendezVous: rdv ? { date: rdv.date, pourEnfant: !!rdv.enfantId } : null,
+      tachesOuvertes: tachesDe.get(p.id) ?? [],
+      confieeLe: p.recoAffectation?.le ?? null,
+    };
+  }));
+  res.json({ serveurLe: maintenant, patientes: vues });
 };
 
 exports.accuserAlerte = async (req, res) => {
