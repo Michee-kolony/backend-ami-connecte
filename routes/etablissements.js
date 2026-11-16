@@ -10,6 +10,8 @@ const router = express.Router();
 router.use(authentifier);
 
 router.get('/', ctrl.lister);
+// Catalogue de la fiche « Identification générale » (services, personnel, équipements…).
+router.get('/catalogue', fiche.catalogue);
 // Fiche AMI : le médecin chef de l'établissement la consulte et en complète les champs facultatifs.
 router.get('/:id/fiche', fiche.obtenirChef);
 router.patch('/:id/fiche', fiche.modifierChef);

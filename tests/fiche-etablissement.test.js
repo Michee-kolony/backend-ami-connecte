@@ -469,3 +469,13 @@ test('référentiel : catalogue de la fiche « Identification générale »', as
   assert.ok(!c.services.centreSante.flatMap((g) => g.elements).includes('Hygiène et assainissement'), 'fusionné avec « Eau, hygiène et assainissement »');
   assert.ok(!c.groupesPopulation.some((g) => g.libelle === 'Femmes de 15 à 49 ans'), 'même groupe que les femmes en âge de procréer');
 });
+
+test('catalogue : servi au comité et au médecin chef, dans leur espace', async () => {
+  const comite = await appel('saisie', 'GET', '/comite/etablissements/catalogue');
+  assert.equal(comite.status, 200, JSON.stringify(comite.corps));
+  assert.equal(comite.corps.services.hopital.length, 3);
+  const chefR = await appel('chef', 'GET', '/etablissements/catalogue');
+  assert.equal(chefR.status, 200, JSON.stringify(chefR.corps));
+  assert.equal(chefR.corps.personnel.centreSante.length, 4);
+  assert.equal((await appel(null, 'GET', '/comite/etablissements/catalogue')).status, 401, 'authentification requise');
+});

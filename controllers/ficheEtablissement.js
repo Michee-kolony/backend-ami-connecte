@@ -399,6 +399,14 @@ async function appliquerDepuisFormulaire(e, brut, req, { creation }) {
   e.fiche.circuit.completude = R.completude(e);
 }
 
+/**
+ * Catalogue de la fiche « Identification générale » : servi dans l'espace du comité et dans celui
+ * du médecin chef (chacun avec son authentification ; /referentiels refuse les jetons du comité).
+ */
+exports.catalogue = (req, res) => {
+  res.json(require('../config/catalogueStructure').catalogue());
+};
+
 exports.aires = repondre(async (req, res) => {
   const province = String(req.query.province || '');
   const zone = String(req.query.zone || '');

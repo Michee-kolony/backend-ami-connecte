@@ -28,6 +28,7 @@ router.delete('/membres/:id', ctrl.supprimerMembre);
 router.get('/etablissements', ctrl.listerEtablissements);
 // Fiche AMI (étapes 1 à 10) : saisie complète, pièces jointes et circuit de validation.
 router.get('/etablissements/aires', fiche.aires);
+router.get('/etablissements/catalogue', fiche.catalogue);
 router.get('/etablissements/:id/fiche', fiche.obtenirComite);
 router.patch('/etablissements/:id/fiche', fiche.modifierComite);
 router.post('/etablissements/:id/fiche/pieces', televerserPieceEtablissement, fiche.ajouterPiece);
