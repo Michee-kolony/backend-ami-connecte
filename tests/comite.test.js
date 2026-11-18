@@ -29,7 +29,7 @@ async function formulaire(qui, chemin, champs) {
 }
 
 const etablissement = (nom) => ({
-  nom, type: 'Centre de santé', secteur: 'Public', province: 'Kinshasa', zonesSante: ['Lemba', 'Limete'],
+  nom, type: 'Centre de santé', secteur: 'Public', province: 'Kinshasa', zonesSante: ['Lemba'],
   adresse: 'Avenue fictive', telephone: '+243 000', responsable: 'Fictif', services: ['CPN', 'Maternité'],
 });
 const chef = (email, prenom = 'Clarisse') => ({
@@ -86,8 +86,8 @@ test('le comité enregistre un établissement et son médecin chef ; le médecin
   const r = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Alpha'), medecinChef: chef('chef.alpha@essai.test') });
   assert.equal(r.status, 201, JSON.stringify(r.corps));
   assert.match(r.corps.etablissement.code, /^ETS-KIN-\d{4}$/);
-  assert.deepEqual(r.corps.etablissement.zonesSante, ['Lemba', 'Limete']);
-  assert.equal(r.corps.etablissement.zoneSante, 'Lemba', 'zone principale = première sélectionnée');
+  assert.deepEqual(r.corps.etablissement.zonesSante, ['Lemba']);
+  assert.equal(r.corps.etablissement.zoneSante, 'Lemba');
   assert.equal(r.corps.medecinChef.email, 'chef.alpha@essai.test');
   assert.match(r.corps.medecinChef.matricule, /^MED-/);
   assert.ok(r.corps.motDePasseTemporaire, 'mot de passe temporaire renvoyé une fois');
@@ -107,11 +107,14 @@ test('le comité enregistre un établissement et son médecin chef ; le médecin
   assert.equal(alpha.effectifs.soignants, 1);
 });
 
-test('zones de santé : au moins une, toutes de la province choisie', async () => {
+test('zone de santé : une seule, de la province choisie', async () => {
   const sansZone = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: [], medecinChef: chef('chef.zeta@essai.test') });
   assert.equal(sansZone.status, 400);
-  assert.match(sansZone.corps.message, /au moins une zone/);
-  const horsProvince = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: ['Lemba', 'Goma'], medecinChef: chef('chef.zeta@essai.test') });
+  assert.match(sansZone.corps.message, /Sélectionnez la zone/);
+  const plusieurs = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: ['Lemba', 'Limete'], medecinChef: chef('chef.zeta@essai.test') });
+  assert.equal(plusieurs.status, 400);
+  assert.match(plusieurs.corps.message, /Une seule zone/);
+  const horsProvince = await formulaire('comite', '/comite/etablissements', { ...etablissement('Centre Zêta'), zonesSante: ['Goma'], medecinChef: chef('chef.zeta@essai.test') });
   assert.equal(horsProvince.status, 400);
   assert.match(horsProvince.corps.message, /Goma/);
   const Etablissement = require('../models/Etablissement');
@@ -212,7 +215,7 @@ test('périmètre des indicateurs du comité : par établissement, par province,
   const Etablissement = require('../models/Etablissement');
   const auteur = { id: '64b000000000000000000001', nom: 'Fictif', role: 'Médecin' };
   const goma = await Etablissement.create({
-    ...etablissement('Centre Goma'), code: 'ETS-NKI-9001', province: 'Nord-Kivu', zonesSante: ['Goma', 'Karisimbi'],
+    ...etablissement('Centre Goma'), code: 'ETS-NKI-9001', province: 'Nord-Kivu', zonesSante: ['Goma', 'Karisimbi'], // fiche ancienne à plusieurs zones (encore lisible)
   });
   await Patiente.create({ numero: 'AC-PAT-880003', nom: 'Trois', prenom: 'Goma', etablissementId: goma.id, creePar: auteur });
   await Patiente.create({ numero: 'AC-PAT-880004', nom: 'Quatre', prenom: 'Goma', etablissementId: goma.id, creePar: auteur });
@@ -226,9 +229,9 @@ test('périmètre des indicateurs du comité : par établissement, par province,
   assert.equal((await stats({ provinceEtablissement: 'Nord-Kivu', zoneSante: 'Rutshuru' })).corps.totaux.patientes, 0, 'zone sans établissement');
   assert.equal((await stats({ etablissement: jetons.etabAlpha })).corps.totaux.patientes, 1);
 
-  const k = await lignes({ provinceEtablissement: 'Kinshasa', zoneSante: 'Limete' });
+  const k = await lignes({ provinceEtablissement: 'Kinshasa', zoneSante: 'Lemba' });
   assert.equal(k.status, 200);
-  assert.ok(k.corps.etablissements.every((e) => e.province === 'Kinshasa' && e.zonesSante.includes('Limete')));
+  assert.ok(k.corps.etablissements.every((e) => e.province === 'Kinshasa' && e.zonesSante.includes('Lemba')));
   assert.equal(k.corps.totaux.patientes, 2);
   const g = await lignes({ provinceEtablissement: 'Nord-Kivu' });
   assert.deepEqual(g.corps.etablissements.map((e) => e.nom), ['Centre Goma']);

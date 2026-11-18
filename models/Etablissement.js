@@ -33,7 +33,7 @@ const etablissementSchema = new mongoose.Schema({
   province: { type: String, required: true, trim: true },
   /** District sanitaire (en-tête de la fiche CPN), renseigné par le médecin chef. */
   districtSanitaire: { type: String, default: '', trim: true },
-  /** Zones de santé couvertes (référentiel config/zonesSante.js, au moins une, de la province). */
+  /** Zone de santé (référentiel config/zonesSante.js, une seule, de la province) ; tableau gardé pour les fiches anciennes à plusieurs zones. */
   zonesSante: { type: [{ type: String, trim: true }], default: undefined },
   /** Zone de santé principale : la première de `zonesSante` (en-têtes, carte, épidémiologie). */
   zoneSante: { type: String, required: true, trim: true },
@@ -102,8 +102,8 @@ etablissementSchema.pre('validate', async function () {
 etablissementSchema.methods.erreurZones = function () {
   if (!this.isNew && !this.isModified('zonesSante') && !this.isModified('province')) return null;
   const zones = this.zonesSante ?? [];
-  if (!zones.length) return 'Sélectionnez au moins une zone de santé.';
-  if (new Set(zones).size !== zones.length) return 'La même zone de santé est choisie deux fois.';
+  if (!zones.length) return 'Sélectionnez la zone de santé.';
+  if (zones.length > 1) return 'Une seule zone de santé par établissement.';
   const valides = zonesDeProvince(this.province);
   const inconnue = zones.find((z) => !valides.includes(z));
   return inconnue ? `« ${inconnue} » n’est pas une zone de santé de la province ${this.province}.` : null;
